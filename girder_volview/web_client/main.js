@@ -1,1 +1,2 @@
-console.log('Loaded VolView!');
+// import modules for side effects
+import "./views/itemPage";
