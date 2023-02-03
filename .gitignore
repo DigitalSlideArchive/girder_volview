@@ -23,6 +23,7 @@ wheels/
 .installed.cfg
 *.egg
 node_modules
+VolView/
 
 # Installer logs
 pip-log.txt

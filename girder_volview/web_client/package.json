@@ -6,8 +6,7 @@
     "homepage": "https://github.com/girder/girder_volview",
     "license": "Apache-2.0",
     "dependencies": {
-        "copy-webpack-plugin": "^4.5.2",
-        "volview": "git+https://github.com/PaulHax/VolView.git#package"
+        "copy-webpack-plugin": "^4.5.2"
     },
     "peerDependencies": {
         "@girder/core": "*"
@@ -19,7 +18,7 @@
     },
     "scripts": {
         "lint": "eslint . && pug-lint . && stylint",
-        "postinstall": "npm explore volview -- npm install && npm explore volview -- VUE_APP_PUBLIC_PATH=/static/built/plugins/volview npm run build"
+        "postinstall": "sh ./buildvolview.sh"
     },
     "devDependencies": {
         "@girder/eslint-config": "*",
