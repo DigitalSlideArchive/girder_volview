@@ -4,8 +4,8 @@ const fileRoot = `${origin}/api/v1/item`;
 
 export function open(model) {
     const itemRoot = `${fileRoot}/${model.id}`;
-    const downloadUrl = `${itemRoot}/download`;
+    const downloadUrl = `${itemRoot}/volview/datasets`;
     const saveUrl = `${itemRoot}/volview`;
-    const volViewUrl = `${volViewPath}?names=[${model.name()}]&urls=[${downloadUrl}]&save=${saveUrl}`;
+    const volViewUrl = `${volViewPath}?names=[${model.name()}.zip]&urls=[${downloadUrl}]&save=${saveUrl}`;
     window.open(volViewUrl, "_blank").focus();
 }

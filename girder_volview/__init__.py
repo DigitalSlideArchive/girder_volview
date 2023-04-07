@@ -5,14 +5,19 @@ from girder import plugin
 
 from girder.api.describe import Description, autoDescribeRoute
 from girder.api import access 
-from girder.api.rest import boundHandler
+from girder.api.rest import boundHandler, setResponseHeader, setContentDisposition
 from girder.constants import AccessType, TokenScope
 
+# saveSession
 from girder.models.file import File as FileModel
 from girder.models.upload import Upload
 from girder.models.item import Item
 from girder.utility import RequestBodyStream
 from girder.exceptions import GirderException
+
+# downloadDatasets
+from girder.models.item import Item as ItemModel
+from girder.utility import ziputil
 
 @access.public(cookie=True, scope=TokenScope.DATA_WRITE)
 @boundHandler
@@ -20,7 +25,7 @@ from girder.exceptions import GirderException
     Description('Save VolView session in an item')
     .param('itemId', 'The item ID', paramType='path')
     .errorResponse())
-def saveVolView(self, itemId):
+def saveSession(self, itemId):
     size = int(cherrypy.request.headers.get('Content-Length'))
     if size == 0:
         raise GirderException(
@@ -53,7 +58,7 @@ def saveVolView(self, itemId):
     except OSError as exc:
         if exc.errno == errno.EACCES:
             raise GirderException(
-                'Failed to create upload.', 'girder.api.v1.file.create-upload-failed')
+                'Failed to create upload.', 'girder.api.v1.item.volview.create-upload-failed')
         raise
     if upload['size'] > 0:
         if chunk:
@@ -63,10 +68,36 @@ def saveVolView(self, itemId):
     else:
         return fileModel.filter(Upload().finalizeUpload(upload), user)
 
+def isSessionFile(path):
+    if path.endswith('volview.zip'):
+        return True
+    return False
+
+@access.public(cookie=True, scope=TokenScope.DATA_READ)
+@boundHandler
+@autoDescribeRoute(
+    Description('Download item files that do not end in .volview.zip')
+    .modelParam('itemId', model=ItemModel, level=AccessType.READ)
+    .errorResponse())
+def downloadDatasets(self, item):
+    setResponseHeader('Content-Type', 'application/zip')
+    setContentDisposition(item['name'] + '.zip')
+
+    def stream():
+        zip = ziputil.ZipGenerator(item['name'])
+        sansSessions = [ fileEntry for fileEntry in ItemModel().fileList(item, subpath=False) if not isSessionFile(fileEntry[0]) ]
+        for (path, file) in sansSessions:
+            for data in zip.addFile(file, path):
+                yield data
+        yield zip.footer()
+    return stream
+
 class GirderPlugin(plugin.GirderPlugin):
     DISPLAY_NAME = 'VolView'
     CLIENT_SOURCE_PATH = 'web_client'
 
     def load(self, info):
-        info['apiRoot'].item.route('POST', (':itemId', 'volview'), saveVolView)
+        info['apiRoot'].item.route('POST', (':itemId', 'volview'), saveSession)
+        # info['apiRoot'].item.route('GET', (':itemId', 'volview'), downloadSession)
+        info['apiRoot'].item.route('GET', (':itemId', 'volview', 'datasets'), downloadDatasets)
 
