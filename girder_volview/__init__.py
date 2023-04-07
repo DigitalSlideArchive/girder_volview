@@ -10,8 +10,8 @@ from girder.constants import AccessType, TokenScope
 
 from girder.models.file import File as FileModel
 from girder.models.upload import Upload
+from girder.models.item import Item
 from girder.utility import RequestBodyStream
-from girder.utility.model_importer import ModelImporter
 from girder.exceptions import GirderException
 
 @access.public(cookie=True, scope=TokenScope.DATA_WRITE)
@@ -22,6 +22,9 @@ from girder.exceptions import GirderException
     .errorResponse())
 def saveVolView(self, itemId):
     size = int(cherrypy.request.headers.get('Content-Length'))
+    if size == 0:
+        raise GirderException(
+            'Expected non-zero Content-Length header', 'girder.api.v1.item.save-volview')
 
     # modified from girder.api.v1.file.File.initUpload 
     fileModel = FileModel()
@@ -31,17 +34,15 @@ def saveVolView(self, itemId):
     mimeType = 'application/zip'
     reference = None
     user = self.getCurrentUser()
-    parent = ModelImporter.model(parentType).load(
-        id=parentId, user=user, level=AccessType.WRITE, exc=True)
+    parent = Item().load(id=parentId, user=user, level=AccessType.WRITE, exc=True)
 
     assetstore = None
 
     chunk = None
-    if size > 0 and cherrypy.request.headers.get('Content-Length'):
-        ct = cherrypy.request.body.content_type.value
-        if (ct not in cherrypy.request.body.processors
-                and ct.split('/', 1)[0] not in cherrypy.request.body.processors):
-            chunk = RequestBodyStream(cherrypy.request.body)
+    ct = cherrypy.request.body.content_type.value
+    if (ct not in cherrypy.request.body.processors
+            and ct.split('/', 1)[0] not in cherrypy.request.body.processors):
+        chunk = RequestBodyStream(cherrypy.request.body)
     if chunk is not None and chunk.getSize() <= 0:
         chunk = None
 
