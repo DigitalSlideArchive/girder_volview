@@ -76,9 +76,11 @@ def isSessionFile(path):
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
 @boundHandler
 @autoDescribeRoute(
-    Description('Download item files that do not end in .volview.zip')
+    Description('Download item files that do not end in volview.zip')
     .modelParam('itemId', model=ItemModel, level=AccessType.READ)
-    .errorResponse())
+    .produces(['application/zip'])
+    .errorResponse('ID was invalid.')
+    .errorResponse('Read access was denied for the item.', 403))
 def downloadDatasets(self, item):
     setResponseHeader('Content-Type', 'application/zip')
     setContentDisposition(item['name'] + '.zip')
@@ -92,12 +94,34 @@ def downloadDatasets(self, item):
         yield zip.footer()
     return stream
 
+@access.public(cookie=True, scope=TokenScope.DATA_READ)
+@boundHandler
+@autoDescribeRoute(
+    Description('Download latest *.volview.zip')
+    .modelParam('itemId', model=ItemModel, level=AccessType.READ)
+    .produces(['application/zip'])
+    .errorResponse('ID was invalid.')
+    .errorResponse('Read access was denied for the item.', 403))
+def downloadSession(self, item):
+    setResponseHeader('Content-Type', 'application/zip')
+    setContentDisposition(item['name'] + '.zip')
+
+    sessions = [ fileEntry[1] for fileEntry in ItemModel().fileList(item, subpath=False, data=False) if isSessionFile(fileEntry[0]) ]
+    if len(sessions) == 0:
+        raise GirderException(
+            'No VolView session file found.', 'girder.api.v1.item.volview.download-session')
+
+    sortedSessions = sorted(sessions, key=lambda file: file.get('created'))
+    latestSession = sortedSessions[-1]
+
+    return FileModel().download(latestSession, 0)
+
 class GirderPlugin(plugin.GirderPlugin):
     DISPLAY_NAME = 'VolView'
     CLIENT_SOURCE_PATH = 'web_client'
 
     def load(self, info):
         info['apiRoot'].item.route('POST', (':itemId', 'volview'), saveSession)
-        # info['apiRoot'].item.route('GET', (':itemId', 'volview'), downloadSession)
+        info['apiRoot'].item.route('GET', (':itemId', 'volview'), downloadSession)
         info['apiRoot'].item.route('GET', (':itemId', 'volview', 'datasets'), downloadDatasets)
 
