@@ -1,6 +1,6 @@
 import { wrap } from "@girder/core/utilities/PluginUtils";
 import ItemView from "@girder/core/views/body/ItemView";
-import { open } from "./utils";
+import { open } from "./open";
 
 const brandName = "VolView";
 
