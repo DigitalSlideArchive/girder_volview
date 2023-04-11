@@ -4,9 +4,9 @@ Open items in VolView with a "Open in VolView" button. The button is located in 
 
 ## Endpoints
 
-POST item/:id/volview -> upload file to Item with cookie authentication
-GET item/:id/volview -> download latest session.volview.zip
-GET item/:id/volview/datasets -> download all files in item except the \*.volview.zip
+* POST item/:id/volview -> upload file to Item with cookie authentication
+* GET item/:id/volview -> download latest session.volview.zip
+* GET item/:id/volview/datasets -> download all files in item except the \*.volview.zip
 
 ## Example Saving Roundtrip flow
 
