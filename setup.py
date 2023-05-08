@@ -36,5 +36,5 @@ setup(
         ]
     },
     setup_requires=['setuptools_scm'],
-    use_scm_version={'fallback_version': '0.1.0'}
+    use_scm_version={'fallback_version': '0.1.1'}
 )
