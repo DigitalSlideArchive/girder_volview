@@ -19,6 +19,23 @@ function makeDownloadParams(model, itemRoot, files) {
     return `&names=[${model.name()}.zip]&urls=[${downloadUrl}]`;
 }
 
+function makeLabelParam(labels) {
+    if (!labels) return "";
+
+    const labelsArray = Object.entries(labels)
+        .map(([name, props]) => [name, ...props])
+        .join(",");
+    return labelsArray;
+}
+
+function makeLabelParams(config) {
+    if (!config) return "";
+
+    return `&labels=[${makeLabelParam(
+        config.labels
+    )}]&rectangleLabels=[${makeLabelParam(config.rectangleLabels)}]`;
+}
+
 export function open(model) {
     restRequest({
         type: "GET",
@@ -26,16 +43,36 @@ export function open(model) {
         error: null,
     })
         .done((files) => {
-            const itemRoot = `${fileRoot}/${model.id}`;
-            const saveUrl = `${itemRoot}/volview`;
-            const downloadParams = makeDownloadParams(model, itemRoot, files);
-            const newTabUrl = `${volViewPath}?save=${saveUrl}${downloadParams}`;
-            window.open(newTabUrl, "_blank").focus();
+            restRequest({
+                url: `folder/${model.get(
+                    "folderId"
+                )}/yaml_config/.volview_config.yaml`,
+            })
+                .done((config) => {
+                    const itemRoot = `${fileRoot}/${model.id}`;
+                    const saveParam = `&save=${itemRoot}/volview`;
+                    const downloadParams = makeDownloadParams(
+                        model,
+                        itemRoot,
+                        files
+                    );
+                    const labelParams = makeLabelParams(config);
+                    const newTabUrl = `${volViewPath}?${labelParams}${saveParam}${downloadParams}`;
+                    window.open(newTabUrl, "_blank").focus();
+                })
+                .fail((resp) => {
+                    events.trigger("g:alert", {
+                        icon: "cancel",
+                        text: "Could not check files to open in VolView",
+                        type: "danger",
+                        timeout: 4000,
+                    });
+                });
         })
         .fail((resp) => {
             events.trigger("g:alert", {
                 icon: "cancel",
-                text: "Could not check files to open in VolView",
+                text: "Could not check for config file for VolView",
                 type: "danger",
                 timeout: 4000,
             });
