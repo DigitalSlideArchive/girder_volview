@@ -24,6 +24,39 @@ First load the base volume, say the CT one. Then click the "Add Layer" icon on t
 The overlaid image is "resampled" to match the physical and pixel space of the base image.  
 If there is no overlap in physical space as gleaned from the images' metadata, the overlay won't work.
 
+## Label Configuration
+
+To assign labels and their properties, add a `.volview_config.yaml` file higher in the folder hierarchy.  
+Example `.volview_config.yaml` file:
+
+```yml
+# used by ruler tool
+labels:
+  artifact: # label name
+    - 888888 # line color
+  needs-review:
+    - FFBF00
+
+rectangleLabels:
+  lesion:
+    - ff0000 # line color
+    - 10000000 # transparent fill color
+  innocuous:
+    - 00ffff
+    - 00ff0099
+  tumor:
+    - 0000ff
+    - 10000000
+```
+
+Label sections could be empty
+
+```yml
+labels:
+
+rectangleLabels:
+```
+
 ## Endpoints
 
 - POST item/:id/volview -> upload file to Item with cookie authentication
