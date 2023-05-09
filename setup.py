@@ -35,5 +35,7 @@ setup(
         'girder.plugin': [
             'volview = girder_volview:GirderPlugin'
         ]
-    }
+    },
+    use_scm_version=True,
+    setup_requires=['setuptools_scm']
 )
