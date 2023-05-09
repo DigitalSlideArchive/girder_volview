@@ -29,13 +29,12 @@ setup(
     name='girder_volview',
     packages=find_packages(exclude=['test', 'test.*']),
     url='https://github.com/girder/girder_volview',
-    version='0.1.0',
     zip_safe=False,
     entry_points={
         'girder.plugin': [
             'volview = girder_volview:GirderPlugin'
         ]
     },
-    use_scm_version=True,
-    setup_requires=['setuptools_scm']
+    setup_requires=['setuptools_scm'],
+    use_scm_version={'fallback_version': '0.1.0'}
 )
