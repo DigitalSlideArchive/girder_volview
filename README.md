@@ -33,23 +33,23 @@ Example `.volview_config.yaml` file:
 # used by ruler tool
 labels:
   artifact: # label name
-    - 888888 # line color
+    color: "gray"
   needs-review:
-    - FFBF00
+    color: "#FFBF00"
 
 rectangleLabels:
   lesion:
-    - ff0000 # line color
-    - 10000000 # transparent fill color
+    color: "#ff0000"
+    fillColor: "transparent"
   innocuous:
-    - 00ffff
-    - 00ff0099
+    color: "white"
+    fillColor: "#00ff0030"
   tumor:
-    - 0000ff
-    - 10000000
+    color: "green"
+    fillColor: "transparent"
 ```
 
-Label sections could be empty
+Label sections could be empty.
 
 ```yml
 labels:
