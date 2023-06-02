@@ -6,7 +6,8 @@
     "homepage": "https://github.com/girder/girder_volview",
     "license": "Apache-2.0",
     "dependencies": {
-        "copy-webpack-plugin": "^4.5.2"
+        "copy-webpack-plugin": "^4.5.2",
+        "volview-girder-client": "^1.0.3"
     },
     "peerDependencies": {
         "@girder/core": "*"
@@ -17,8 +18,7 @@
         "webpack": "webpack.helper"
     },
     "scripts": {
-        "lint": "eslint . && pug-lint . && stylint",
-        "postinstall": "sh ./buildvolview.sh"
+        "lint": "eslint . && pug-lint . && stylint"
     },
     "devDependencies": {
         "@girder/eslint-config": "*",
