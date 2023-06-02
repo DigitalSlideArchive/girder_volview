@@ -30,15 +30,8 @@ To assign labels and their properties, add a `.volview_config.yaml` file higher 
 Example `.volview_config.yaml` file:
 
 ```yml
-# used by ruler tool
-labels:
-  artifact: # label name
-    color: "gray"
-  needs-review:
-    color: "#FFBF00"
-
 rectangleLabels:
-  lesion:
+  lesion: # label name
     color: "#ff0000"
     fillColor: "transparent"
   innocuous:
@@ -47,14 +40,38 @@ rectangleLabels:
   tumor:
     color: "green"
     fillColor: "transparent"
+
+rulerLabels:
+  big:
+    color: "#ff0000"
+  small:
+    color: "white"
 ```
 
-Label sections could be empty.
+Label sections could be empty to disable labels for a tool.
 
 ```yml
-labels:
+rulerLabels:
 
 rectangleLabels:
+  lesion:
+    color: "#ff0000"
+    fillColor: "transparent"
+  innocuous:
+    color: "white"
+    fillColor: "#00ff0030"
+```
+
+Tools will fallback to `labels` section if the tool has no specific labels property,
+ie `rectangleLabels` or `rulerLabels`.
+
+```yml
+# used by ruler and rectangle tool
+labels:
+  artifact:
+    color: "gray"
+  needs-review:
+    color: "#FFBF00"
 ```
 
 ## Endpoints
