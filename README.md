@@ -15,15 +15,6 @@ VolView tries to load all files in a Girder Item.
 - VTK image (.vti)
 - And many more. Try dragging and dropping the file(s) on the [VolView Demo Site](https://volview.netlify.app/)
 
-## Layers of Images
-
-To overlay PET and CT images, place all image files in one Girder Item.
-VolView will show the PET and CT images as separate "volumes".
-First load the base volume, say the CT one. Then click the "Add Layer" icon on the overlay image, probably the PET one.
-
-The overlaid image is "resampled" to match the physical and pixel space of the base image.  
-If there is no overlap in physical space as gleaned from the images' metadata, the overlay won't work.
-
 ## Label Configuration
 
 To assign labels and their properties, add a `.volview_config.yaml` file higher in the folder hierarchy.  
@@ -74,7 +65,16 @@ labels:
     color: "#FFBF00"
 ```
 
-## Endpoints
+## Layers of Images
+
+To overlay PET and CT images, place all image files in one Girder Item.
+VolView will show the PET and CT images as separate "volumes".
+First load the base volume, say the CT one. Then click the "Add Layer" icon on the overlay image, probably the PET one.
+
+The overlaid image is "resampled" to match the physical and pixel space of the base image.  
+If there is no overlap in physical space as gleaned from the images' metadata, the overlay won't work.
+
+## API Endpoints
 
 - POST item/:id/volview -> upload file to Item with cookie authentication
 - GET item/:id/volview -> download latest session.volview.zip
@@ -91,3 +91,25 @@ labels:
 1. VolView opens, fetches from `item/:id/volview`, receives most recently created `*volview.zip` file in Item.
 
 VolView creates a new session.volview.zip file in the Girder Item every time the Save button is clicked.
+
+## VolView Client Update Steps
+
+Change VolView commit SHA in `volview-girder-client/buildvolview.sh`
+
+Build VolView client with Girder specific CLI arguments:
+
+```sh
+cd volview-girder-client
+source buildvolview.sh
+```
+
+Increase version in `volview-girder-client/package.json`.
+
+Publish built VolView `dist` directory to NPM:
+
+```sh
+cd volview-girder-client
+npm publish
+```
+
+Update volview-girder-client version in `./grider_volview/web_client/package.json`
