@@ -17,14 +17,9 @@ function makeDownloadParams(model, itemRoute, files, config) {
         ? `${itemRoute}/volview`
         : `${itemRoute}/volview/datasets`;
 
-    const folderID = model.get("folderId");
+    const configUrl = `${itemRoute}/volview/config/.volview_config.yaml`;
 
-    const configUrl = config
-        ? `,${apiRoot}/folder/${folderID}/yaml_config/.volview_config.yaml`
-        : "";
-    const configName = config ? ",config.json" : "";
-
-    return `&names=[${model.name()}.zip${configName}]&urls=[${downloadUrl}${configUrl}]`;
+    return `&names=[${model.name()}.zip,config.json]&urls=[${downloadUrl},${configUrl}]`;
 }
 
 export function open(model) {
