@@ -113,3 +113,5 @@ npm publish
 ```
 
 Update volview-girder-client version in `./grider_volview/web_client/package.json`
+
+Could test by pushing up this on a branch. Then change `provision.divevolview.yaml` to point to your branch: `git+https://github.com/PaulHax/girder_volview@new-branch` and rebuild docker image.
