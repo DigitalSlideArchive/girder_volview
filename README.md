@@ -15,54 +15,81 @@ VolView tries to load all files in a Girder Item.
 - VTK image (.vti)
 - And many more. Try dragging and dropping the file(s) on the [VolView Demo Site](https://volview.netlify.app/)
 
-## Label Configuration
+## Configuration file
+
+Add a `.volview_config.yaml` file higher in the folder hierarchy. Example file:
+
+```yml
+layout:
+  activeLayout: "Axial Only"
+labels:
+  defaultLabels:
+    artifact:
+      color: "gray"
+    needs-review:
+      color: "#FFBF00"
+```
+
+### Layout Configuration
+
+To set the initial view, add a  `layout: activeLayout` section to the `.volview_config.yaml` file.
+
+```yml
+layout:
+  # options: Axial Only, Axial Primary, 3D Primary, Quad View, 3D Only 
+  activeLayout: "Axial Only"
+```
+
+### Label Configuration
 
 To assign labels and their properties, add a `.volview_config.yaml` file higher in the folder hierarchy.  
 Example `.volview_config.yaml` file:
 
 ```yml
-rectangleLabels:
-  lesion: # label name
-    color: "#ff0000"
-    fillColor: "transparent"
-  innocuous:
-    color: "white"
-    fillColor: "#00ff0030"
-  tumor:
-    color: "green"
-    fillColor: "transparent"
+# defaultLabels are shared by polygon, ruler and rectangle tool
+labels:
+  defaultLabels:
+    artifact:
+      color: "gray"
+    needs-review:
+      color: "#FFBF00"
+```
 
-rulerLabels:
-  big:
-    color: "#ff0000"
-  small:
-    color: "white"
+Labels can be configured per tool:
+
+```yml
+labels:
+  rectangleLabels:
+    lesion: # label name
+      color: "#ff0000"
+      fillColor: "transparent"
+    innocuous:
+      color: "white"
+      fillColor: "#00ff0030"
+    tumor:
+      color: "green"
+      fillColor: "transparent"
+
+  rulerLabels:
+    big:
+      color: "#ff0000"
+    small:
+      color: "white"
 ```
 
 Label sections could be empty to disable labels for a tool.
 
 ```yml
-rulerLabels:
-
-rectangleLabels:
-  lesion:
-    color: "#ff0000"
-    fillColor: "transparent"
-  innocuous:
-    color: "white"
-    fillColor: "#00ff0030"
-```
-
-Tools will fallback to `labels` section if the tool has no specific labels property,
-ie `rectangleLabels` or `rulerLabels`.
-
-```yml
-# used by ruler and rectangle tool
 labels:
-  artifact:
-    color: "gray"
-  needs-review:
-    color: "#FFBF00"
+  rulerLabels:
+
+  rectangleLabels:
+    lesion:
+      color: "#ff0000"
+      fillColor: "transparent"
+    innocuous:
+      color: "white"
+      fillColor: "#00ff0030"
 ```
 
 ## Layers of Images
