@@ -6,7 +6,7 @@ cd VolView
 # fetch just one commit
 git init
 git remote add origin https://github.com/Kitware/VolView.git
-git fetch origin a25452bb36912a14e1f02e43bc24673923954783 --depth 1
+git fetch origin 1c33fae4a7ac4861c716f755eece6b6fdd70520f --depth 1
 git reset --hard FETCH_HEAD
 
 npm install
