@@ -26,6 +26,7 @@ labels:
   defaultLabels:
     artifact:
       color: "gray"
+      strokeWidth: 3
     needs-review:
       color: "#FFBF00"
 ```
@@ -51,6 +52,7 @@ labels:
   defaultLabels:
     artifact:
       color: "gray"
+      strokeWidth: 3
     needs-review:
       color: "#FFBF00"
 ```
@@ -91,6 +93,21 @@ labels:
       color: "white"
       fillColor: "#00ff0030"
 ```
+
+### Keyboard Shortcuts Configuration
+
+Configure the keys to activate tools, change selected labels, and more.
+Names for shortcut actions are in [constants.ts](https://github.com/Kitware/VolView/blob/main/src/constants.ts#L53) are under the `ACTIONS` variable.
+
+To configure a key for an action, add its action name and the key(s) under the `shortcuts` section. For key combinations, use `+` like `Ctrl+f`.
+
+```yml
+shortcuts:
+  polygon: "Ctrl+p"
+  rectangle: "b"
+```
+
+In VolView, show a dialog with the configured keyboard shortcuts by pressing the `?` key.
 
 ## Layers of Images
 
