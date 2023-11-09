@@ -159,3 +159,67 @@ npm publish
 Update volview-girder-client version in `./grider_volview/web_client/package.json`
 
 Could test by pushing up this on a branch. Then change `provision.divevolview.yaml` to point to your branch: `git+https://github.com/PaulHax/girder_volview@new-branch` and rebuild docker image.
+
+## Development
+
+Get this running https://github.com/DigitalSlideArchive/digital_slide_archive/tree/master/devops/with-dive-volview
+
+In the `provision.divevolview.yaml` file, add some `volumes` for this girder plugin and optionally
+a VolView repo checkout.  Example:
+```yaml
+services:
+  girder:
+    volumes:
+      - ../with-dive-volview/provision.divevolview.yaml:/opt/digital_slide_archive/devops/dsa/provision.yaml
+      - ../../../girder-volview:/opt/girder_volview
+      - ~/src/volview-stuff/VolView:/opt/volview-package
+```
+
+Comment out the pip install of this plugin here: https://github.com/DigitalSlideArchive/digital_slide_archive/blob/master/devops/with-dive-volview/provision.divevolview.yaml#L3
+
+Then clean docker images
+```
+docker rm dsa-plus_girder_1 dsa-plus_worker_1 dsa-plus_rabbitmq_1 dsa-plus_memcached_1 dsa-plus_mongodb_1
+```
+
+Start containers again
+```
+DSA_USER=$(id -u):$(id -g) docker-compose -f ../dsa/docker-compose.yml -f docker-compose.override.yml -p dsa-plus up
+```
+
+Bash into girder container
+```
+DSA_USER=$(id -u):$(id -g) docker-compose -f ../dsa/docker-compose.yml -f docker-compose.override.yml -p dsa-plus exec girder bash
+```
+
+On Bash terminal, install your mounted local dev version of plugin.
+```
+cd /opt/girder_volview/ && pip install -e .
+```
+
+For the Girder plugin watch and rebuild feature, I must stop and start 
+containers again. Then on Girder Bash prompt run
+```
+girder build --dev --watch-plugin volview
+```
+
+### Dev VolView client
+
+Change the directory the Webpack copy plugin pulls from to your mounted volume with local VolView build
+In here: https://github.com/PaulHax/girder_volview/blob/main/girder_volview/web_client/webpack.helper.js#L9-L14
+```js
+        new CopyWebpackPlugin([
+            {
+                from: '/opt/volview-package/dist',
+                to: config.output.path,
+                toType: "dir",
+            },
+        ])
+``` 
+Then build VolView with the right flags:
+https://github.com/PaulHax/girder_volview/blob/main/volview-girder-client/buildvolview.sh#L14C2-L14C108
+```
+VITE_REMOTE_SERVER_URL= VITE_ENABLE_REMOTE_SAVE=true npm run build -- --base=/static/built/plugins/volview
+```
+
+
