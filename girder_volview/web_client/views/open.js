@@ -13,13 +13,13 @@ function makeDownloadParams(model, itemRoute, files, config) {
     if (files.length === 0) return "";
 
     const hasSessionFiles = files.some(({ name }) => isSessionFile(name));
-    const downloadUrl = hasSessionFiles
-        ? `${itemRoute}/volview`
-        : `${itemRoute}/volview/datasets`;
+    const { url:downloadUrl, name } = hasSessionFiles
+        ? { url:`${itemRoute}/volview`, name: `${model.name()}.volview.zip` }
+        : { url:`${itemRoute}/volview/datasets`, name: `${model.name()}-files.json` }
 
     const configUrl = `${itemRoute}/volview/config/.volview_config.yaml`;
 
-    return `&names=[${model.name()}.zip,config.json]&urls=[${downloadUrl},${configUrl}]`;
+    return `&names=[${name},config.json]&urls=[${downloadUrl},${configUrl}]`;
 }
 
 export function open(model) {

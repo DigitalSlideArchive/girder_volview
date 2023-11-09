@@ -5,7 +5,7 @@ from girder import plugin
 
 from girder.api.describe import Description, autoDescribeRoute
 from girder.api import access
-from girder.api.rest import boundHandler, setResponseHeader, setContentDisposition
+from girder.api.rest import getApiUrl, boundHandler, setResponseHeader, setContentDisposition
 from girder.constants import AccessType, TokenScope, SortDir
 
 # saveSession
@@ -97,33 +97,35 @@ def isSessionFile(path):
         return True
     return False
 
+def makeFileDownloadUrl(fileModel):
+    """
+    Given a file model, return a download URL for the file.
+    :param fileModel: the file model.
+    :type fileModel: dict
+    :returns: the download URL.
+    """
+    fileUrl = '/'.join((getApiUrl(), 'file', str(fileModel['_id']) , 'download', fileModel['name']))
+    return fileUrl
 
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
 @boundHandler
 @autoDescribeRoute(
     Description("Download item files that do not end in volview.zip")
     .modelParam("itemId", model=ItemModel, level=AccessType.READ)
-    .produces(["application/zip"])
+    .produces(["application/json"])
     .errorResponse("ID was invalid.")
     .errorResponse("Read access was denied for the item.", 403)
 )
 def downloadDatasets(self, item):
-    setResponseHeader("Content-Type", "application/zip")
-    setContentDisposition(item["name"] + ".zip")
+    filesNoVolViewZips = [
+        fileEntry
+        for fileEntry in ItemModel().fileList(item, subpath=False, data=False)
+        if not isSessionFile(fileEntry[0])
+    ]
+    fileUrls = [{ "url": makeFileDownloadUrl(fileEntry[1]) } for fileEntry in filesNoVolViewZips]
+    fileManifest = {"resources": fileUrls}
+    return fileManifest 
 
-    def stream():
-        zip = ziputil.ZipGenerator(item["name"])
-        sansSessions = [
-            fileEntry
-            for fileEntry in ItemModel().fileList(item, subpath=False)
-            if not isSessionFile(fileEntry[0])
-        ]
-        for path, file in sansSessions:
-            for data in zip.addFile(file, path):
-                yield data
-        yield zip.footer()
-
-    return stream
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
@@ -210,8 +212,7 @@ def adjustConfigForUser(config, user):
     return config
 
 
-# Modifed from
-# https://github.com/girder/large_image/blob/aa1dc05665944e87eb9cb8553085221fab16ae92/girder/girder_large_image/__init__.py#L434-L483
+# Modified from https://github.com/girder/large_image/blob/aa1dc05665944e87eb9cb8553085221fab16ae92/girder/girder_large_image/__init__.py#L434-L483
 def yamlConfigFile(folder, name, user, addConfig):
     """
     Get a resolved named config file based on a folder and user.
