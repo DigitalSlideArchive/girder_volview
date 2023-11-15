@@ -5,7 +5,12 @@ from girder import plugin
 
 from girder.api.describe import Description, autoDescribeRoute
 from girder.api import access
-from girder.api.rest import getApiUrl, boundHandler, setResponseHeader, setContentDisposition
+from girder.api.rest import (
+    getApiUrl,
+    boundHandler,
+    setResponseHeader,
+    setContentDisposition,
+)
 from girder.constants import AccessType, TokenScope, SortDir
 
 # saveSession
@@ -97,6 +102,35 @@ def isSessionFile(path):
         return True
     return False
 
+# Deprecated, use downloadManifest
+@access.public(cookie=True, scope=TokenScope.DATA_READ)
+@boundHandler
+@autoDescribeRoute(
+    Description("Download zip of item files that do not end in volview.zip")
+    .modelParam("itemId", model=ItemModel, level=AccessType.READ)
+    .produces(["application/zip"])
+    .errorResponse("ID was invalid.")
+    .errorResponse("Read access was denied for the item.", 403)
+)
+def downloadDatasets(self, item):
+    setResponseHeader("Content-Type", "application/zip")
+    setContentDisposition(item["name"] + ".zip")
+
+    def stream():
+        zip = ziputil.ZipGenerator(item["name"])
+        sansSessions = [
+            fileEntry
+            for fileEntry in ItemModel().fileList(item, subpath=False)
+            if not isSessionFile(fileEntry[0])
+        ]
+        for path, file in sansSessions:
+            for data in zip.addFile(file, path):
+                yield data
+        yield zip.footer()
+
+    return stream
+
+
 def makeFileDownloadUrl(fileModel):
     """
     Given a file model, return a download URL for the file.
@@ -104,28 +138,32 @@ def makeFileDownloadUrl(fileModel):
     :type fileModel: dict
     :returns: the download URL.
     """
-    fileUrl = '/'.join((getApiUrl(), 'file', str(fileModel['_id']) , 'download', fileModel['name']))
+    fileUrl = "/".join(
+        (getApiUrl(), "file", str(fileModel["_id"]), "download", fileModel["name"])
+    )
     return fileUrl
+
 
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
 @boundHandler
 @autoDescribeRoute(
-    Description("Download item files that do not end in volview.zip")
+    Description("Download JSON of item files that do not end in volview.zip")
     .modelParam("itemId", model=ItemModel, level=AccessType.READ)
     .produces(["application/json"])
     .errorResponse("ID was invalid.")
     .errorResponse("Read access was denied for the item.", 403)
 )
-def downloadDatasets(self, item):
+def downloadManifest(self, item):
     filesNoVolViewZips = [
         fileEntry
         for fileEntry in ItemModel().fileList(item, subpath=False, data=False)
         if not isSessionFile(fileEntry[0])
     ]
-    fileUrls = [{ "url": makeFileDownloadUrl(fileEntry[1]) } for fileEntry in filesNoVolViewZips]
+    fileUrls = [
+        {"url": makeFileDownloadUrl(fileEntry[1])} for fileEntry in filesNoVolViewZips
+    ]
     fileManifest = {"resources": fileUrls}
-    return fileManifest 
-
+    return fileManifest
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
@@ -315,8 +353,12 @@ class GirderPlugin(plugin.GirderPlugin):
     def load(self, info):
         info["apiRoot"].item.route("POST", (":itemId", "volview"), saveSession)
         info["apiRoot"].item.route("GET", (":itemId", "volview"), downloadSession)
+        # volview/datasets is deprecated.  Use volview/manifest instead.
         info["apiRoot"].item.route(
             "GET", (":itemId", "volview", "datasets"), downloadDatasets
+        )
+        info["apiRoot"].item.route(
+            "GET", (":itemId", "volview", "manifest"), downloadManifest
         )
         info["apiRoot"].item.route(
             "GET", (":itemId", "volview", "config", ":name"), getConfigFile
