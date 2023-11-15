@@ -15,7 +15,7 @@ function makeDownloadParams(model, itemRoute, files, config) {
     const hasSessionFiles = files.some(({ name }) => isSessionFile(name));
     const { url:downloadUrl, name } = hasSessionFiles
         ? { url:`${itemRoute}/volview`, name: `${model.name()}.volview.zip` }
-        : { url:`${itemRoute}/volview/datasets`, name: `${model.name()}-files.json` }
+        : { url:`${itemRoute}/volview/manifest`, name: `${model.name()}-files.json` }
 
     const configUrl = `${itemRoute}/volview/config/.volview_config.yaml`;
 
