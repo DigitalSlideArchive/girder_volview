@@ -6,11 +6,11 @@ from girder import plugin
 from girder.api.describe import Description, autoDescribeRoute
 from girder.api import access
 from girder.api.rest import (
-    getApiUrl,
     boundHandler,
     setResponseHeader,
     setContentDisposition,
 )
+from girder.utility.server import getApiRoot
 from girder.constants import AccessType, TokenScope, SortDir
 
 # saveSession
@@ -102,6 +102,7 @@ def isSessionFile(path):
         return True
     return False
 
+
 # Deprecated, use downloadManifest
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
 @boundHandler
@@ -138,8 +139,9 @@ def makeFileDownloadUrl(fileModel):
     :type fileModel: dict
     :returns: the download URL.
     """
+    # Lead with a slash to make the URI relative to origin
     fileUrl = "/".join(
-        (getApiUrl(), "file", str(fileModel["_id"]), "download", fileModel["name"])
+        ("", getApiRoot(), "file", str(fileModel["_id"]), "download", fileModel["name"])
     )
     return fileUrl
 
@@ -147,7 +149,9 @@ def makeFileDownloadUrl(fileModel):
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
 @boundHandler
 @autoDescribeRoute(
-    Description("Download JSON of item files that do not end in volview.zip")
+    Description(
+        "Download JSON listing item file download URIs that do not end in volview.zip"
+    )
     .modelParam("itemId", model=ItemModel, level=AccessType.READ)
     .produces(["application/json"])
     .errorResponse("ID was invalid.")
@@ -160,7 +164,8 @@ def downloadManifest(self, item):
         if not isSessionFile(fileEntry[0])
     ]
     fileUrls = [
-        {"url": makeFileDownloadUrl(fileEntry[1])} for fileEntry in filesNoVolViewZips
+        {"url": makeFileDownloadUrl(fileEntry[1]), "name": fileEntry[1]["name"]}
+        for fileEntry in filesNoVolViewZips
     ]
     fileManifest = {"resources": fileUrls}
     return fileManifest
