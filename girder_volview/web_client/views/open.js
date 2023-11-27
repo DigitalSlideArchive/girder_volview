@@ -1,9 +1,7 @@
-import { restRequest } from "@girder/core/rest";
+import { restRequest, getApiRoot } from "@girder/core/rest";
 
 const origin = globalThis.location.origin;
 const volViewPath = `${origin}/static/built/plugins/volview/index.html`;
-const apiRoot = `${origin}/api/v1`;
-const itemApi = `${apiRoot}/item`;
 
 function isSessionFile(fileName) {
     return fileName.endsWith("volview.zip");
@@ -34,7 +32,7 @@ export function open(model) {
                     "folderId"
                 )}/yaml_config/.volview_config.yaml`,
             }).done((config) => {
-                const itemRoute = `${itemApi}/${model.id}`;
+                const itemRoute = `/${getApiRoot()}/item/${model.id}`;
                 const saveParam = `&save=${itemRoute}/volview`;
                 const downloadParams = makeDownloadParams(
                     model,
