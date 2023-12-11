@@ -31,6 +31,36 @@ labels:
       color: "#FFBF00"
 ```
 
+To merge with `.volview_config.yaml`s higher in the folder hierarchy, include `__inherit__: true`
+in the child `.volview_config.yaml` file. Example:
+
+Child `.volview_config.yaml`
+
+```yml
+__inherit__: true
+shortcuts:
+  polygon: "Ctrl+p"
+  rectangle: "b"
+```
+
+Parent `.volview_config.yaml`
+
+```yml
+layout:
+  activeLayout: "Axial Only"
+```
+
+Result
+
+```yml
+shortcuts:
+  polygon: "Ctrl+p"
+  rectangle: "b"
+layout:
+  activeLayout: "Axial Only"
+```
+
+
 ### Layout Configuration
 
 To set the initial view, add a  `layout: activeLayout` section to the `.volview_config.yaml` file.
