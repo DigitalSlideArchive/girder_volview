@@ -29,7 +29,7 @@ setup(
     keywords="girder-plugin, volview",
     name="girder_volview",
     packages=find_packages(exclude=["test", "test.*"]),
-    url="https://github.com/girder/girder_volview",
+    url="https://github.com/PaulHax/girder_volview",
     zip_safe=False,
     entry_points={"girder.plugin": ["volview = girder_volview:GirderPlugin"]},
     setup_requires=["setuptools_scm"],
