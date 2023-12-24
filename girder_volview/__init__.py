@@ -31,6 +31,9 @@ from girder.models.folder import Folder
 from girder import logger
 from girder.models.group import Group
 
+# server settings (from girder.cfg file probably) for proxiable endpoint below 
+from girder.utility import config
+
 LARGE_IMAGE_CONFIG_FOLDER = "large_image.config_folder"
 
 
@@ -132,6 +135,20 @@ def downloadDatasets(self, item):
     return stream
 
 
+@access.public(scope=TokenScope.DATA_READ, cookie=True)
+@boundHandler
+@autoDescribeRoute(
+    Description('Download a file.')
+    .modelParam('id', model=FileModel, level=AccessType.READ)
+    .param('name', 'The name of the file.  This is ignored.', paramType='path')
+    .errorResponse('ID was invalid.')
+    .errorResponse('Read access was denied on the parent folder.', 403)
+)
+def downloadProxiableFile(self, file, name):
+    proxyRequest = config.getConfig().get('volview', {}).get('proxy_assetstores', True)
+    return FileModel().download(file,  headers=not proxyRequest )
+
+
 def makeFileDownloadUrl(fileModel):
     """
     Given a file model, return a download URL for the file.
@@ -141,7 +158,7 @@ def makeFileDownloadUrl(fileModel):
     """
     # Lead with a slash to make the URI relative to origin
     fileUrl = "/".join(
-        ("", getApiRoot(), "file", str(fileModel["_id"]), "download", fileModel["name"])
+        ("", getApiRoot(), "file", str(fileModel["_id"]), "proxiable", fileModel["name"])
     )
     return fileUrl
 
@@ -361,6 +378,9 @@ class GirderPlugin(plugin.GirderPlugin):
         # volview/datasets is deprecated.  Use volview/manifest instead.
         info["apiRoot"].item.route(
             "GET", (":itemId", "volview", "datasets"), downloadDatasets
+        )
+        info["apiRoot"].file.route(
+            "GET", (":id", "proxiable", ":name"), downloadProxiableFile
         )
         info["apiRoot"].item.route(
             "GET", (":itemId", "volview", "manifest"), downloadManifest
