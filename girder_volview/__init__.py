@@ -138,7 +138,7 @@ def downloadDatasets(self, item):
 @access.public(scope=TokenScope.DATA_READ, cookie=True)
 @boundHandler
 @autoDescribeRoute(
-    Description('Download a file.')
+    Description('Download a file with option to proxy.')
     .modelParam('id', model=FileModel, level=AccessType.READ)
     .param('name', 'The name of the file.  This is ignored.', paramType='path')
     .errorResponse('ID was invalid.')

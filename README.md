@@ -15,7 +15,16 @@ VolView tries to load all files in a Girder Item.
 - VTK image (.vti)
 - And many more. Try dragging and dropping the file(s) on the [VolView Demo Site](https://volview.netlify.app/)
 
-## Configuration file
+## Layers of Images
+
+To overlay PET and CT images, place all image files in one Girder Item.
+VolView will show the PET and CT images as separate "volumes".
+First load the base volume, say the CT one. Then click the "Add Layer" icon on the overlay image, probably the PET one.
+
+The overlaid image is "resampled" to match the physical and pixel space of the base image.  
+If there is no overlap in physical space as gleaned from the images' metadata, the overlay won't work.
+
+## Client Configuration file
 
 Add a `.volview_config.yaml` file higher in the folder hierarchy. Example file:
 
@@ -60,14 +69,13 @@ layout:
   activeLayout: "Axial Only"
 ```
 
-
 ### Layout Configuration
 
-To set the initial view, add a  `layout: activeLayout` section to the `.volview_config.yaml` file.
+To set the initial view, add a `layout: activeLayout` section to the `.volview_config.yaml` file.
 
 ```yml
 layout:
-  # options: Axial Only, Axial Primary, 3D Primary, Quad View, 3D Only 
+  # options: Axial Only, Axial Primary, 3D Primary, Quad View, 3D Only
   activeLayout: "Axial Only"
 ```
 
@@ -139,20 +147,31 @@ shortcuts:
 
 In VolView, show a dialog with the configured keyboard shortcuts by pressing the `?` key.
 
-## Layers of Images
+## CORS Error Workaround by Proxying Assetstores 
 
-To overlay PET and CT images, place all image files in one Girder Item.
-VolView will show the PET and CT images as separate "volumes".
-First load the base volume, say the CT one. Then click the "Add Layer" icon on the overlay image, probably the PET one.
+VolView will error if it loads a file from a S3 bucket asset store without some
+[CORS configuration](https://girder.readthedocs.io/en/stable/user-guide.html#s3).
+To workaround needing to change the bucket configuration, the Girder admin can
+change the global [Girder configuration](https://girder.readthedocs.io/en/stable/configuration.html).
+Adding a `[volview]` section with a `proxy_assetstores = True` option routes VolView's
+file download requests through the Girder server, rather than redirecting directly to the S3 bucket.
 
-The overlaid image is "resampled" to match the physical and pixel space of the base image.  
-If there is no overlap in physical space as gleaned from the images' metadata, the overlay won't work.
+```
+[volview]
+# Workaround CORS configuration errors in S3 assetstores.
+# If True, the Girder server will proxy file download requests from VolView
+# to the S3 assetstore. This will use more server bandwidth.
+# If False, VolView client requests to download files are redirected to S3.
+proxy_assetstores = True
+```
 
 ## API Endpoints
 
 - POST item/:id/volview -> upload file to Item with cookie authentication
 - GET item/:id/volview -> download latest session.volview.zip
-- GET item/:id/volview/datasets -> download all files in item except the `*.volview.zip`
+- GET item/:id/volview/manifest -> download JSON with URLs to all files in item except the `*.volview.zip`
+- GET file/:id/proxiable/:name -> download a file with option to proxy 
+- Deprecated: GET item/:id/volview/datasets -> download all files in item except the `*.volview.zip`
 
 ## Example Saving Roundtrip flow
 
@@ -188,14 +207,16 @@ npm publish
 
 Update volview-girder-client version in `./grider_volview/web_client/package.json`
 
-Could test by pushing up this on a branch. Then change `provision.divevolview.yaml` to point to your branch: `git+https://github.com/PaulHax/girder_volview@new-branch` and rebuild docker image.
+To test new client: push up changes to a new branch on GitHub. Change `provision.divevolview.yaml` to point to your branch like this: `git+https://github.com/PaulHax/girder_volview@new-branch`.
+Rebuild DSA Girder docker image.
 
 ## Development
 
 Get this running https://github.com/DigitalSlideArchive/digital_slide_archive/tree/master/devops/with-dive-volview
 
-In the `provision.divevolview.yaml` file, add some `volumes` for this girder plugin and optionally
-a VolView repo checkout.  Example:
+In the `provision.divevolview.yaml` file, add some `volumes` pointing to this girder plugin and optionally
+a VolView repo checkout. Example:
+
 ```yaml
 services:
   girder:
@@ -208,48 +229,54 @@ services:
 Comment out the pip install of this plugin here: https://github.com/DigitalSlideArchive/digital_slide_archive/blob/master/devops/with-dive-volview/provision.divevolview.yaml#L3
 
 Then clean docker images
+
 ```
 docker rm dsa-plus_girder_1 dsa-plus_worker_1 dsa-plus_rabbitmq_1 dsa-plus_memcached_1 dsa-plus_mongodb_1
 ```
 
 Start containers again
+
 ```
 DSA_USER=$(id -u):$(id -g) docker-compose -f ../dsa/docker-compose.yml -f docker-compose.override.yml -p dsa-plus up
 ```
 
 Bash into girder container
+
 ```
 DSA_USER=$(id -u):$(id -g) docker-compose -f ../dsa/docker-compose.yml -f docker-compose.override.yml -p dsa-plus exec girder bash
 ```
 
 On Bash terminal, install your mounted local dev version of plugin.
+
 ```
 cd /opt/girder_volview/ && pip install -e .
 ```
 
-For the Girder plugin watch and rebuild feature, I must stop and start 
+For the Girder plugin watch and rebuild feature, I must stop and start
 containers again. Then on Girder Bash prompt run
+
 ```
 girder build --dev --watch-plugin volview
 ```
 
-### Dev VolView client
+### Develop VolView client
 
 Change the directory the Webpack copy plugin pulls from to your mounted volume with local VolView build
 In here: https://github.com/PaulHax/girder_volview/blob/main/girder_volview/web_client/webpack.helper.js#L9-L14
+
 ```js
-        new CopyWebpackPlugin([
-            {
-                from: '/opt/volview-package/dist',
-                to: config.output.path,
-                toType: "dir",
-            },
-        ])
-``` 
+new CopyWebpackPlugin([
+  {
+    from: "/opt/volview-package/dist",
+    to: config.output.path,
+    toType: "dir",
+  },
+]);
+```
+
 Then build VolView with the right flags:
 https://github.com/PaulHax/girder_volview/blob/main/volview-girder-client/buildvolview.sh#L14C2-L14C108
+
 ```
 VITE_REMOTE_SERVER_URL= VITE_ENABLE_REMOTE_SAVE=true npm run build -- --base=/static/built/plugins/volview
 ```
-
-
