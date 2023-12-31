@@ -159,9 +159,10 @@ file download requests through the Girder server, rather than redirecting direct
 ```
 [volview]
 # Workaround CORS configuration errors in S3 assetstores.
-# If True, the Girder server will proxy file download requests from VolView
-# to the S3 assetstore. This will use more server bandwidth.
+# If True, the Girder server will proxy file download requests from 
+# VolView clients to the S3 assetstore. This will use more server bandwidth.
 # If False, VolView client requests to download files are redirected to S3.
+# Defaults to True.
 proxy_assetstores = True
 ```
 
