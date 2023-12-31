@@ -147,6 +147,15 @@ shortcuts:
 
 In VolView, show a dialog with the configured keyboard shortcuts by pressing the `?` key.
 
+### Saved Segment Group File Format
+
+Edited segment groups are saved as separate files within session.volview.zip files.  By default the segment group file format is '.vti'.  We can change the format to 'nrrd', 'nii', 'nii.gz' and 'hdf5'
+
+```yml
+io:
+  segmentGroupSaveFormat: "nrrd"
+```
+
 ## CORS Error Workaround by Proxying Assetstores 
 
 VolView will error if it loads a file from a S3 bucket asset store without some
