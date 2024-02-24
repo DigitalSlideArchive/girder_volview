@@ -1,4 +1,4 @@
-#!/bin/sh bash
+#!/bin/bash
 rm -rf VolView
 mkdir VolView
 cd VolView
