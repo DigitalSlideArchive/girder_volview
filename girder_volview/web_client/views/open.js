@@ -40,30 +40,17 @@ export function openItem(item) {
     });
 }
 
-function filesToDownloadParams(files) {
-    // Find session file in same folder
-    // Filter out session files
-    const fileUrls = files
-        .map((file) => {
-            return [
-                "",
-                getApiRoot(),
-                "file",
-                String(file._id),
-                "proxiable",
-                file.name,
-            ].join("/");
-        })
-        .join(",");
-    const fileNames = files.map((file) => file.name).join(",");
-
-    return `&names=[${fileNames}]&urls=[${fileUrls}]`;
+function resourcesToDownloadParams(folder, resources) {
+    const items = (resources.item || []).join(",");
+    const folders = (resources.folder || []).join(",");
+    const manifestUrl = `/${getApiRoot()}/folder/${folder}/volview_manifest?folders=${folders}&items=${items}`;
+    return `&names=[manifest.json]&urls=${encodeURIComponent(manifestUrl)}`;
 }
 
-export function openFiles(folder, files) {
+export function openResources(folder, resources) {
     const folderRoute = `/${getApiRoot()}/folder/${folder.id}`;
     const saveParam = `&save=${folderRoute}/volview`;
-    const downloadParams = filesToDownloadParams(files);
+    const downloadParams = resourcesToDownloadParams(folder.id, resources);
     const newTabUrl = `${volViewPath}?${saveParam}${downloadParams}`;
     window.open(newTabUrl, "_blank").focus();
 }

@@ -177,6 +177,7 @@ proxy_assetstores = True
 
 ## API Endpoints
 
+- GET folder/:id/volview_manifest?items=[itemIds]&folders=[folderIds]
 - POST item/:id/volview -> upload file to Item with cookie authentication
 - GET item/:id/volview -> download latest session.volview.zip
 - GET item/:id/volview/manifest -> download JSON with URLs to all files in item except the `*.volview.zip`

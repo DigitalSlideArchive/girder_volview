@@ -2,7 +2,6 @@ import cherrypy
 import errno
 
 from girder import plugin
-
 from girder.api.describe import Description, autoDescribeRoute
 from girder.api import access
 from girder.api.rest import (
@@ -31,7 +30,7 @@ from girder.models.folder import Folder
 from girder import logger
 from girder.models.group import Group
 
-# server settings (from girder.cfg file probably) for proxiable endpoint below 
+# server settings (from girder.cfg file probably) for proxiable endpoint below
 from girder.utility import config
 
 LARGE_IMAGE_CONFIG_FOLDER = "large_image.config_folder"
@@ -100,10 +99,12 @@ def saveSession(self, itemId):
         return fileModel.filter(Upload().finalizeUpload(upload), user)
 
 
-def isSessionFile(path):
+def isLoadable(path):
     if path.endswith("volview.zip"):
-        return True
-    return False
+        return False
+    if path.endswith(".volview_config.yaml"):
+        return False
+    return True
 
 
 # Deprecated, use downloadManifest
@@ -125,7 +126,7 @@ def downloadDatasets(self, item):
         sansSessions = [
             fileEntry
             for fileEntry in ItemModel().fileList(item, subpath=False)
-            if not isSessionFile(fileEntry[0])
+            if isLoadable(fileEntry[0])
         ]
         for path, file in sansSessions:
             for data in zip.addFile(file, path):
@@ -178,11 +179,66 @@ def downloadManifest(self, item):
     filesNoVolViewZips = [
         fileEntry
         for fileEntry in ItemModel().fileList(item, subpath=False, data=False)
-        if not isSessionFile(fileEntry[0])
+        if isLoadable(fileEntry[0])
     ]
     fileUrls = [
         {"url": makeFileDownloadUrl(fileEntry[1]), "name": fileEntry[1]["name"]}
         for fileEntry in filesNoVolViewZips
+    ]
+    fileManifest = {"resources": fileUrls}
+    return fileManifest
+
+
+def getFileList(model, id):
+    folder = model().load(id, force=True, exc=True)
+    filesNoVolViewZips = [
+        fileEntry
+        for fileEntry in model().fileList(folder, subpath=False, data=False)
+        if isLoadable(fileEntry[0])
+    ]
+    return filesNoVolViewZips
+
+
+def getFiles(model, ids):
+    if len(ids) == 0:
+        return []
+    idList = ids.split(",")
+    fileLists = [getFileList(model, id) for id in idList]
+    # flatten
+    files = [file for fileList in fileLists for file in fileList]
+    return files
+
+
+@access.public(cookie=True, scope=TokenScope.DATA_READ)
+@boundHandler
+@autoDescribeRoute(
+    Description("Download JSON with file download URIs")
+    .modelParam("folderId", model=Folder, level=AccessType.READ)
+    .param("folders", "Folder IDs.")
+    .param("items", "Item IDs.")
+    .produces(["application/json"])
+    .errorResponse("ID was invalid.")
+    .errorResponse("Read access was denied for the folder.", 403)
+)
+def downloadResourceManifest(self, folder, folders, items):
+    # check for session.volview.zip
+    files = []
+    if not folders and not items:
+        # collect all files in folder
+        files = [
+            fileEntry
+            for fileEntry in Folder().fileList(folder, subpath=False, data=False)
+            if isLoadable(fileEntry[0])
+        ]
+    else:
+        # collect files in folders and items
+        folderFiles = getFiles(Folder, folders)
+        itemFiles = getFiles(ItemModel, items)
+        files = folderFiles + itemFiles
+
+    fileUrls = [
+        {"url": makeFileDownloadUrl(fileEntry[1]), "name": fileEntry[1]["name"]}
+        for fileEntry in files
     ]
     fileManifest = {"resources": fileUrls}
     return fileManifest
@@ -204,7 +260,7 @@ def downloadSession(self, item):
     sessions = [
         fileEntry[1]
         for fileEntry in ItemModel().fileList(item, subpath=False, data=False)
-        if isSessionFile(fileEntry[0])
+        if isLoadable(fileEntry[0])
     ]
     if len(sessions) == 0:
         raise GirderException(
@@ -387,4 +443,7 @@ class GirderPlugin(plugin.GirderPlugin):
         )
         info["apiRoot"].item.route(
             "GET", (":itemId", "volview", "config", ":name"), getConfigFile
+        )
+        info["apiRoot"].folder.route(
+            "GET", (":folderId", "volview_manifest"), downloadResourceManifest
         )
