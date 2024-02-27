@@ -21,9 +21,7 @@ function makeDownloadParams(model, itemRoute, files) {
               name: `${model.name()}-files.json`,
           };
 
-    const configUrl = `${itemRoute}/volview/config/.volview_config.yaml`;
-
-    return `&names=[${name},config.json]&urls=[${downloadUrl},${configUrl}]`;
+    return `&names=[${name}]&urls=[${downloadUrl}]`;
 }
 
 export function openItem(item) {
