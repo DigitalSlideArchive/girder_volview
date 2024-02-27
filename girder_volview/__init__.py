@@ -36,29 +36,13 @@ from girder.utility import config
 LARGE_IMAGE_CONFIG_FOLDER = "large_image.config_folder"
 
 
-@access.public(cookie=True, scope=TokenScope.DATA_WRITE)
-@boundHandler
-@autoDescribeRoute(
-    Description("Save VolView session in an item")
-    .param("itemId", "The item ID", paramType="path")
-    .errorResponse()
-)
-def saveSession(self, itemId):
-    size = int(cherrypy.request.headers.get("Content-Length"))
-    if size == 0:
-        raise GirderException(
-            "Expected non-zero Content-Length header", "girder.api.v1.item.save-volview"
-        )
-
+def uploadSession(model, parentId, user, size):
     # modified from girder.api.v1.file.File.initUpload
-    fileModel = FileModel()
-    parentId = itemId
-    parentType = "item"
+    parentType = model.__name__.lower()
     name = "session.volview.zip"
     mimeType = "application/zip"
     reference = None
-    user = self.getCurrentUser()
-    parent = Item().load(id=parentId, user=user, level=AccessType.WRITE, exc=True)
+    parent = model().load(id=parentId, user=user, level=AccessType.WRITE, exc=True)
 
     assetstore = None
 
@@ -87,7 +71,7 @@ def saveSession(self, itemId):
         if exc.errno == errno.EACCES:
             raise GirderException(
                 "Failed to create upload.",
-                "girder.api.v1.item.volview.create-upload-failed",
+                f"girder.api.v1.{parentType}.volview_save",
             )
         raise
     if upload["size"] > 0:
@@ -96,11 +80,51 @@ def saveSession(self, itemId):
 
         return upload
     else:
-        return fileModel.filter(Upload().finalizeUpload(upload), user)
+        return FileModel().filter(Upload().finalizeUpload(upload), user)
 
 
-def isLoadable(path):
-    if path.endswith(".volview.zip"):
+@access.public(cookie=True, scope=TokenScope.DATA_WRITE)
+@boundHandler
+@autoDescribeRoute(
+    Description("Save VolView session in an item")
+    .param("itemId", "The item ID", paramType="path")
+    .errorResponse()
+)
+def saveToItem(self, itemId):
+    size = int(cherrypy.request.headers.get("Content-Length"))
+    if size == 0:
+        raise GirderException(
+            "Expected non-zero Content-Length header", "girder.api.v1.item.save-volview"
+        )
+
+    return uploadSession(ItemModel, itemId, self.getCurrentUser(), size)
+
+
+@access.public(cookie=True, scope=TokenScope.DATA_WRITE)
+@boundHandler
+@autoDescribeRoute(
+    Description("Save VolView session in an folder")
+    .param("folderId", "The folder ID", paramType="path")
+    .errorResponse()
+)
+def saveToFolder(self, folderId):
+    size = int(cherrypy.request.headers.get("Content-Length"))
+    if size == 0:
+        raise GirderException(
+            "Expected non-zero Content-Length header",
+            "girder.api.v1.folder.volview_save",
+        )
+    return uploadSession(Folder, folderId, self.getCurrentUser(), size)
+
+
+def isSessionFile(path):
+    if path.endswith("volview.zip"):
+        return True
+    return False
+
+
+def isLoadableData(path):
+    if isSessionFile(path):
         return False
     if path.endswith("volview_config.yaml"):
         return False
@@ -126,7 +150,7 @@ def downloadDatasets(self, item):
         sansSessions = [
             fileEntry
             for fileEntry in ItemModel().fileList(item, subpath=False)
-            if isLoadable(fileEntry[0])
+            if isLoadableData(fileEntry[0])
         ]
         for path, file in sansSessions:
             for data in zip.addFile(file, path):
@@ -179,7 +203,7 @@ def downloadManifest(self, item):
     filesNoVolViewZips = [
         fileEntry
         for fileEntry in ItemModel().fileList(item, subpath=False, data=False)
-        if isLoadable(fileEntry[0])
+        if isLoadableData(fileEntry[0])
     ]
     fileUrls = [
         {"url": makeFileDownloadUrl(fileEntry[1]), "name": fileEntry[1]["name"]}
@@ -194,7 +218,7 @@ def getFileList(model, id):
     filesNoVolViewZips = [
         fileEntry
         for fileEntry in model().fileList(folder, subpath=False, data=False)
-        if isLoadable(fileEntry[0])
+        if isLoadableData(fileEntry[0])
     ]
     return filesNoVolViewZips
 
@@ -228,7 +252,7 @@ def downloadResourceManifest(self, folder, folders, items):
         files = [
             fileEntry
             for fileEntry in Folder().fileList(folder, subpath=False, data=False)
-            if isLoadable(fileEntry[0])
+            if isLoadableData(fileEntry[0])
         ]
     else:
         # collect files in folders and items
@@ -271,7 +295,7 @@ def downloadSession(self, item):
     sessions = [
         fileEntry[1]
         for fileEntry in ItemModel().fileList(item, subpath=False, data=False)
-        if isLoadable(fileEntry[0])
+        if isSessionFile(fileEntry[0])
     ]
     if len(sessions) == 0:
         raise GirderException(
@@ -474,7 +498,7 @@ class GirderPlugin(plugin.GirderPlugin):
     CLIENT_SOURCE_PATH = "web_client"
 
     def load(self, info):
-        info["apiRoot"].item.route("POST", (":itemId", "volview"), saveSession)
+        info["apiRoot"].item.route("POST", (":itemId", "volview"), saveToItem)
         info["apiRoot"].item.route("GET", (":itemId", "volview"), downloadSession)
         # volview/datasets is deprecated.  Use volview/manifest instead.
         info["apiRoot"].item.route(
@@ -495,3 +519,4 @@ class GirderPlugin(plugin.GirderPlugin):
         info["apiRoot"].folder.route(
             "GET", (":folderId", "volview_config", ":name"), getFolderConfigFile
         )
+        info["apiRoot"].folder.route("POST", (":folderId", "volview"), saveToFolder)
