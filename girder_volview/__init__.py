@@ -215,6 +215,29 @@ def filesToManifest(files, folderId):
     return fileManifest
 
 
+def sameLevelSessionFile(fileEntry):
+    # if file name matches the item name, then Item.fileList has no / in the path
+    # example: itemName == session.volview.zip and fileName == session.volview.zip, then path == session.volview.zip
+    # example: itemName == "session.volview.zip (1)" and fileName == session.volview.zip, then path == session.volview.zip (1)/session.volview.zip
+    paths = fileEntry[0].split("/")
+    rootPath = paths[0]
+    itemNameIncludesSessionZip = rootPath.find(SESSION_ZIP_EXTENSION) != -1
+    directChildSessionZip = len(paths) <= 2 and itemNameIncludesSessionZip
+    return directChildSessionZip and isSessionFile(fileEntry[0])
+
+
+def singleVolViewZipOrImageFiles(files):
+    sessions = [fileEntry for fileEntry in files if sameLevelSessionFile(fileEntry)]
+    if len(sessions) > 0:
+        # load latest session
+        sortedSessions = sorted(sessions, key=lambda file: file[1].get("created"))
+        latestSession = sortedSessions[-1]
+        return [latestSession]
+    else:
+        print(files)
+        return [file for file in files if isLoadableData(file[0])]
+
+
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
 @boundHandler
 @autoDescribeRoute(
@@ -227,41 +250,26 @@ def filesToManifest(files, folderId):
     .errorResponse("Read access was denied for the item.", 403)
 )
 def downloadManifest(self, item):
-    filesNoVolViewZips = [
-        fileEntry
-        for fileEntry in ItemModel().fileList(item, subpath=False, data=False)
-        if isLoadableData(fileEntry[0])
-    ]
-    return filesToManifest(filesNoVolViewZips, item["folderId"])
+    allFiles = list(ItemModel().fileList(item, subpath=False, data=False))
+    files = singleVolViewZipOrImageFiles(allFiles)
+    return filesToManifest(files, item["folderId"])
 
 
 def getFileList(model, id):
     folder = model().load(id, force=True, exc=True)
-    filesNoVolViewZips = [
+    return [
         fileEntry for fileEntry in model().fileList(folder, subpath=False, data=False)
     ]
-    return filesNoVolViewZips
 
 
-def getFiles(model, ids):
-    if len(ids) == 0:
+def getFiles(model, modelIds):
+    if len(modelIds) == 0:
         return []
-    idList = ids.split(",")
+    idList = modelIds.split(",")
     fileLists = [getFileList(model, id) for id in idList]
     # flatten
     files = [file for fileList in fileLists for file in fileList]
     return files
-
-
-def sameLevelSessionFile(fileEntry):
-    # if file name matches the item name, there is no / in the path
-    # example: itemName == session.volview.zip and fileName == session.volview.zip, then path == session.volview.zip
-    # example: itemName == "session.volview.zip (1)" and fileName == session.volview.zip, then path == session.volview.zip (1)/session.volview.zip
-    paths = fileEntry[0].split("/")
-    rootPath = paths[0]
-    itemNameIncludesSessionZip = rootPath.find(SESSION_ZIP_EXTENSION) != -1
-    directChildSessionZip = len(paths) <= 2 and itemNameIncludesSessionZip
-    return directChildSessionZip and isSessionFile(fileEntry[0])
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
@@ -283,56 +291,17 @@ def downloadResourceManifest(self, folder, folders, items):
             fileEntry
             for fileEntry in Folder().fileList(folder, subpath=False, data=False)
         ]
-        sessions = [
-            fileEntry for fileEntry in filesInFolder if sameLevelSessionFile(fileEntry)
-        ]
-        if len(sessions) > 0:
-            # load latest session
-            sortedSessions = sorted(sessions, key=lambda file: file[1].get("created"))
-            latestSession = sortedSessions[-1]
-            files = [latestSession]
-        else:
-            files = [file for file in filesInFolder if isLoadableData(file[0])]
+        files = singleVolViewZipOrImageFiles(filesInFolder)
     else:
         # selected files
         itemFiles = getFiles(ItemModel, items)
-        if len(itemFiles) == 1 and isSessionFile(itemFiles[0][0]):
+        if len(itemFiles) == 1 and isSessionFile(itemFiles[0][0]) and len(folders) == 0:
             # if selected one session.volview.zip item, load it
             files = itemFiles
         else:
             files = getFiles(Folder, folders) + itemFiles
             files = [file for file in files if isLoadableData(file[0])]
     return filesToManifest(files, folder["_id"])
-
-
-@access.public(cookie=True, scope=TokenScope.DATA_READ)
-@boundHandler
-@autoDescribeRoute(
-    Description("Download latest *.volview.zip")
-    .modelParam("itemId", model=ItemModel, level=AccessType.READ)
-    .produces(["application/zip"])
-    .errorResponse("ID was invalid.")
-    .errorResponse("Read access was denied for the item.", 403)
-)
-def downloadSession(self, item):
-    setResponseHeader("Content-Type", "application/zip")
-    setContentDisposition(item["name"] + ".zip")
-
-    sessions = [
-        fileEntry[1]
-        for fileEntry in ItemModel().fileList(item, subpath=False, data=False)
-        if isSessionFile(fileEntry[0])
-    ]
-    if len(sessions) == 0:
-        raise GirderException(
-            "No VolView session file found.",
-            "girder.api.v1.item.volview.download-session",
-        )
-
-    sortedSessions = sorted(sessions, key=lambda file: file.get("created"))
-    latestSession = sortedSessions[-1]
-
-    return FileModel().download(latestSession, 0)
 
 
 def _mergeDictionaries(a, b):
@@ -488,22 +457,19 @@ class GirderPlugin(plugin.GirderPlugin):
     CLIENT_SOURCE_PATH = "web_client"
 
     def load(self, info):
-        info["apiRoot"].item.route("POST", (":itemId", "volview"), saveToItem)
-        info["apiRoot"].item.route("GET", (":itemId", "volview"), downloadSession)
-        # volview/datasets is deprecated.  Use volview/manifest instead.
-        info["apiRoot"].item.route(
-            "GET", (":itemId", "volview", "datasets"), downloadDatasets
+        info["apiRoot"].item.route("GET", (":itemId", "volview"), downloadManifest)
+        info["apiRoot"].folder.route(
+            "GET", (":folderId", "volview"), downloadResourceManifest
         )
         info["apiRoot"].file.route(
             "GET", (":id", "proxiable", ":name"), downloadProxiableFile
-        )
-        info["apiRoot"].item.route(
-            "GET", (":itemId", "volview", "manifest"), downloadManifest
-        )
-        info["apiRoot"].folder.route(
-            "GET", (":folderId", "volview_manifest"), downloadResourceManifest
         )
         info["apiRoot"].folder.route(
             "GET", (":folderId", "volview_config", ":name"), getFolderConfigFile
         )
         info["apiRoot"].folder.route("POST", (":folderId", "volview"), saveToFolder)
+        info["apiRoot"].item.route("POST", (":itemId", "volview"), saveToItem)
+        # volview/datasets is deprecated.  Use GET {folder|item}/volview instead.
+        info["apiRoot"].item.route(
+            "GET", (":itemId", "volview", "datasets"), downloadDatasets
+        )
