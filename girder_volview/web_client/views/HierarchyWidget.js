@@ -8,6 +8,10 @@ const openChecked = '<i class="icon-link-ext"></i>Open Checked in VolView</a>';
 wrap(HierarchyWidget, "render", function (render) {
     render.call(this);
 
+    // Can't open/save at root of Collections, for now.
+    if (this.parentModel.attributes._modelType !== "folder") {
+        return;
+    }
     this.$(".g-folder-header-buttons").prepend(openButton);
     const buttons = this.$el.find(".open-in-volview");
     const button = buttons[0];
