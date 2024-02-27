@@ -44,8 +44,6 @@ def uploadSession(model, parentId, user, size):
     reference = None
     parent = model().load(id=parentId, user=user, level=AccessType.WRITE, exc=True)
 
-    assetstore = None
-
     chunk = None
     ct = cherrypy.request.body.content_type.value
     if (
@@ -65,7 +63,6 @@ def uploadSession(model, parentId, user, size):
             size=size,
             mimeType=mimeType,
             reference=reference,
-            assetstore=assetstore,
         )
     except OSError as exc:
         if exc.errno == errno.EACCES:
@@ -117,8 +114,11 @@ def saveToFolder(self, folderId):
     return uploadSession(Folder, folderId, self.getCurrentUser(), size)
 
 
+SESSION_ZIP_EXTENSION = ".volview.zip"
+
+
 def isSessionFile(path):
-    if path.endswith("volview.zip"):
+    if path.endswith(SESSION_ZIP_EXTENSION):
         return True
     return False
 
@@ -163,15 +163,15 @@ def downloadDatasets(self, item):
 @access.public(scope=TokenScope.DATA_READ, cookie=True)
 @boundHandler
 @autoDescribeRoute(
-    Description('Download a file with option to proxy.')
-    .modelParam('id', model=FileModel, level=AccessType.READ)
-    .param('name', 'The name of the file.  This is ignored.', paramType='path')
-    .errorResponse('ID was invalid.')
-    .errorResponse('Read access was denied on the parent folder.', 403)
+    Description("Download a file with option to proxy.")
+    .modelParam("id", model=FileModel, level=AccessType.READ)
+    .param("name", "The name of the file.  This is ignored.", paramType="path")
+    .errorResponse("ID was invalid.")
+    .errorResponse("Read access was denied on the parent folder.", 403)
 )
 def downloadProxiableFile(self, file, name):
-    proxyRequest = config.getConfig().get('volview', {}).get('proxy_assetstores', True)
-    return FileModel().download(file,  headers=not proxyRequest )
+    proxyRequest = config.getConfig().get("volview", {}).get("proxy_assetstores", True)
+    return FileModel().download(file, headers=not proxyRequest)
 
 
 def makeFileDownloadUrl(fileModel):
@@ -183,7 +183,14 @@ def makeFileDownloadUrl(fileModel):
     """
     # Lead with a slash to make the URI relative to origin
     fileUrl = "/".join(
-        ("", getApiRoot(), "file", str(fileModel["_id"]), "proxiable", fileModel["name"])
+        (
+            "",
+            getApiRoot(),
+            "file",
+            str(fileModel["_id"]),
+            "proxiable",
+            fileModel["name"],
+        )
     )
     return fileUrl
 
@@ -216,9 +223,7 @@ def downloadManifest(self, item):
 def getFileList(model, id):
     folder = model().load(id, force=True, exc=True)
     filesNoVolViewZips = [
-        fileEntry
-        for fileEntry in model().fileList(folder, subpath=False, data=False)
-        if isLoadableData(fileEntry[0])
+        fileEntry for fileEntry in model().fileList(folder, subpath=False, data=False)
     ]
     return filesNoVolViewZips
 
@@ -233,6 +238,17 @@ def getFiles(model, ids):
     return files
 
 
+def sameLevelSessionFile(fileEntry):
+    # if file name matches the item name, there is no / in the path
+    # example: itemName == session.volview.zip and fileName == session.volview.zip, then path == session.volview.zip
+    # example: itemName == "session.volview.zip (1)" and fileName == session.volview.zip, then path == session.volview.zip (1)/session.volview.zip
+    paths = fileEntry[0].split("/")
+    rootPath = paths[0]
+    itemNameIncludesSessionZip = rootPath.find(SESSION_ZIP_EXTENSION) != -1
+    directChildSessionZip = len(paths) <= 2 and itemNameIncludesSessionZip
+    return directChildSessionZip and isSessionFile(fileEntry[0])
+
+
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
 @boundHandler
 @autoDescribeRoute(
@@ -245,20 +261,32 @@ def getFiles(model, ids):
     .errorResponse("Read access was denied for the folder.", 403)
 )
 def downloadResourceManifest(self, folder, folders, items):
-    # check for session.volview.zip
     files = []
     if not folders and not items:
-        # collect all files in folder
-        files = [
+        # all files in folder (unless volview.zip is found as direct child)
+        filesInFolder = [
             fileEntry
             for fileEntry in Folder().fileList(folder, subpath=False, data=False)
-            if isLoadableData(fileEntry[0])
         ]
+        sessions = [
+            fileEntry for fileEntry in filesInFolder if sameLevelSessionFile(fileEntry)
+        ]
+        if len(sessions) > 0:
+            # load latest session
+            sortedSessions = sorted(sessions, key=lambda file: file[1].get("created"))
+            latestSession = sortedSessions[-1]
+            files = [latestSession]
+        else:
+            files = [file for file in filesInFolder if isLoadableData(file[0])]
     else:
-        # collect files in folders and items
-        folderFiles = getFiles(Folder, folders)
+        # selected files
         itemFiles = getFiles(ItemModel, items)
-        files = folderFiles + itemFiles
+        if len(itemFiles) == 1 and isSessionFile(itemFiles[0][0]):
+            # if selected one session.volview.zip item, load it
+            files = itemFiles
+        else:
+            files = getFiles(Folder, folders) + itemFiles
+            files = [file for file in files if isLoadableData(file[0])]
 
     fileUrls = [
         {"url": makeFileDownloadUrl(fileEntry[1]), "name": fileEntry[1]["name"]}
@@ -488,8 +516,6 @@ def getFolderConfigFile(self, folder, name):
     user = self.getCurrentUser()
     baseConfig = {"dataBrowser": {"hideSampleData": True}}
     config = yamlConfigFile(folder, name, user, baseConfig)
-    print("asdf")
-    print(config)
     return config
 
 
