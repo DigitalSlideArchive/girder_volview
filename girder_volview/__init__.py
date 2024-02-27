@@ -100,9 +100,9 @@ def saveSession(self, itemId):
 
 
 def isLoadable(path):
-    if path.endswith("volview.zip"):
+    if path.endswith(".volview.zip"):
         return False
-    if path.endswith(".volview_config.yaml"):
+    if path.endswith("volview_config.yaml"):
         return False
     return True
 
@@ -240,6 +240,17 @@ def downloadResourceManifest(self, folder, folders, items):
         {"url": makeFileDownloadUrl(fileEntry[1]), "name": fileEntry[1]["name"]}
         for fileEntry in files
     ]
+    configUrl = "/".join(
+        (
+            "",
+            getApiRoot(),
+            "folder",
+            str(folder["_id"]),
+            "volview_config",
+            ".volview_config.yaml",
+        )
+    )
+    fileUrls.append({"url": configUrl, "name": "config.json"})
     fileManifest = {"resources": fileUrls}
     return fileManifest
 
@@ -424,6 +435,40 @@ def getConfigFile(self, item, name):
     return config
 
 
+@access.public(cookie=True, scope=TokenScope.DATA_READ)
+@boundHandler()
+@autoDescribeRoute(
+    Description("Get a VolView config file.")
+    .notes(
+        "Wraps large image yaml_config endpoint and inserts more properties. "
+        "This walks up the chain of parent folders until the file is found.  "
+        "If not found, the .config folder in the parent collection or user is "
+        "checked.\n\nAny yaml file can be returned.  If the top-level is a "
+        'dictionary and contains keys "access" or "groups" where those are '
+        "dictionaries, the returned value will be modified based on the "
+        'current user.  The "groups" dictionary contains keys that are group '
+        "names and values that update the main dictionary.  All groups that "
+        "the user is a member of are merged in alphabetical order.  If a key "
+        'and value of "\\__all\\__": True exists, the replacement is total; '
+        'otherwise it is a merge.  If the "access" dictionary exists, the '
+        '"user" and "admin" subdictionaries are merged if a calling user is '
+        "present and if the user is an admin, respectively (both get merged "
+        "for admins)."
+    )
+    .modelParam("folderId", model=Folder, level=AccessType.READ)
+    .param("name", "The name of the file.", paramType="path")
+    .produces(["application/json"])
+    .errorResponse()
+)
+def getFolderConfigFile(self, folder, name):
+    user = self.getCurrentUser()
+    baseConfig = {"dataBrowser": {"hideSampleData": True}}
+    config = yamlConfigFile(folder, name, user, baseConfig)
+    print("asdf")
+    print(config)
+    return config
+
+
 class GirderPlugin(plugin.GirderPlugin):
     DISPLAY_NAME = "VolView"
     CLIENT_SOURCE_PATH = "web_client"
@@ -446,4 +491,7 @@ class GirderPlugin(plugin.GirderPlugin):
         )
         info["apiRoot"].folder.route(
             "GET", (":folderId", "volview_manifest"), downloadResourceManifest
+        )
+        info["apiRoot"].folder.route(
+            "GET", (":folderId", "volview_config", ":name"), getFolderConfigFile
         )
