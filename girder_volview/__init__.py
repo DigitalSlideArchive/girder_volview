@@ -1,6 +1,5 @@
 import cherrypy
 import errno
-from datetime import datetime
 
 from girder import plugin
 from girder.api.describe import Description, autoDescribeRoute
@@ -10,18 +9,17 @@ from girder.api.rest import (
     setResponseHeader,
     setContentDisposition,
 )
-from girder.utility.server import getApiRoot
 from girder.constants import AccessType, TokenScope, SortDir
 
 # saveSession
-from girder.models.file import File as FileModel
+from girder.models.file import File
 from girder.models.upload import Upload
-from girder.models.item import Item
+# from girder.models.item import Item
 from girder.utility import RequestBodyStream
 from girder.exceptions import GirderException
 
 # downloadDatasets
-from girder.models.item import Item as ItemModel
+from girder.models.item import Item
 from girder.utility import ziputil
 
 # get config
@@ -33,6 +31,21 @@ from girder.models.group import Group
 
 # server settings (from girder.cfg file probably) for proxiable endpoint below
 from girder.utility import config
+
+from .utils import (
+    isSessionItem,
+    isLoadableData,
+    filesToManifest,
+    singleVolViewZipOrImageFiles,
+    idStringToIdList,
+    normalizeLinkedResources,
+    loadItems,
+    getFiles,
+    findNewestSession,
+    getLinkedResources,
+    matchesSelectionSet,
+    getNewestSession,
+)
 
 LARGE_IMAGE_CONFIG_FOLDER = "large_image.config_folder"
 
@@ -78,7 +91,7 @@ def uploadSession(model, parentId, user, size):
 
         return upload
     else:
-        return FileModel().filter(Upload().finalizeUpload(upload), user)
+        return File().filter(Upload().finalizeUpload(upload), user)
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_WRITE)
@@ -95,7 +108,7 @@ def saveToItem(self, itemId):
             "Expected non-zero Content-Length header", "girder.api.v1.item.save-volview"
         )
 
-    return uploadSession(ItemModel, itemId, self.getCurrentUser(), size)
+    return uploadSession(Item, itemId, self.getCurrentUser(), size)
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_WRITE)
@@ -132,32 +145,9 @@ def saveToFolder(self, folderId, metadata):
         linkedResources = getLinkedResources(newestSelectedSession)
         metadata = {"linkedResources": linkedResources}
 
-    item = ItemModel().load(fileDic["itemId"], user=user)
-    ItemModel().setMetadata(item, metadata)
+    item = Item().load(fileDic["itemId"], user=user)
+    Item().setMetadata(item, metadata)
     return fileDic
-
-
-SESSION_ZIP_EXTENSION = ".volview.zip"
-
-
-def isSessionItem(item):
-    if SESSION_ZIP_EXTENSION in item["name"]:
-        return True
-    return False
-
-
-def isSessionFile(path):
-    if path.endswith(SESSION_ZIP_EXTENSION):
-        return True
-    return False
-
-
-def isLoadableData(path):
-    if isSessionFile(path):
-        return False
-    if path.endswith("volview_config.yaml"):
-        return False
-    return True
 
 
 # Deprecated, use downloadManifest
@@ -165,7 +155,7 @@ def isLoadableData(path):
 @boundHandler
 @autoDescribeRoute(
     Description("Download zip of item files that do not end in volview.zip")
-    .modelParam("itemId", model=ItemModel, level=AccessType.READ)
+    .modelParam("itemId", model=Item, level=AccessType.READ)
     .produces(["application/zip"])
     .errorResponse("ID was invalid.")
     .errorResponse("Read access was denied for the item.", 403)
@@ -178,7 +168,7 @@ def downloadDatasets(self, item):
         zip = ziputil.ZipGenerator(item["name"])
         sansSessions = [
             fileEntry
-            for fileEntry in ItemModel().fileList(item, subpath=False)
+            for fileEntry in Item().fileList(item, subpath=False)
             if isLoadableData(fileEntry[0])
         ]
         for path, file in sansSessions:
@@ -193,76 +183,14 @@ def downloadDatasets(self, item):
 @boundHandler
 @autoDescribeRoute(
     Description("Download a file with option to proxy.")
-    .modelParam("id", model=FileModel, level=AccessType.READ)
+    .modelParam("id", model=File, level=AccessType.READ)
     .param("name", "The name of the file.  This is ignored.", paramType="path")
     .errorResponse("ID was invalid.")
     .errorResponse("Read access was denied on the parent folder.", 403)
 )
 def downloadProxiableFile(self, file, name):
     proxyRequest = config.getConfig().get("volview", {}).get("proxy_assetstores", True)
-    return FileModel().download(file, headers=not proxyRequest)
-
-
-def makeFileDownloadUrl(fileModel):
-    """
-    Given a file model, return a download URL for the file.
-    :param fileModel: the file model.
-    :type fileModel: dict
-    :returns: the download URL.
-    """
-    # Lead with a slash to make the URI relative to origin
-    fileUrl = "/".join(
-        (
-            "",
-            getApiRoot(),
-            "file",
-            str(fileModel["_id"]),
-            "proxiable",
-            fileModel["name"],
-        )
-    )
-    return fileUrl
-
-
-def filesToManifest(files, folderId):
-    fileUrls = [
-        {"url": makeFileDownloadUrl(fileEntry[1]), "name": fileEntry[1]["name"]}
-        for fileEntry in files
-    ]
-    configUrl = "/".join(
-        (
-            "",
-            getApiRoot(),
-            "folder",
-            str(folderId),
-            "volview_config",
-            ".volview_config.yaml",
-        )
-    )
-    fileUrls.append({"url": configUrl, "name": "config.json"})
-    fileManifest = {"resources": fileUrls}
-    return fileManifest
-
-
-def sameLevelSessionFile(fileEntry):
-    # if file name matches the item name, then Item.fileList has no / in the path
-    # example: itemName == session.volview.zip and fileName == session.volview.zip, then path == session.volview.zip
-    # example: itemName == "session.volview.zip (1)" and fileName == session.volview.zip, then path == session.volview.zip (1)/session.volview.zip
-    paths = fileEntry[0].split("/")
-    rootPath = paths[0]
-    itemNameIncludesSessionZip = rootPath.find(SESSION_ZIP_EXTENSION) != -1
-    directChildSessionZip = len(paths) <= 2 and itemNameIncludesSessionZip
-    return directChildSessionZip and isSessionFile(fileEntry[0])
-
-
-def singleVolViewZipOrImageFiles(files):
-    sessions = [fileEntry for fileEntry in files if sameLevelSessionFile(fileEntry)]
-    if sessions:
-        # load latest session
-        newestSession = max(sessions, key=lambda file: file[1].get("created"))
-        return [newestSession]
-    else:
-        return [file for file in files if isLoadableData(file[0])]
+    return File().download(file, headers=not proxyRequest)
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
@@ -271,81 +199,15 @@ def singleVolViewZipOrImageFiles(files):
     Description(
         "Download JSON listing item file download URIs that do not end in volview.zip"
     )
-    .modelParam("itemId", model=ItemModel, level=AccessType.READ)
+    .modelParam("itemId", model=Item, level=AccessType.READ)
     .produces(["application/json"])
     .errorResponse("ID was invalid.")
     .errorResponse("Read access was denied for the item.", 403)
 )
 def downloadManifest(self, item):
-    allFiles = list(ItemModel().fileList(item, subpath=False, data=False))
+    allFiles = list(Item().fileList(item, subpath=False, data=False))
     files = singleVolViewZipOrImageFiles(allFiles)
     return filesToManifest(files, item["folderId"])
-
-
-def getFileList(model, id, user):
-    doc = model().load(id, user=user, exc=True)
-    return model().fileList(doc, subpath=False, data=False)
-
-
-def idStringToIdList(idString):
-    if len(idString) == 0:
-        return []
-    return idString.split(",")
-
-
-def getFiles(model, idList, user):
-    fileLists = [getFileList(model, id, user) for id in idList]
-    # flatten
-    files = [file for fileList in fileLists for file in fileList]
-    return files
-
-
-def loadItems(user, itemIds):
-    return [ItemModel().load(itemId, user=user) for itemId in itemIds]
-
-
-def normalizeLinkedResources(linkedResources):
-    if not linkedResources:
-        return {"folders": [], "items": []}
-    folders = linkedResources.get("folders", [])
-    items = linkedResources.get("items", [])
-    return {"folders": folders, "items": items}
-
-
-def getLinkedResources(item):
-    linkedResources = item.get("meta", {}).get("linkedResources")
-    return normalizeLinkedResources(linkedResources)
-
-
-def matchesSelectionSet(folders, items, sessionItem):
-    linkedResources = getLinkedResources(sessionItem)
-    if not linkedResources:
-        return False
-    for folder in folders:
-        if not folder in linkedResources.get("folders", []):
-            return False
-    for item in items:
-        if not item in linkedResources.get("items", []):
-            return False
-    return True
-
-
-def getTouchedTime(item):
-    if item.get("meta").get("lastOpened"):
-        dateString = item.get("meta").get("lastOpened")
-        return datetime.strptime(dateString, "%Y-%m-%dT%H:%M:%S.%fZ")
-    return item.get("updated") or item.get("created")
-
-
-def getNewestSession(sessions):
-    return max(sessions, key=lambda session: getTouchedTime(session))
-
-
-def findNewestSession(items):
-    selectedSessions = [item for item in items if isSessionItem(item)]
-    if selectedSessions:
-        return getNewestSession(selectedSessions)
-    return []
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
@@ -372,7 +234,7 @@ def downloadResourceManifest(self, folder, folders, items):
         ]
         files = singleVolViewZipOrImageFiles(filesInFolder)
     else:
-        # Load selected files.
+        # else load selected files.
         selectedItems = loadItems(user, items)
         # If any selected items are session.volview.zip,
         # find freshest and change selection set to match its linkedResources.
@@ -391,6 +253,8 @@ def downloadResourceManifest(self, folder, folders, items):
             for session in sessionItems
             if matchesSelectionSet(folders, items, session)
         ]
+        print(matchingSessionItems)
+        print(items)
         if matchingSessionItems:
             latestSession = getNewestSession(matchingSessionItems)
             files = singleVolViewZipOrImageFiles(
@@ -480,7 +344,7 @@ def yamlConfigFile(folder, name, user, addConfig):
                 if file["size"] > 10 * 1024**2:
                     logger.info("Not loading %s -- too large" % file["name"])
                     continue
-                with FileModel().open(file) as fptr:
+                with File().open(file) as fptr:
                     config = yaml.safe_load(fptr)
                     if isinstance(config, list) and len(config) == 1:
                         config = config[0]
