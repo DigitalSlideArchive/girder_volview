@@ -7,18 +7,28 @@ import { openButton, openResources } from "./open";
 const openFolder = '<i class="icon-link-ext"></i>Open Folder in VolView</a>';
 const openChecked = '<i class="icon-link-ext"></i>Open Checked in VolView</a>';
 
-function loadVolViewZip(volViewZip, resources, parentModel) {
-    // found a VolView zip, update lastOpened so manifest endpoint opens it
-    restRequest({
-        type: "GET",
-        url: `item/${volViewZip.id}/metadata`,
-        contentType: "application/json",
-        data: JSON.stringify({ lastOpened: new Date() }),
-        method: "PUT",
-        error: null,
-    }).done(() => {
+function loadResources(parentModel, resources) {
+    // update lastOpened so manifest endpoint opens it
+    const itemId =
+        resources.item && resources.item.length >= 1 && resources.item[0];
+    const folderId =
+        resources.folder && resources.folder.length >= 1 && resources.folder[0];
+    const id = itemId || folderId;
+    const model = (itemId && "item") || (folderId && "folder");
+
+    if (model) {
+        restRequest({
+            url: `${model}/${id}/metadata`,
+            method: "PUT",
+            contentType: "application/json",
+            data: JSON.stringify({ lastOpened: new Date() }),
+            error: null,
+        }).done(() => {
+            openResources(parentModel, resources);
+        });
+    } else {
         openResources(parentModel, resources);
-    });
+    }
 }
 
 wrap(HierarchyWidget, "render", function (render) {
@@ -49,27 +59,28 @@ wrap(HierarchyWidget, "render", function (render) {
 
             if (volViewZipsNewestFirst.length > 0) {
                 const volViewZip = volViewZipsNewestFirst[0];
-                // Only newest checked volview.zip item will be opened
-                if (items.length >= 2) {
+                if (
+                    items.length >= 2 ||
+                    (resources.folder && resources.folder.length >= 1)
+                ) {
+                    // Only newest checked volview.zip item will be opened, so warn.
                     confirm({
                         text: `Will open newest VolView zip file: ${volViewZip.attributes.name}.`,
                         yesText: "Open",
                         confirmCallback: () => {
-                            loadVolViewZip(
-                                volViewZip,
-                                resources,
-                                this.parentModel
-                            );
+                            const volViewResources = { item: [volViewZip.id] };
+                            loadResources(this.parentModel, volViewResources);
                         },
                     });
                     return;
                 } else {
-                    loadVolViewZip(volViewZip, resources, this.parentModel);
+                    const volViewResources = { item: [volViewZip.id] };
+                    loadResources(this.parentModel, volViewResources);
                     return;
                 }
             }
         }
-        openResources(this.parentModel, resources);
+        loadResources(this.parentModel, resources);
     };
 
     const updateChecked = () => {
