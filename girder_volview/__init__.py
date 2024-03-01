@@ -1,5 +1,6 @@
 import cherrypy
 import errno
+from datetime import datetime
 
 from girder import plugin
 from girder.api.describe import Description, autoDescribeRoute
@@ -102,19 +103,47 @@ def saveToItem(self, itemId):
 @autoDescribeRoute(
     Description("Save VolView session in an folder")
     .param("folderId", "The folder ID", paramType="path")
+    .jsonParam(
+        "metadata",
+        "A JSON object containing the metadata keys to add to the item.",
+    )
     .errorResponse()
 )
-def saveToFolder(self, folderId):
+def saveToFolder(self, folderId, metadata):
+    user = self.getCurrentUser()
     size = int(cherrypy.request.headers.get("Content-Length"))
     if size == 0:
         raise GirderException(
             "Expected non-zero Content-Length header",
             "girder.api.v1.folder.volview_save",
         )
-    return uploadSession(Folder, folderId, self.getCurrentUser(), size)
+    fileDic = uploadSession(Folder, folderId, user, size)
+    # Ensure next downloadResourcesManifest request for will find this
+    # session.volview.zip as the freshest session that matches the selection set:
+    # If there are session.volview.zip items in linked items,
+    # use its metadata.linkedResources as this item's metadata.linkedResources
+    linkedResources = metadata["linkedResources"]
+    linkedItems = normalizeLinkedResources(linkedResources)["items"]
+    selectedItems = loadItems(user, linkedItems)
+    newestSelectedSession = findNewestSession(selectedItems)
+    if newestSelectedSession:
+        # Change selection set to match its linkedResources
+        # so we find most recent session that matches selection set
+        linkedResources = getLinkedResources(newestSelectedSession)
+        metadata = {"linkedResources": linkedResources}
+
+    item = ItemModel().load(fileDic["itemId"], user=user)
+    ItemModel().setMetadata(item, metadata)
+    return fileDic
 
 
 SESSION_ZIP_EXTENSION = ".volview.zip"
+
+
+def isSessionItem(item):
+    if SESSION_ZIP_EXTENSION in item["name"]:
+        return True
+    return False
 
 
 def isSessionFile(path):
@@ -228,13 +257,11 @@ def sameLevelSessionFile(fileEntry):
 
 def singleVolViewZipOrImageFiles(files):
     sessions = [fileEntry for fileEntry in files if sameLevelSessionFile(fileEntry)]
-    if len(sessions) > 0:
+    if sessions:
         # load latest session
-        sortedSessions = sorted(sessions, key=lambda file: file[1].get("created"))
-        latestSession = sortedSessions[-1]
-        return [latestSession]
+        newestSession = max(sessions, key=lambda file: file[1].get("created"))
+        return [newestSession]
     else:
-        print(files)
         return [file for file in files if isLoadableData(file[0])]
 
 
@@ -255,21 +282,70 @@ def downloadManifest(self, item):
     return filesToManifest(files, item["folderId"])
 
 
-def getFileList(model, id):
-    folder = model().load(id, force=True, exc=True)
-    return [
-        fileEntry for fileEntry in model().fileList(folder, subpath=False, data=False)
-    ]
+def getFileList(model, id, user):
+    doc = model().load(id, user=user, exc=True)
+    return model().fileList(doc, subpath=False, data=False)
 
 
-def getFiles(model, modelIds):
-    if len(modelIds) == 0:
+def idStringToIdList(idString):
+    if len(idString) == 0:
         return []
-    idList = modelIds.split(",")
-    fileLists = [getFileList(model, id) for id in idList]
+    return idString.split(",")
+
+
+def getFiles(model, idList, user):
+    fileLists = [getFileList(model, id, user) for id in idList]
     # flatten
     files = [file for fileList in fileLists for file in fileList]
     return files
+
+
+def loadItems(user, itemIds):
+    return [ItemModel().load(itemId, user=user) for itemId in itemIds]
+
+
+def normalizeLinkedResources(linkedResources):
+    if not linkedResources:
+        return {"folders": [], "items": []}
+    folders = linkedResources.get("folders", [])
+    items = linkedResources.get("items", [])
+    return {"folders": folders, "items": items}
+
+
+def getLinkedResources(item):
+    linkedResources = item.get("meta", {}).get("linkedResources")
+    return normalizeLinkedResources(linkedResources)
+
+
+def matchesSelectionSet(folders, items, sessionItem):
+    linkedResources = getLinkedResources(sessionItem)
+    if not linkedResources:
+        return False
+    for folder in folders:
+        if not folder in linkedResources.get("folders", []):
+            return False
+    for item in items:
+        if not item in linkedResources.get("items", []):
+            return False
+    return True
+
+
+def getTouchedTime(item):
+    if item.get("meta").get("lastOpened"):
+        dateString = item.get("meta").get("lastOpened")
+        return datetime.strptime(dateString, "%Y-%m-%dT%H:%M:%S.%fZ")
+    return item.get("updated") or item.get("created")
+
+
+def getNewestSession(sessions):
+    return max(sessions, key=lambda session: getTouchedTime(session))
+
+
+def findNewestSession(items):
+    selectedSessions = [item for item in items if isSessionItem(item)]
+    if selectedSessions:
+        return getNewestSession(selectedSessions)
+    return []
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
@@ -284,22 +360,50 @@ def getFiles(model, modelIds):
     .errorResponse("Read access was denied for the folder.", 403)
 )
 def downloadResourceManifest(self, folder, folders, items):
+    user = self.getCurrentUser()
+    folders = idStringToIdList(folders)
+    items = idStringToIdList(items)
     files = []
     if not folders and not items:
-        # all files in folder (unless volview.zip is found as direct child)
+        # All files in folder (unless volview.zip is found as direct child)
         filesInFolder = [
             fileEntry
             for fileEntry in Folder().fileList(folder, subpath=False, data=False)
         ]
         files = singleVolViewZipOrImageFiles(filesInFolder)
     else:
-        # selected files
-        itemFiles = getFiles(ItemModel, items)
-        if len(itemFiles) == 1 and isSessionFile(itemFiles[0][0]) and len(folders) == 0:
-            # if selected one session.volview.zip item, load it
-            files = itemFiles
+        # Load selected files.
+        selectedItems = loadItems(user, items)
+        # If any selected items are session.volview.zip,
+        # find freshest and change selection set to match its linkedResources.
+        newestSelectedSession = findNewestSession(selectedItems)
+        if newestSelectedSession:
+            linkedResources = getLinkedResources(newestSelectedSession)
+            folders = linkedResources["folders"]
+            items = linkedResources["items"]
+
+        # Find session.volview.zips that match selection set
+        sessionItems = [
+            item for item in Folder().childItems(folder) if isSessionItem(item)
+        ]
+        matchingSessionItems = [
+            session
+            for session in sessionItems
+            if matchesSelectionSet(folders, items, session)
+        ]
+        if matchingSessionItems:
+            latestSession = getNewestSession(matchingSessionItems)
+            files = singleVolViewZipOrImageFiles(
+                Item().fileList(latestSession, subpath=False, data=False)
+            )
         else:
-            files = getFiles(Folder, folders) + itemFiles
+            # Load selected folders and items excluding child session.volview.zip and .volview_config.yaml
+            itemFiles = [
+                Item().fileList(item, subpath=False, data=False)
+                for item in selectedItems
+            ]
+            itemFiles = [file for fileList in itemFiles for file in fileList]
+            files = getFiles(Folder, folders, user) + itemFiles
             files = [file for file in files if isLoadableData(file[0])]
     return filesToManifest(files, folder["_id"])
 

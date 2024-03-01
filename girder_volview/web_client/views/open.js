@@ -24,7 +24,15 @@ function resourcesToDownloadParams(folderId, resources) {
 
 export function openResources(folder, resources) {
     const folderRoute = `/${getApiRoot()}/folder/${folder.id}`;
-    const saveParam = `&save=${folderRoute}/volview`;
+    const metaData = {
+        linkedResources: {
+            items: resources.item,
+            folders: resources.folder,
+        },
+    };
+    const saveParam = `&save=${folderRoute}/volview?metadata=${encodeURIComponent(
+        JSON.stringify(metaData)
+    )}`;
     const downloadParams = resourcesToDownloadParams(folder.id, resources);
     const newTabUrl = `${volViewPath}?${saveParam}${downloadParams}`;
     window.open(newTabUrl, "_blank").focus();
