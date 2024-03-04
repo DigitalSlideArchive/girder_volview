@@ -196,30 +196,6 @@ proxy_assetstores = True
 
 VolView creates a new session.volview.zip file in the Girder Item every time the Save button is clicked.
 
-## VolView Client Update Steps
-
-Change VolView commit SHA in `volview-girder-client/buildvolview.sh`
-
-Build VolView client with Girder specific CLI arguments:
-
-```sh
-cd volview-girder-client
-source buildvolview.sh
-```
-
-Increase version in `volview-girder-client/package.json`.
-
-Publish built VolView `dist` directory to NPM:
-
-```sh
-cd volview-girder-client
-npm publish
-```
-
-Update volview-girder-client version in `./grider_volview/web_client/package.json`
-
-To test new client: push up changes to a new branch on GitHub. Change `provision.divevolview.yaml` to point to your branch like this: `git+https://github.com/PaulHax/girder_volview@new-branch`.
-Rebuild DSA Girder docker image.
 
 ## Development
 
@@ -268,3 +244,28 @@ https://github.com/PaulHax/girder_volview/blob/main/volview-girder-client/buildv
 ```
 VITE_REMOTE_SERVER_URL= VITE_ENABLE_REMOTE_SAVE=true npm run build -- --base=/static/built/plugins/volview
 ```
+
+### VolView Client Update Steps
+
+Change VolView commit SHA in `volview-girder-client/buildvolview.sh`
+
+Build VolView client with Girder specific CLI arguments:
+
+```sh
+cd volview-girder-client
+source buildvolview.sh
+```
+
+Increase version in `volview-girder-client/package.json`.
+
+Publish built VolView `dist` directory to NPM:
+
+```sh
+cd volview-girder-client
+npm publish
+```
+
+Update volview-girder-client version in `./grider_volview/web_client/package.json`
+
+To test new client: push up changes to a new branch on GitHub. Change `provision.divevolview.yaml` to point to your branch like this: `git+https://github.com/PaulHax/girder_volview@new-branch`.
+Rebuild DSA Girder docker image.
