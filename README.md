@@ -186,6 +186,8 @@ proxy_assetstores = True
 
 ## Example Saving Roundtrip flow
 
+### Open Item
+
 1. User clicks Open in VolView for Item - Plugin checks if `*volview.zip` file exists in Item, finds none:
    Opens VolView with file download url `item/:id/volview/datasets`
 1. VolView opens, fetches from `item/:id/volview/datasets`, receives zip of all files in Item except files ending in `*volview.zip`
@@ -196,6 +198,14 @@ proxy_assetstores = True
 
 VolView creates a new session.volview.zip file in the Girder Item every time the Save button is clicked.
 
+### Open Checked
+
+1. User checks a set of items or folders. Clicks "Open Checked in VolView".
+1. Browser client updates the `lastOpened` metadata on a checked item/folder metadata with the current time.
+1. Browser opens VolView with file download url pointing to `GET folder/:id/volview?items=[...ids]&folders=[...ids]`. That endpoint returns a with URLs to Girder files.
+1. VolView save URL is pointing to `PUT folder/:id/volview?metadata={items: [...ids], folders: [...ids]}`. `metadata` parameter matches the checked set in the Girder file browser. User clicks save. `session.volview.zip` item is created in the folder with a `linkedResources` metadata key holding the folder and item IDs. If user checked a session.volview.zip item, then `items` points to an existing session.volview.zip. The new session.volview.zip takes the `linkedResources` of the older session.volview.zip.
+1. If user clicks refresh in VolView, the `GET folder/:id/volview?items=[]` end point is hit again. If a session.volview.zip is in the `items` parameter, the plugin reads the volview.zip's `linkedResources` and searches for a newer session.volview.zips with matching `linkedResources` and returns that if found.
+1. If user checks a new set of folders or items that does not include a session.volview.zip item, the `GET folder/:id/volview` endpoint does not pick a session.volview.zip with matching `linkedResources` as `lastOpened` metadata on one of the checked items/folders is newer than the matching session.volview.zip. This allows opening of images with a clean slate.
 
 ## Development
 

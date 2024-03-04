@@ -8,7 +8,8 @@ const openFolder = '<i class="icon-link-ext"></i>Open Folder in VolView</a>';
 const openChecked = '<i class="icon-link-ext"></i>Open Checked in VolView</a>';
 
 function loadResources(parentModel, resources) {
-    // update lastOpened so manifest endpoint opens it
+    // update lastOpened so manifest endpoint opens checked resource
+    // rather than newest session.volview.zip with matching resource set.
     const itemId =
         resources.item && resources.item.length >= 1 && resources.item[0];
     const folderId =

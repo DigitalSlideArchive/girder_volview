@@ -143,7 +143,7 @@ def saveToFolder(self, folderId, metadata):
         # request for those linkedResources.
         metadata = {"linkedResources": getLinkedResources(newestSelectedSession)}
 
-    item = Item().load(fileDic["itemId"], user=user)
+    item = Item().load(fileDic["itemId"], user=user, level=AccessType.WRITE, exc=True)
     Item().setMetadata(item, metadata)
     return fileDic
 
@@ -255,8 +255,10 @@ def downloadResourceManifest(self, folder, folders, items):
         # compare touched time of session with max touched time of selected items/folders
         selectedFolders = loadModels(user, Folder, folders)
         latestSelectedDoc = getNewestDoc(selectedFolders + selectedItems)
-        if latestSession and getTouchedTime(latestSession) >= getTouchedTime(
-            latestSelectedDoc
+        if (
+            latestSession
+            and latestSelectedDoc
+            and getTouchedTime(latestSession) >= getTouchedTime(latestSelectedDoc)
         ):
             # session touched time is newer than selected items/folders so load it
             files = singleVolViewZipOrImageFiles(

@@ -1,12 +1,12 @@
 from datetime import datetime
 from girder.utility.server import getApiRoot
-from girder.models.item import Item
+from girder.constants import AccessType
 
 SESSION_ZIP_EXTENSION = ".volview.zip"
 
 
 def isSessionItem(item):
-    if SESSION_ZIP_EXTENSION in item["name"]:
+    if item and SESSION_ZIP_EXTENSION in item["name"]:
         return True
     return False
 
@@ -100,8 +100,8 @@ def getFiles(model, docs):
     return files
 
 
-def loadModels(user, model, docIds):
-    return [model().load(id, user=user) for id in docIds]
+def loadModels(user, model, docIds, level=AccessType.READ):
+    return [model().load(id, level=level, user=user) for id in docIds]
 
 
 def normalizeLinkedResources(linkedResources):
@@ -134,9 +134,11 @@ def getTouchedTime(item):
 
 
 def getNewestDoc(docs):
-    if not docs:
+    # filter out IDs that don't exist
+    loadedDocs = [doc for doc in docs if doc]
+    if not loadedDocs:
         return None
-    return max(docs, key=lambda session: getTouchedTime(session))
+    return max(loadedDocs, key=lambda session: getTouchedTime(session))
 
 
 def findNewestSession(items):
