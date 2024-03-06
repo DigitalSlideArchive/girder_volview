@@ -1,55 +1,39 @@
-import { restRequest, getApiRoot } from "@girder/core/rest";
+import { getApiRoot } from "@girder/core/rest";
+
+export const openButton = `<a class="btn btn-sm btn-primary open-in-volview" style="margin-left: 10px" role="button">
+                                <i class="icon-link-ext"></i>Open in VolView</a>`;
 
 const origin = globalThis.location.origin;
 const volViewPath = `${origin}/static/built/plugins/volview/index.html`;
 
-function isSessionFile(fileName) {
-    return fileName.endsWith("volview.zip");
+export function openItem(item) {
+    const itemRoute = `/${getApiRoot()}/item/${item.id}`;
+    const saveParam = `&save=${itemRoute}/volview`;
+    const manifestUrl = `${itemRoute}/volview`;
+    const downloadParams = `&names=[manifest.json]&urls=${manifestUrl}`;
+    const newTabUrl = `${volViewPath}?${saveParam}${downloadParams}`;
+    window.open(newTabUrl, "_blank").focus();
 }
 
-function makeDownloadParams(model, itemRoute, files, config) {
-    if (files.length === 0) return "";
-
-    const hasSessionFiles = files.some(({ name }) => isSessionFile(name));
-    const { url:downloadUrl, name } = hasSessionFiles
-        ? { url:`${itemRoute}/volview`, name: `${model.name()}.volview.zip` }
-        : { url:`${itemRoute}/volview/manifest`, name: `${model.name()}-files.json` }
-
-    const configUrl = `${itemRoute}/volview/config/.volview_config.yaml`;
-
-    return `&names=[${name},config.json]&urls=[${downloadUrl},${configUrl}]`;
+function resourcesToDownloadParams(folderId, resources) {
+    const items = (resources.item || []).join(",");
+    const folders = (resources.folder || []).join(",");
+    const manifestUrl = `/${getApiRoot()}/folder/${folderId}/volview?folders=${folders}&items=${items}`;
+    return `&names=[manifest.json]&urls=${encodeURIComponent(manifestUrl)}`;
 }
 
-export function open(model) {
-    restRequest({
-        type: "GET",
-        url: `item/${model.id}/files?limit=0`,
-        error: null,
-    })
-        .done((files) => {
-            restRequest({
-                url: `folder/${model.get(
-                    "folderId"
-                )}/yaml_config/.volview_config.yaml`,
-            }).done((config) => {
-                const itemRoute = `/${getApiRoot()}/item/${model.id}`;
-                const saveParam = `&save=${itemRoute}/volview`;
-                const downloadParams = makeDownloadParams(
-                    model,
-                    itemRoute,
-                    files,
-                    config
-                );
-                const newTabUrl = `${volViewPath}?${saveParam}${downloadParams}`;
-                window.open(newTabUrl, "_blank").focus();
-            });
-        })
-        .fail((resp) => {
-            events.trigger("g:alert", {
-                icon: "cancel",
-                text: "Could not check for config file for VolView",
-                type: "danger",
-                timeout: 4000,
-            });
-        });
+export function openResources(folder, resources) {
+    const folderRoute = `/${getApiRoot()}/folder/${folder.id}`;
+    const metaData = {
+        linkedResources: {
+            items: resources.item,
+            folders: resources.folder,
+        },
+    };
+    const saveParam = `&save=${folderRoute}/volview?metadata=${encodeURIComponent(
+        JSON.stringify(metaData)
+    )}`;
+    const downloadParams = resourcesToDownloadParams(folder.id, resources);
+    const newTabUrl = `${volViewPath}?${saveParam}${downloadParams}`;
+    window.open(newTabUrl, "_blank").focus();
 }

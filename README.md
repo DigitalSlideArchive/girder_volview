@@ -156,7 +156,7 @@ io:
   segmentGroupSaveFormat: "nrrd"
 ```
 
-## CORS Error Workaround by Proxying Assetstores 
+## CORS Error Workaround by Proxying Assetstores
 
 VolView will error if it loads a file from a S3 bucket asset store without some
 [CORS configuration](https://girder.readthedocs.io/en/stable/user-guide.html#s3).
@@ -168,7 +168,7 @@ file download requests through the Girder server, rather than redirecting direct
 ```
 [volview]
 # Workaround CORS configuration errors in S3 assetstores.
-# If True, the Girder server will proxy file download requests from 
+# If True, the Girder server will proxy file download requests from
 # VolView clients to the S3 assetstore. This will use more server bandwidth.
 # If False, VolView client requests to download files are redirected to S3.
 # Defaults to True.
@@ -177,13 +177,16 @@ proxy_assetstores = True
 
 ## API Endpoints
 
+- GET folder/:id/volview?items=[itemIds]&folders=[folderIds] -> download JSON with URLS to files or the latest `*.volview.zip` file in the folder
+- GET item/:id/volview -> download JSON with URLs to all files in item or the latest `*.volview.zip` file
 - POST item/:id/volview -> upload file to Item with cookie authentication
-- GET item/:id/volview -> download latest session.volview.zip
-- GET item/:id/volview/manifest -> download JSON with URLs to all files in item except the `*.volview.zip`
-- GET file/:id/proxiable/:name -> download a file with option to proxy 
+- GET file/:id/proxiable/:name -> download a file with option to proxy
+- GET folder/:id/volview_config/:name -> download JSON with VolView config properties
 - Deprecated: GET item/:id/volview/datasets -> download all files in item except the `*.volview.zip`
 
 ## Example Saving Roundtrip flow
+
+### Open Item
 
 1. User clicks Open in VolView for Item - Plugin checks if `*volview.zip` file exists in Item, finds none:
    Opens VolView with file download url `item/:id/volview/datasets`
@@ -195,30 +198,14 @@ proxy_assetstores = True
 
 VolView creates a new session.volview.zip file in the Girder Item every time the Save button is clicked.
 
-## VolView Client Update Steps
+### Open Checked
 
-Change VolView commit SHA in `volview-girder-client/buildvolview.sh`
-
-Build VolView client with Girder specific CLI arguments:
-
-```sh
-cd volview-girder-client
-source buildvolview.sh
-```
-
-Increase version in `volview-girder-client/package.json`.
-
-Publish built VolView `dist` directory to NPM:
-
-```sh
-cd volview-girder-client
-npm publish
-```
-
-Update volview-girder-client version in `./grider_volview/web_client/package.json`
-
-To test new client: push up changes to a new branch on GitHub. Change `provision.divevolview.yaml` to point to your branch like this: `git+https://github.com/PaulHax/girder_volview@new-branch`.
-Rebuild DSA Girder docker image.
+1. User checks a set of items or folders. Clicks "Open Checked in VolView".
+1. Browser client updates the `lastOpened` metadata on a checked item/folder metadata with the current time.
+1. Browser opens VolView with file download url pointing to `GET folder/:id/volview?items=[...ids]&folders=[...ids]`. That endpoint returns a with URLs to Girder files.
+1. VolView save URL is pointing to `PUT folder/:id/volview?metadata={items: [...ids], folders: [...ids]}`. `metadata` parameter matches the checked set in the Girder file browser. User clicks save. `session.volview.zip` item is created in the folder with a `linkedResources` metadata key holding the folder and item IDs. If user checked a session.volview.zip item, then `items` points to an existing session.volview.zip. The new session.volview.zip takes the `linkedResources` of the older session.volview.zip.
+1. If user clicks refresh in VolView, the `GET folder/:id/volview?items=[]` end point is hit again. If a session.volview.zip is in the `items` parameter, the plugin reads the volview.zip's `linkedResources` and searches for a newer session.volview.zips with matching `linkedResources` and returns that if found.
+1. If user checks a new set of folders or items that does not include a session.volview.zip item, the `GET folder/:id/volview` endpoint does not pick a session.volview.zip with matching `linkedResources` as `lastOpened` metadata on one of the checked items/folders is newer than the matching session.volview.zip. This allows opening of images with a clean slate.
 
 ## Development
 
@@ -238,35 +225,12 @@ services:
 
 Comment out the pip install of this plugin here: https://github.com/DigitalSlideArchive/digital_slide_archive/blob/master/devops/with-dive-volview/provision.divevolview.yaml#L3
 
-Then clean docker images
+To install volume mapped girder-volview plugin and incorporate changes as files are edited, add this to the `shell` section of the provision.yaml:
 
-```
-docker rm dsa-plus_girder_1 dsa-plus_worker_1 dsa-plus_rabbitmq_1 dsa-plus_memcached_1 dsa-plus_mongodb_1
-```
-
-Start containers again
-
-```
-DSA_USER=$(id -u):$(id -g) docker-compose -f ../dsa/docker-compose.yml -f docker-compose.override.yml -p dsa-plus up
-```
-
-Bash into girder container
-
-```
-DSA_USER=$(id -u):$(id -g) docker-compose -f ../dsa/docker-compose.yml -f docker-compose.override.yml -p dsa-plus exec girder bash
-```
-
-On Bash terminal, install your mounted local dev version of plugin.
-
-```
-cd /opt/girder_volview/ && pip install -e .
-```
-
-For the Girder plugin watch and rebuild feature, I must stop and start
-containers again. Then on Girder Bash prompt run
-
-```
-girder build --dev --watch-plugin volview
+```yaml
+shell:
+  - cd /opt/girder_volview/ && pip install -e .
+  - (sleep 30 && girder build --dev --watch-plugin volview)&
 ```
 
 ### Develop VolView client
@@ -290,3 +254,28 @@ https://github.com/PaulHax/girder_volview/blob/main/volview-girder-client/buildv
 ```
 VITE_REMOTE_SERVER_URL= VITE_ENABLE_REMOTE_SAVE=true npm run build -- --base=/static/built/plugins/volview
 ```
+
+### VolView Client Update Steps
+
+Change VolView commit SHA in `volview-girder-client/buildvolview.sh`
+
+Build VolView client with Girder specific CLI arguments:
+
+```sh
+cd volview-girder-client
+source buildvolview.sh
+```
+
+Increase version in `volview-girder-client/package.json`.
+
+Publish built VolView `dist` directory to NPM:
+
+```sh
+cd volview-girder-client
+npm publish
+```
+
+Update volview-girder-client version in `./grider_volview/web_client/package.json`
+
+To test new client: push up changes to a new branch on GitHub. Change `provision.divevolview.yaml` to point to your branch like this: `git+https://github.com/PaulHax/girder_volview@new-branch`.
+Rebuild DSA Girder docker image.
