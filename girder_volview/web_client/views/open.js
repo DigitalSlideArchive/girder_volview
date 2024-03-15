@@ -1,7 +1,20 @@
 import { getApiRoot } from "@girder/core/rest";
 
-export const openButton = `<a class="btn btn-sm btn-primary open-in-volview" style="margin-left: 10px" role="button">
+const openButton = `<a class="btn btn-sm btn-primary open-in-volview" style="margin-left: 10px" role="button">
                                 <i class="icon-link-ext"></i>Open in VolView</a>`;
+
+export function addButton($el, siblingSelector) {
+    const sibling = $el.find(siblingSelector);
+    if (!sibling.length) {
+        console.warn(
+            `Tried to add VolView button, but sibling element not found with selector: ${siblingSelector}`
+        );
+        return;
+    }
+    sibling.before(openButton);
+    const button = $el.find(".open-in-volview")[0];
+    return button;
+}
 
 const origin = globalThis.location.origin;
 const volViewPath = `${origin}/static/built/plugins/volview/index.html`;
