@@ -2,7 +2,7 @@ import HierarchyWidget from "@girder/core/views/widgets/HierarchyWidget";
 import { restRequest } from "@girder/core/rest";
 import { confirm } from "@girder/core/dialog";
 import { wrap } from "@girder/core/utilities/PluginUtils";
-import { openButton, openResources } from "./open";
+import { addButton, openResources } from "./open";
 
 const openFolder = '<i class="icon-link-ext"></i>Open Folder in VolView</a>';
 const openChecked = '<i class="icon-link-ext"></i>Open Checked in VolView</a>';
@@ -35,13 +35,17 @@ function loadResources(parentModel, resources) {
 wrap(HierarchyWidget, "render", function (render) {
     render.call(this);
 
-    // Can't open/save at root of Collections, for now.
-    if (this.parentModel.attributes._modelType !== "folder") {
+    if (
+        !this._showActions ||
+        // Can't open/save at root of Collections, for now.
+        this.parentModel.attributes._modelType !== "folder"
+    ) {
         return;
     }
-    this.$(".g-folder-header-buttons").prepend(openButton);
-    const buttons = this.$el.find(".open-in-volview");
-    const button = buttons[0];
+    const button = addButton(this.$el, ".g-folder-header-buttons .btn-info");
+    if (!button) {
+        return;
+    }
 
     button.onclick = () => {
         const resources = JSON.parse(this._getCheckedResourceParam());
