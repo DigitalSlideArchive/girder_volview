@@ -1,7 +1,7 @@
 import cherrypy
 import errno
 
-from girder import plugin
+from girder import plugin, events
 from girder.api.describe import Description, autoDescribeRoute
 from girder.api import access
 from girder.api.rest import (
@@ -29,6 +29,7 @@ from girder.models.group import Group
 # server settings (from girder.cfg file probably) for proxiable endpoint below
 from girder.utility import config
 
+from .dicom import addDicomTagsToItem
 from .utils import (
     isSessionItem,
     isLoadableImage,
@@ -182,7 +183,7 @@ def downloadDatasets(self, item):
 @autoDescribeRoute(
     Description("Download a file with option to proxy.")
     .modelParam("id", model=File, level=AccessType.READ)
-    .param("name", "The name of the file.  This is ignored.", paramType="path")
+    .param("name", "The name of the file. This is ignored.", paramType="path")
     .errorResponse("ID was invalid.")
     .errorResponse("Read access was denied on the parent folder.", 403)
 )
@@ -424,6 +425,8 @@ class GirderPlugin(plugin.GirderPlugin):
     CLIENT_SOURCE_PATH = "web_client"
 
     def load(self, info):
+        events.bind("data.process", "girder_volview", addDicomTagsToItem)
+
         info["apiRoot"].item.route("GET", (":itemId", "volview"), downloadManifest)
         info["apiRoot"].folder.route(
             "GET", (":folderId", "volview"), downloadResourceManifest

@@ -6,6 +6,7 @@ with open("README.md") as readme_file:
 requirements = [
     "girder>=3.0.0a1",
     "pyyaml",
+    "pydicom>=2",
 ]
 
 setup(

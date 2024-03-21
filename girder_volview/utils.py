@@ -4,6 +4,8 @@ from girder.constants import AccessType
 
 SESSION_ZIP_EXTENSION = ".volview.zip"
 
+IGNORE_EXTENSIONS = [".yaml", ".svs"]
+
 
 def isSessionItem(item):
     if item and SESSION_ZIP_EXTENSION in item["name"]:
@@ -20,7 +22,7 @@ def isSessionFile(path):
 def isLoadableImage(path):
     if isSessionFile(path):
         return False
-    if path.endswith("volview_config.yaml"):
+    if any(path.endswith(extension) for extension in IGNORE_EXTENSIONS):
         return False
     return True
 
