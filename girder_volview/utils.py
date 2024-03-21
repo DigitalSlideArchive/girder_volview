@@ -4,7 +4,50 @@ from girder.constants import AccessType
 
 SESSION_ZIP_EXTENSION = ".volview.zip"
 
-IGNORE_EXTENSIONS = [".yaml", ".svs"]
+# https://github.com/Kitware/VolView/blob/main/src/io/mimeTypes.ts
+LOADABLE_EXTENSIONS = [
+    # VolView app
+    ".json",
+    ".zip",
+    ".vti",
+    ".vtp",
+    ".stl",
+    # @itk-wasm/image-io
+    ".bmp",
+    ".dcm",
+    ".gipl",
+    ".gipl.gz",
+    ".hdf5",
+    ".jpg",
+    ".jpeg",
+    ".iwi",
+    ".iwi.cbor",
+    ".iwi.cbor.zst",
+    ".lsm",
+    ".mnc",
+    ".mnc.gz",
+    ".mnc2",
+    ".mgh",
+    ".mgz",
+    ".mgh.gz",
+    ".mha",
+    ".mhd",
+    ".mrc",
+    ".nia",
+    ".nii",
+    ".nii.gz",
+    ".hdr",
+    ".nrrd",
+    ".nhdr",
+    ".png",
+    ".pic",
+    ".tif",
+    ".tiff",
+    ".vtk",
+    ".isq",
+    ".aim",
+    ".fdf",
+]
 
 
 def isSessionItem(item):
@@ -22,9 +65,9 @@ def isSessionFile(path):
 def isLoadableImage(path):
     if isSessionFile(path):
         return False
-    if any(path.endswith(extension) for extension in IGNORE_EXTENSIONS):
-        return False
-    return True
+    if any(path.endswith(extension) for extension in LOADABLE_EXTENSIONS):
+        return True
+    return False
 
 
 def makeFileDownloadUrl(fileModel):
