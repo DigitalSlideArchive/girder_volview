@@ -1,4 +1,5 @@
 import datetime
+import sys
 
 import pydicom
 import pydicom.valuerep
@@ -8,6 +9,8 @@ import pydicom.sequence
 from girder import events
 from girder.models.item import Item
 from girder.models.file import File
+
+MAX_TAG_SIZE = 1024 * 128  # bytes
 
 
 def setupEventHandlers():
@@ -41,7 +44,8 @@ def _coerceValue(value):
         if b"\x00" in value:
             raise ValueError("Binary data with null")
         try:
-            value.decode("utf-8")
+            value.decode()
+            return bytes(value)
         except UnicodeDecodeError:
             raise ValueError("Binary data that cannot be stored as utf-8")
     # Many pydicom value types are subclasses of base types; to ensure the value can be serialized
@@ -49,7 +53,6 @@ def _coerceValue(value):
     for knownBaseType in {
         int,
         float,
-        bytes,
         str,
         datetime.datetime,
         datetime.date,
@@ -106,6 +109,11 @@ def _coerceMetadata(dataset):
             tagValue = _coerceValue(dataElement.value)
         except ValueError:
             # Omit tags where the value cannot be coerced to JSON-encodable types
+            continue
+
+        if tagValue == "" or tagValue == b"":
+            continue
+        if sys.getsizeof(tagValue) > MAX_TAG_SIZE:
             continue
 
         metadata[tagKey] = tagValue
