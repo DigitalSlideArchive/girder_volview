@@ -5,22 +5,32 @@ import pydicom.valuerep
 import pydicom.multival
 import pydicom.sequence
 
+from girder import events
 from girder.models.item import Item
 from girder.models.file import File
 
 
+def setupEventHandlers():
+    events.bind("model.file.save.after", "girder_volview", handleFileSave)
+
+
+def handleFileSave(event):
+    return addDicomTagsToItem(event.info)
+
+
 # Code modified from https://github.com/girder/girder/blob/master/plugins/dicom_viewer/girder_dicom_viewer/__init__.py
-def addDicomTagsToItem(event):
+def addDicomTagsToItem(file):
     """
     Add DICOM tags to Item metadata.
     """
-    file = event.info["file"]
+    itemId = file["itemId"]
+    if not itemId:
+        return
     dicomMetadata = _parseFile(file)
     if dicomMetadata is None:
-        return
-
+        return  # not a dicom file
     itemMeta = {"dicom": dicomMetadata}
-    item = Item().load(file["itemId"], force=True)
+    item = Item().load(itemId, force=True)
     Item().setMetadata(item, itemMeta)
 
 

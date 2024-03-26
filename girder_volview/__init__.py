@@ -29,7 +29,7 @@ from girder.models.group import Group
 # server settings (from girder.cfg file probably) for proxiable endpoint below
 from girder.utility import config
 
-from .dicom import addDicomTagsToItem
+from .dicom import setupEventHandlers
 from .utils import (
     isSessionItem,
     isLoadableImage,
@@ -425,7 +425,7 @@ class GirderPlugin(plugin.GirderPlugin):
     CLIENT_SOURCE_PATH = "web_client"
 
     def load(self, info):
-        events.bind("data.process", "girder_volview", addDicomTagsToItem)
+        setupEventHandlers()
 
         info["apiRoot"].item.route("GET", (":itemId", "volview"), downloadManifest)
         info["apiRoot"].folder.route(
