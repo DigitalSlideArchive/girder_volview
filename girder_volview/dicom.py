@@ -38,33 +38,6 @@ def addDicomTagsToItem(file):
 
 
 def _coerceValue(value):
-    # For binary data, see if it can be coerced further into utf8 data.  If
-    # not, mongo won't store it, so don't accept it here.
-    if isinstance(value, bytes):
-        if b"\x00" in value:
-            raise ValueError("Binary data with null")
-        try:
-            value.decode()
-            return bytes(value)
-        except UnicodeDecodeError:
-            raise ValueError("Binary data that cannot be stored as utf-8")
-    # Many pydicom value types are subclasses of base types; to ensure the value can be serialized
-    # to MongoDB, cast the value back to its base type
-    for knownBaseType in {
-        int,
-        float,
-        str,
-        datetime.datetime,
-        datetime.date,
-        datetime.time,
-    }:
-        if isinstance(value, knownBaseType):
-            return knownBaseType(value)
-
-    # pydicom does not treat the PersonName type as a subclass of a text type
-    if isinstance(value, pydicom.valuerep.PersonName):
-        return value.encode("utf-8")
-
     # Handle lists (MultiValue) recursively
     if isinstance(value, pydicom.multival.MultiValue):
         if isinstance(value, pydicom.sequence.Sequence):
@@ -72,6 +45,34 @@ def _coerceValue(value):
             # now
             raise ValueError("Cannot coerce a Sequence")
         return list(map(_coerceValue, value))
+
+    # pydicom does not treat the PersonName type as a subclass of a text type
+    if isinstance(value, pydicom.valuerep.PersonName):
+        return str(value)
+
+    # Many pydicom value types are subclasses of base types; to ensure the value can be serialized
+    # to MongoDB, cast the value back to its base type
+    for knownBaseType in {
+        datetime.datetime,
+        datetime.date,
+        datetime.time,
+        int,
+        float,
+        str,
+    }:
+        if isinstance(value, knownBaseType):
+            return knownBaseType(value)
+
+    if isinstance(value, bytes):
+        if b"\x00" in value:
+            raise ValueError("Binary data with null")
+        # For binary data, see if it can be coerced further into utf8 data.  If
+        # not, mongo won't store it, so don't accept it here.
+        try:
+            value.decode()
+            return value
+        except UnicodeDecodeError:
+            raise ValueError("Binary data that cannot be stored as utf-8")
 
     raise ValueError("Unknown type", type(value))
 
