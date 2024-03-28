@@ -19,17 +19,15 @@ def setupEventHandlers():
 
 
 def handleFileSave(event):
-    return addDicomTagsToItem(event.info)
+    return addDicomTagsToItemMetadata(event.info)
 
 
 # Code modified from https://github.com/girder/girder/blob/master/plugins/dicom_viewer/girder_dicom_viewer/__init__.py
-def addDicomTagsToItem(file):
-    """
-    Add DICOM tags to Item metadata.
-    """
-    itemId = file["itemId"]
-    if not itemId:
+def addDicomTagsToItemMetadata(file):
+    itemId = file.get("itemId")
+    if itemId is None:
         return
+
     dicomMetadata = _parseFile(file)
     if dicomMetadata is None:
         return  # not a dicom file
@@ -124,6 +122,9 @@ def _coerceMetadata(dataset):
 
 
 def _parseFile(f):
+    if "linkUrl" in f:
+        # link file, File().open() will error
+        return None
     try:
         # download file and try to parse dicom
         with File().open(f) as fp:
