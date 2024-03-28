@@ -9,6 +9,7 @@ import pydicom.sequence
 from girder import events
 from girder.models.item import Item
 from girder.models.file import File
+from girder.exceptions import GirderException
 
 MAX_TAG_SIZE = 1024 * 128  # bytes
 
@@ -134,6 +135,7 @@ def _parseFile(f):
                 stop_before_pixels=True,
             )
             return _coerceMetadata(dataset)
-    except pydicom.errors.InvalidDicomError:
-        # if this error occurs, probably not a dicom file
+    except (pydicom.errors.InvalidDicomError, GirderException):
+        # If pydicom.errors.InvalidDicomError occurs, probably not a dicom file.
+        # If GirderException, the file may have been deleted between scanning for import and handling the event
         return None
