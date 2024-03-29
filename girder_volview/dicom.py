@@ -22,6 +22,14 @@ def handleFileSave(event):
     return addDicomTagsToItemMetadata(event.info)
 
 
+def maybeUpgradeMimeType(file):
+    mimeType = file.get("mimeType")
+    # asset store import can set mimeType to None.  Manual upload sets mimeType to "application/octet-stream"
+    if mimeType is None or mimeType == "application/octet-stream":
+        file["mimeType"] = "application/dicom"
+        File().save(file)
+
+
 # Code modified from https://github.com/girder/girder/blob/master/plugins/dicom_viewer/girder_dicom_viewer/__init__.py
 def addDicomTagsToItemMetadata(file):
     itemId = file.get("itemId")
@@ -31,6 +39,7 @@ def addDicomTagsToItemMetadata(file):
     dicomMetadata = _parseFile(file)
     if dicomMetadata is None:
         return  # not a dicom file
+    maybeUpgradeMimeType(file)
     itemMeta = {"dicom": dicomMetadata}
     item = Item().load(itemId, force=True)
     Item().setMetadata(item, itemMeta)
