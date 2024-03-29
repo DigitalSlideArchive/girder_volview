@@ -5,7 +5,7 @@ from girder.constants import AccessType
 SESSION_ZIP_EXTENSION = ".volview.zip"
 
 # https://github.com/Kitware/VolView/blob/main/src/io/mimeTypes.ts
-LOADABLE_EXTENSIONS = [
+LOADABLE_EXTENSIONS = (
     # VolView app
     ".json",
     ".zip",
@@ -47,7 +47,46 @@ LOADABLE_EXTENSIONS = [
     ".isq",
     ".aim",
     ".fdf",
-]
+)
+
+LOADABLE_MIMES = (
+    "application/vnd.unknown.vti",
+    "application/vnd.unknown.vtp",
+    "model/stl",
+    "application/dicom",
+    "application/zip",
+    "application/json",
+    "application/vnd.unknown.gipl",
+    "application/vnd.unknown.gipl",
+    "application/x-hdf5",
+    "image/jpeg",
+    "image/jpeg",
+    "application/vnd.unknown.lsm",
+    "application/vnd.unknown.minc",
+    "application/vnd.unknown.minc",
+    "application/vnd.unknown.minc",
+    "application/vnd.unknown.mgh",
+    "application/vnd.unknown.mgh",
+    "application/vnd.unknown.mgh",
+    "application/vnd.unknown.metaimage",
+    "application/vnd.unknown.metaimage",
+    "application/vnd.unknown.mrc",
+    "application/vnd.unknown.nifti-1",
+    "application/vnd.unknown.nifti-1",
+    "application/vnd.unknown.nifti-1",
+    "application/vnd.unknown.nifti-1",
+    "application/vnd.unknown.nrrd",
+    "application/vnd.unknown.nrrd",
+    "image/png",
+    "application/vnd.unknown.biorad",
+    "image/tiff",
+    "image/tiff",
+    "application/vnd.unknown.vtk",
+    "application/vnd.unknown.scanco",
+    "application/vnd.unknown.fdf",
+    # Girder manual uploads are application/octet-stream
+    "application/octet-stream",
+)
 
 
 def isSessionItem(item):
@@ -56,18 +95,22 @@ def isSessionItem(item):
     return False
 
 
-def isSessionFile(path):
-    if path.endswith(SESSION_ZIP_EXTENSION):
+def isSessionFile(file):
+    name = file.get("name")
+    if name.endswith(SESSION_ZIP_EXTENSION):
         return True
     return False
 
 
-def isLoadableImage(path):
-    if isSessionFile(path):
+def isLoadableImage(file):
+    if isSessionFile(file):
         return False
-    if any(path.endswith(extension) for extension in LOADABLE_EXTENSIONS):
-        return True
-    return False
+    name = file.get("name")
+    knownExtension = name.endswith(LOADABLE_EXTENSIONS)
+    mimeType = file.get("mimeType")
+    # mimeType can be None when imported via S3 asset store
+    knownMime = mimeType in LOADABLE_MIMES or mimeType is None
+    return knownExtension or knownMime
 
 
 def makeFileDownloadUrl(fileModel):
@@ -119,17 +162,19 @@ def sameLevelSessionFile(fileEntry):
     rootPath = paths[0]
     itemNameIncludesSessionZip = rootPath.find(SESSION_ZIP_EXTENSION) != -1
     directChildSessionZip = len(paths) <= 2 and itemNameIncludesSessionZip
-    return directChildSessionZip and isSessionFile(fileEntry[0])
+    return directChildSessionZip and isSessionFile(fileEntry[1])
 
 
-def singleVolViewZipOrImageFiles(files):
-    sessions = [fileEntry for fileEntry in files if sameLevelSessionFile(fileEntry)]
+def singleVolViewZipOrImageFiles(fileEntries):
+    sessions = [
+        fileEntry for fileEntry in fileEntries if sameLevelSessionFile(fileEntry)
+    ]
     if sessions:
         # load latest session
         newestSession = max(sessions, key=lambda file: file[1].get("created"))
         return [newestSession]
     else:
-        return [file for file in files if isLoadableImage(file[0])]
+        return [fileEntry for fileEntry in fileEntries if isLoadableImage(fileEntry[1])]
 
 
 def idStringToIdList(idString):

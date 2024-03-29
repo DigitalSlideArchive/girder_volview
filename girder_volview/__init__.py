@@ -168,7 +168,7 @@ def downloadDatasets(self, item):
         sansSessions = [
             fileEntry
             for fileEntry in Item().fileList(item, subpath=False)
-            if isLoadableImage(fileEntry[0])
+            if isLoadableImage(fileEntry[1])
         ]
         for path, file in sansSessions:
             for data in zip.addFile(file, path):
@@ -268,7 +268,7 @@ def downloadResourceManifest(self, folder, folders, items):
         else:
             # Load selected folders and items excluding child session.volview.zip and .volview_config.yaml
             files = getFiles(Folder, selectedFolders) + getFiles(Item, selectedItems)
-            files = [file for file in files if isLoadableImage(file[0])]
+            files = [file for file in files if isLoadableImage(file[1])]
     return filesToManifest(files, folder["_id"])
 
 
