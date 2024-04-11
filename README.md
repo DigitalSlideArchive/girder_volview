@@ -156,7 +156,9 @@ io:
   segmentGroupSaveFormat: "nrrd"
 ```
 
-## Grider Plugin Configuration File
+## Table View via Grider Plugin Configuration File
+
+![image](https://github.com/DigitalSlideArchive/girder_volview/assets/16823231/9ab0f04d-9103-431a-ab22-cbf87ee760e2)
 
 To show DICOM tags in a table view, add a `.large_image_config.yaml` file higher in the Girder folder hierarchy. When a DICOM file is imported/uploaded, its DICOM tags are saved on the Item metadata under the top level `dicom` key.
 
