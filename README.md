@@ -306,7 +306,7 @@ Then build VolView with the right flags:
 https://github.com/PaulHax/girder_volview/blob/main/volview-girder-client/buildvolview.sh#L14C2-L14C108
 
 ```
-VITE_REMOTE_SERVER_URL= VITE_ENABLE_REMOTE_SAVE=true npm run build -- --base=/static/built/plugins/volview
+VITE_ENABLE_REMOTE_SAVE=true npm run build:watch -- --base=/static/built/plugins/volview
 ```
 
 ### VolView Client Update Steps
