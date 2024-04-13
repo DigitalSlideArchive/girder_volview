@@ -167,10 +167,13 @@ def downloadDatasets(self, item):
         zip = ziputil.ZipGenerator(item["name"])
         sansSessions = [
             fileEntry
-            for fileEntry in Item().fileList(item, subpath=False)
+            for fileEntry in Item().fileList(item, subpath=False, data=False)
             if isLoadableImage(fileEntry[1])
         ]
-        for path, file in sansSessions:
+        toZip = [
+            (path, File().download(file, headers=False)) for path, file in sansSessions
+        ]
+        for path, file in toZip:
             for data in zip.addFile(file, path):
                 yield data
         yield zip.footer()
