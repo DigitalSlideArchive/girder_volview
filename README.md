@@ -9,10 +9,10 @@ VolView tries to load all files in a Girder Item.
 
 ### Supported Image File Formats
 
-- DICOM (.dcm)
-- Nrrd (.nrrd)
-- NIFTI
-- VTK image (.vti)
+- DICOM `.dcm`
+- Nrrd `.nrrd`
+- NIFTI `.nii`
+- VTK image `.vti`
 - And many more. Try dragging and dropping the file(s) on the [VolView Demo Site](https://volview.netlify.app/)
 
 ## Layers of Images
@@ -149,7 +149,7 @@ In VolView, show a dialog with the configured keyboard shortcuts by pressing the
 
 ### Saved Segment Group File Format
 
-Edited segment groups are saved as separate files within session.volview.zip files.  By default the segment group file format is '.vti'.  We can change the format to 'nrrd', 'nii', 'nii.gz' and 'hdf5'
+Edited segment groups are saved as separate files within session.volview.zip files.  By default the segment group file format is `.vti`.  We can change the format to `nrrd`, `nii`, `nii.gz` or `hdf5`
 
 ```yml
 io:
