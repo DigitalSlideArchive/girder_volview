@@ -1,6 +1,6 @@
 import { getApiRoot } from "@girder/core/rest";
 
-const openButton = `<a class="btn btn-sm btn-primary open-in-volview" style="margin-left: 10px" role="button">
+const openButton = `<a class="btn btn-sm btn-primary open-in-volview hidden" style="margin-left: 10px" role="button">
                                 <i class="icon-link-ext"></i>Open in VolView</a>`;
 
 export function addButton($el, siblingSelector) {
@@ -50,3 +50,8 @@ export function openResources(folder, resources) {
     const newTabUrl = `${volViewPath}?${saveParam}${downloadParams}`;
     window.open(newTabUrl, "_blank").focus();
 }
+
+export const knownExtensions = [
+    'aim', 'isq', 'bmp', 'jpg', 'jpeg', 'jpe', 'png', 'dcm', 'zip', 'gz',
+    'hdf5', 'h5', 'pic', 'fre', 'vtk', 'gii', 'obj', 'byu', 'off', 'fsa',
+    'fsb', 'fcv', 'mnc', 'nii', 'par', 'rec', 'tre', 'tfm'];

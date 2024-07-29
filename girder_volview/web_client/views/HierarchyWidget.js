@@ -1,8 +1,9 @@
 import HierarchyWidget from "@girder/core/views/widgets/HierarchyWidget";
+import ItemListWidget from '@girder/core/views/widgets/ItemListWidget';
 import { restRequest } from "@girder/core/rest";
 import { confirm } from "@girder/core/dialog";
 import { wrap } from "@girder/core/utilities/PluginUtils";
-import { addButton, openResources } from "./open";
+import { addButton, openResources, knownExtensions } from "./open";
 
 const openFolder = '<i class="icon-link-ext"></i>Open Folder in VolView</a>';
 const openChecked = '<i class="icon-link-ext"></i>Open Checked in VolView</a>';
@@ -96,4 +97,19 @@ wrap(HierarchyWidget, "render", function (render) {
 
     this.listenTo(this.itemListView, "g:checkboxesChanged", updateChecked);
     this.listenTo(this.folderListView, "g:checkboxesChanged", updateChecked);
+});
+
+wrap(ItemListWidget, 'render', function (render) {
+    render.call(this);
+    this.$el.closest('.g-hierarchy-widget').find('.open-in-volview').addClass('hidden');
+    if (!this.collection || !this.collection.models || !this.collection.models.length) {
+        return;
+    }
+    if (!this.collection.models.some((m) => {
+        const lastExt = m.get('name').split('.').slice(-1)[0].toLowerCase();
+        return knownExtensions.includes(lastExt);
+    })) {
+        return;
+    }
+    this.$el.closest('.g-hierarchy-widget').find('.open-in-volview').removeClass('hidden');
 });
