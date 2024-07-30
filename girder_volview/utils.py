@@ -72,8 +72,6 @@ LOADABLE_MIMES = (
     "application/vnd.unknown.vtk",
     "application/vnd.unknown.scanco",
     "application/vnd.unknown.fdf",
-    # Girder manual uploads are application/octet-stream
-    "application/octet-stream",
 )
 
 
@@ -96,8 +94,7 @@ def isLoadableFile(file):
     if knownExtension:
         return True
     mimeType = file.get("mimeType")
-    # mimeType can be None when imported via S3 asset store
-    knownMime = mimeType in LOADABLE_MIMES or mimeType is None
+    knownMime = mimeType in LOADABLE_MIMES
     return knownMime
 
 
