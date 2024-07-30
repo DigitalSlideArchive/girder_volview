@@ -1,5 +1,5 @@
 import HierarchyWidget from "@girder/core/views/widgets/HierarchyWidget";
-import ItemListWidget from '@girder/core/views/widgets/ItemListWidget';
+import ItemListWidget from "@girder/core/views/widgets/ItemListWidget";
 import { restRequest } from "@girder/core/rest";
 import { confirm } from "@girder/core/dialog";
 import { wrap } from "@girder/core/utilities/PluginUtils";
@@ -99,17 +99,48 @@ wrap(HierarchyWidget, "render", function (render) {
     this.listenTo(this.folderListView, "g:checkboxesChanged", updateChecked);
 });
 
-wrap(ItemListWidget, 'render', function (render) {
+function selectButton(el) {
+    return el.closest(".g-hierarchy-widget").find(".open-in-volview");
+}
+
+function setButtonVisibility(el, visible = true) {
+    const button = selectButton(el);
+    if (visible) {
+        button.removeClass("hidden");
+    } else {
+        button.addClass("hidden");
+    }
+}
+
+wrap(ItemListWidget, "render", function (render) {
     render.call(this);
-    this.$el.closest('.g-hierarchy-widget').find('.open-in-volview').addClass('hidden');
-    if (!this.collection || !this.collection.models || !this.collection.models.length) {
+    if (
+        !this.collection ||
+        !this.collection.models ||
+        !this.collection.models.length
+    ) {
         return;
     }
-    if (!this.collection.models.some((m) => {
-        const lastExt = m.get('name').split('.').slice(-1)[0].toLowerCase();
+
+    const hasLoadableExtensions = this.collection.models.some((m) => {
+        const lastExt = m.get("name").split(".").slice(-1)[0].toLowerCase();
         return knownExtensions.includes(lastExt);
-    })) {
+    });
+    if (hasLoadableExtensions) {
+        setButtonVisibility(this.$el, true);
         return;
     }
-    this.$el.closest('.g-hierarchy-widget').find('.open-in-volview').removeClass('hidden');
+
+    // check if child folders/items have loadable files
+    const id = this.collection.params.folderId;
+    restRequest({
+        url: `folder/${id}/volview_loadable`,
+        method: "GET",
+        error: function () {
+            setButtonVisibility(this.$el, false);
+        },
+    }).done((loadableJSON) => {
+        const loadable = loadableJSON.loadable;
+        setButtonVisibility(this.$el, loadable);
+    });
 });
