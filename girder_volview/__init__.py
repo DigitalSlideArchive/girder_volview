@@ -33,6 +33,7 @@ from .dicom import setupEventHandlers
 from .utils import (
     isSessionItem,
     isLoadableImage,
+    isLoadableFile,
     filesToManifest,
     singleVolViewZipOrImageFiles,
     idStringToIdList,
@@ -47,6 +48,47 @@ from .utils import (
 )
 
 LARGE_IMAGE_CONFIG_FOLDER = "large_image.config_folder"
+
+
+def hasLoadableFile(files):
+    for fileEntry in files:
+        if isLoadableFile(fileEntry[1]):
+            return True
+    return False
+
+
+@access.public(cookie=True, scope=TokenScope.DATA_READ)
+@boundHandler
+@autoDescribeRoute(
+    Description(
+        "Check if item has files VolView can load.  If so, return {loadable:true}."
+    )
+    .modelParam("itemId", model=Item, level=AccessType.READ)
+    .produces(["application/json"])
+    .errorResponse("ID was invalid.")
+    .errorResponse("Read access was denied for the folder.", 403)
+)
+def volViewLoadableItem(self, item):
+    files = Item().fileList(item, subpath=False, data=False)
+    loadable = hasLoadableFile(files)
+    return {"loadable": loadable}
+
+
+@access.public(cookie=True, scope=TokenScope.DATA_READ)
+@boundHandler
+@autoDescribeRoute(
+    Description(
+        "Check if folder has files VolView can load.  If so, return {loadable:true}."
+    )
+    .modelParam("folderId", model=Folder, level=AccessType.READ)
+    .produces(["application/json"])
+    .errorResponse("ID was invalid.")
+    .errorResponse("Read access was denied for the folder.", 403)
+)
+def volViewLoadableFolder(self, folder):
+    files = Folder().fileList(folder, subpath=False, data=False)
+    loadable = hasLoadableFile(files)
+    return {"loadable": loadable}
 
 
 def uploadSession(model, parentId, user, size):
@@ -221,7 +263,7 @@ def downloadManifest(self, item):
     .param("items", "Item IDs.")
     .produces(["application/json"])
     .errorResponse("ID was invalid.")
-    .errorResponse("Read access was denied for the folder.", 403)
+    .errorResponse("Read access was denied for the folders or items.", 403)
 )
 def downloadResourceManifest(self, folder, folders, items):
     user = self.getCurrentUser()
@@ -430,6 +472,12 @@ class GirderPlugin(plugin.GirderPlugin):
     def load(self, info):
         setupEventHandlers()
 
+        info["apiRoot"].item.route(
+            "GET", (":itemId", "volview_loadable"), volViewLoadableItem
+        )
+        info["apiRoot"].folder.route(
+            "GET", (":folderId", "volview_loadable"), volViewLoadableFolder
+        )
         info["apiRoot"].item.route("GET", (":itemId", "volview"), downloadManifest)
         info["apiRoot"].folder.route(
             "GET", (":folderId", "volview"), downloadResourceManifest
