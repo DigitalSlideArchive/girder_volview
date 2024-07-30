@@ -90,15 +90,21 @@ def isSessionFile(file):
     return False
 
 
-def isLoadableImage(file):
-    if isSessionFile(file):
-        return False
+def isLoadableFile(file):
     name = file.get("name")
     knownExtension = name.endswith(LOADABLE_EXTENSIONS)
+    if knownExtension:
+        return True
     mimeType = file.get("mimeType")
     # mimeType can be None when imported via S3 asset store
     knownMime = mimeType in LOADABLE_MIMES or mimeType is None
-    return knownExtension or knownMime
+    return knownMime
+
+
+def isLoadableImage(file):
+    if isSessionFile(file):
+        return False
+    return isLoadableFile(file)
 
 
 def makeFileDownloadUrl(fileModel):
