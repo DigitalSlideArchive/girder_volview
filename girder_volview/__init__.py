@@ -86,7 +86,9 @@ def volViewLoadableItem(self, item):
     .errorResponse("Read access was denied for the folder.", 403)
 )
 def volViewLoadableFolder(self, folder):
-    files = Folder().fileList(folder, subpath=False, data=False)
+    files = Folder().fileList(
+        folder, user=self.getCurrentUser(), subpath=False, data=False
+    )
     loadable = hasLoadableFile(files)
     return {"loadable": loadable}
 

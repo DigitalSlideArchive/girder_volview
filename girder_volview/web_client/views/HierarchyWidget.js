@@ -3,10 +3,32 @@ import ItemListWidget from "@girder/core/views/widgets/ItemListWidget";
 import { restRequest } from "@girder/core/rest";
 import { confirm } from "@girder/core/dialog";
 import { wrap } from "@girder/core/utilities/PluginUtils";
-import { addButton, openResources, knownExtensions } from "./open";
+import { addButton, openResources } from "./open";
 
 const openFolder = '<i class="icon-link-ext"></i>Open Folder in VolView</a>';
 const openChecked = '<i class="icon-link-ext"></i>Open Checked in VolView</a>';
+
+function setButtonVisibility(button, visible = true) {
+    if (button.length === 0) throw new Error("Button not found");
+    if (visible) {
+        button.removeClass("hidden");
+    } else {
+        button.addClass("hidden");
+    }
+}
+
+function updateButtonVisibility(el, folderId) {
+    restRequest({
+        url: `folder/${folderId}/volview_loadable`,
+        method: "GET",
+        error: function () {
+            setButtonVisibility(el, false);
+        },
+    }).done((loadableJSON) => {
+        const loadable = loadableJSON.loadable;
+        setButtonVisibility(el, loadable);
+    });
+}
 
 function loadResources(parentModel, resources) {
     // update lastOpened so manifest endpoint opens checked resource
@@ -97,20 +119,12 @@ wrap(HierarchyWidget, "render", function (render) {
 
     this.listenTo(this.itemListView, "g:checkboxesChanged", updateChecked);
     this.listenTo(this.folderListView, "g:checkboxesChanged", updateChecked);
+
+    updateButtonVisibility(
+        this.$el.find(".open-in-volview"),
+        this.parentModel.id
+    );
 });
-
-function selectButton(el) {
-    return el.closest(".g-hierarchy-widget").find(".open-in-volview");
-}
-
-function setButtonVisibility(el, visible = true) {
-    const button = selectButton(el);
-    if (visible) {
-        button.removeClass("hidden");
-    } else {
-        button.addClass("hidden");
-    }
-}
 
 wrap(ItemListWidget, "render", function (render) {
     render.call(this);
@@ -122,25 +136,10 @@ wrap(ItemListWidget, "render", function (render) {
         return;
     }
 
-    const hasLoadableExtensions = this.collection.models.some((m) => {
-        const lastExt = m.get("name").split(".").slice(-1)[0].toLowerCase();
-        return knownExtensions.includes(lastExt);
-    });
-    if (hasLoadableExtensions) {
-        setButtonVisibility(this.$el, true);
-        return;
-    }
-
     // check if child folders/items have loadable files
     const id = this.collection.params.folderId;
-    restRequest({
-        url: `folder/${id}/volview_loadable`,
-        method: "GET",
-        error: function () {
-            setButtonVisibility(this.$el, false);
-        },
-    }).done((loadableJSON) => {
-        const loadable = loadableJSON.loadable;
-        setButtonVisibility(this.$el, loadable);
-    });
+    const button = this.$el
+        .closest(".g-hierarchy-widget")
+        .find(".open-in-volview");
+    updateButtonVisibility(button, id);
 });

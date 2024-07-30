@@ -1,6 +1,7 @@
 from datetime import datetime
 from girder.utility.server import getApiRoot
 from girder.constants import AccessType
+from girder.models.item import Item
 
 SESSION_ZIP_EXTENSION = ".volview.zip"
 
@@ -76,26 +77,38 @@ LOADABLE_MIMES = (
 
 
 def isSessionItem(item):
-    if item and SESSION_ZIP_EXTENSION in item["name"]:
-        return True
-    return False
+    return item and SESSION_ZIP_EXTENSION in item["name"]
 
 
 def isSessionFile(file):
-    name = file.get("name")
-    if name.endswith(SESSION_ZIP_EXTENSION):
-        return True
-    return False
+    return file.get("name").endswith(SESSION_ZIP_EXTENSION)
+
+
+def isTiffFile(file):
+    return (
+        file.get("name").endswith((".tif", ".tiff"))
+        or file.get("mimeType") == "image/tiff"
+    )
+
+
+def isDicomFile(file):
+    return (
+        file.get("name").endswith(".dcm") or file.get("mimeType") == "application/dicom"
+    )
 
 
 def isLoadableFile(file):
-    name = file.get("name")
-    knownExtension = name.endswith(LOADABLE_EXTENSIONS)
-    if knownExtension:
+    if isTiffFile(file) or isDicomFile(file):
+        item = Item().load(file.get("itemId"), level=AccessType.READ)
+        if isTiffFile(file):
+            return not item.get("largeImage")
+        if item.get("meta", {}).get("dicom", {}).get("Modality", "") == "SM":
+            return False
+
+    if file.get("name").endswith(LOADABLE_EXTENSIONS):
         return True
-    mimeType = file.get("mimeType")
-    knownMime = mimeType in LOADABLE_MIMES
-    return knownMime
+
+    return file.get("mimeType") in LOADABLE_MIMES
 
 
 def isLoadableImage(file):
