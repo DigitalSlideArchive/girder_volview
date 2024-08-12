@@ -52,7 +52,7 @@ LARGE_IMAGE_CONFIG_FOLDER = "large_image.config_folder"
 
 def hasLoadableFile(files):
     for fileEntry in files:
-        if isLoadableFile(fileEntry[1]):
+        if isLoadableFile(fileEntry[1] if isinstance(fileEntry, tuple) else fileEntry):
             return True
     return False
 
@@ -86,9 +86,53 @@ def volViewLoadableItem(self, item):
     .errorResponse("Read access was denied for the folder.", 403)
 )
 def volViewLoadableFolder(self, folder):
-    files = Folder().fileList(
-        folder, user=self.getCurrentUser(), subpath=False, data=False
-    )
+    # The aggregation below replaces:
+    #   files = Folder().fileList(
+    #       folder, user=self.getCurrentUser(), subpath=False, data=False
+    #   )
+    # excepting that it just returns a cursor that yields files, not an
+    # iterator that yields a tuple of (path, file).  The aggregation is much
+    # faster, as it only takes one database roundtrip, rather than one per
+    # folder and one per item.
+    files = Folder().collection.aggregate([
+        {"$match": {"_id": folder["_id"]}},
+        {"$graphLookup": {
+            "from": "folder",
+            "startWith": folder["_id"],
+            "connectFromField": "_id",
+            "connectToField": "parentId",
+            "as": "__children"
+        }},
+        {"$lookup": {
+            "from": "folder",
+            "localField": "_id",
+            "foreignField": "_id",
+            "as": "__self",
+        }},
+        {"$project": {"__children": {"$concatArrays": [
+            "$__self", "$__children",
+        ]}}},
+        {"$unwind": {"path": "$__children"}},
+        {"$replaceRoot": {"newRoot": "$__children"}},
+        {"$match": Folder().permissionClauses(self.getCurrentUser(), level=AccessType.READ)},
+        {"$lookup": {
+            "from": "item",
+            "let": {"fid": "$_id"},
+            "pipeline": [
+                {"$match": {"$expr": {"$eq": ["$$fid", "$folderId"]}}},
+                {"$project": {"_id": 1}},
+            ],
+            "as": "__items",
+        }},
+        {"$lookup": {
+            "from": "file",
+            "localField": "__items._id",
+            "foreignField": "itemId",
+            "as": "__files",
+        }},
+        {"$unwind": "$__files"},
+        {"$replaceRoot": {"newRoot": "$__files"}},
+    ])
     loadable = hasLoadableFile(files)
     return {"loadable": loadable}
 
