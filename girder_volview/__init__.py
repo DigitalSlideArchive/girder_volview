@@ -50,9 +50,9 @@ from .utils import (
 LARGE_IMAGE_CONFIG_FOLDER = "large_image.config_folder"
 
 
-def hasLoadableFile(files):
+def hasLoadableFile(files, user=None):
     for fileEntry in files:
-        if isLoadableFile(fileEntry[1] if isinstance(fileEntry, tuple) else fileEntry):
+        if isLoadableFile(fileEntry[1] if isinstance(fileEntry, tuple) else fileEntry, user):
             return True
     return False
 
@@ -70,7 +70,7 @@ def hasLoadableFile(files):
 )
 def volViewLoadableItem(self, item):
     files = Item().fileList(item, subpath=False, data=False)
-    loadable = hasLoadableFile(files)
+    loadable = hasLoadableFile(files, user=self.getCurrentUser())
     return {"loadable": loadable}
 
 
@@ -133,7 +133,7 @@ def volViewLoadableFolder(self, folder):
         {"$unwind": "$__files"},
         {"$replaceRoot": {"newRoot": "$__files"}},
     ])
-    loadable = hasLoadableFile(files)
+    loadable = hasLoadableFile(files, user=self.getCurrentUser())
     return {"loadable": loadable}
 
 
@@ -256,7 +256,7 @@ def downloadDatasets(self, item):
         sansSessions = [
             fileEntry
             for fileEntry in Item().fileList(item, subpath=False, data=False)
-            if isLoadableImage(fileEntry[1])
+            if isLoadableImage(fileEntry[1], user=self.getCurrentUser())
         ]
         toZip = [
             (path, File().download(file, headers=False)) for path, file in sansSessions
@@ -296,7 +296,7 @@ def downloadProxiableFile(self, file, name):
 )
 def downloadManifest(self, item):
     allFiles = list(Item().fileList(item, subpath=False, data=False))
-    files = singleVolViewZipOrImageFiles(allFiles)
+    files = singleVolViewZipOrImageFiles(allFiles, user=self.getCurrentUser())
     return filesToManifest(files, item["folderId"])
 
 
@@ -322,7 +322,7 @@ def downloadResourceManifest(self, folder, folders, items):
             fileEntry
             for fileEntry in Folder().fileList(folder, subpath=False, data=False)
         ]
-        files = singleVolViewZipOrImageFiles(filesInFolder)
+        files = singleVolViewZipOrImageFiles(filesInFolder, user=user)
     else:
         # else load selected files
         selectedItems = loadModels(user, Item, items)
@@ -354,12 +354,12 @@ def downloadResourceManifest(self, folder, folders, items):
         ):
             # session touched time is newer than selected items/folders so load it
             files = singleVolViewZipOrImageFiles(
-                Item().fileList(latestSession, subpath=False, data=False)
+                Item().fileList(latestSession, subpath=False, data=False), user=user,
             )
         else:
             # Load selected folders and items excluding child session.volview.zip and .volview_config.yaml
             files = getFiles(Folder, selectedFolders) + getFiles(Item, selectedItems)
-            files = [file for file in files if isLoadableImage(file[1])]
+            files = [file for file in files if isLoadableImage(file[1], user)]
     return filesToManifest(files, folder["_id"])
 
 

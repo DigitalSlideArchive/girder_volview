@@ -18,6 +18,7 @@ wrap(ItemView, "render", function (render) {
         restRequest({
             url: `item/${id}/volview_loadable`,
             method: "GET",
+            error: null,
         }).done((loadableJSON) => {
             if (loadableJSON.loadable) {
                 setupButton(this.$el, this.model);
