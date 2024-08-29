@@ -97,9 +97,9 @@ def isDicomFile(file):
     )
 
 
-def isLoadableFile(file):
+def isLoadableFile(file, user=None):
     if isTiffFile(file) or isDicomFile(file):
-        item = Item().load(file.get("itemId"), level=AccessType.READ)
+        item = Item().load(file.get("itemId"), user=user, level=AccessType.READ)
         if isTiffFile(file):
             return not item.get("largeImage")
         if item.get("meta", {}).get("dicom", {}).get("Modality", "") == "SM":
@@ -111,10 +111,10 @@ def isLoadableFile(file):
     return file.get("mimeType") in LOADABLE_MIMES
 
 
-def isLoadableImage(file):
+def isLoadableImage(file, user=None):
     if isSessionFile(file):
         return False
-    return isLoadableFile(file)
+    return isLoadableFile(file, user)
 
 
 def makeFileDownloadUrl(fileModel):
@@ -169,7 +169,7 @@ def sameLevelSessionFile(fileEntry):
     return directChildSessionZip and isSessionFile(fileEntry[1])
 
 
-def singleVolViewZipOrImageFiles(fileEntries):
+def singleVolViewZipOrImageFiles(fileEntries, user=None):
     sessions = [
         fileEntry for fileEntry in fileEntries if sameLevelSessionFile(fileEntry)
     ]
@@ -178,7 +178,7 @@ def singleVolViewZipOrImageFiles(fileEntries):
         newestSession = max(sessions, key=lambda file: file[1].get("created"))
         return [newestSession]
     else:
-        return [fileEntry for fileEntry in fileEntries if isLoadableImage(fileEntry[1])]
+        return [fileEntry for fileEntry in fileEntries if isLoadableImage(fileEntry[1], user)]
 
 
 def idStringToIdList(idString):
