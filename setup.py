@@ -4,7 +4,8 @@ with open("README.md") as readme_file:
     readme = readme_file.read()
 
 requirements = [
-    "girder>=3.0.0a1",
+    "girder>=3",
+    "girder-large-image>=1.30.1",
     "pyyaml",
     "pydicom>=2",
 ]

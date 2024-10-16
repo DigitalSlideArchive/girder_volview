@@ -1,9 +1,9 @@
 import HierarchyWidget from "@girder/core/views/widgets/HierarchyWidget";
-import ItemListWidget from "@girder/core/views/widgets/ItemListWidget";
+import ItemListWidget from "@girder/large_image/views/itemList";
 import { restRequest } from "@girder/core/rest";
 import { confirm } from "@girder/core/dialog";
 import { wrap } from "@girder/core/utilities/PluginUtils";
-import { addButton, openResources } from "./open";
+import { addButton, openResources, openGroupedItemURL, openItemURL, openResourcesURL } from "./open";
 
 const openFolder = '<i class="icon-link-ext"></i>Open Folder in VolView</a>';
 const openChecked = '<i class="icon-link-ext"></i>Open Checked in VolView</a>';
@@ -143,3 +143,31 @@ wrap(ItemListWidget, "render", function (render) {
         .find(".open-in-volview");
     updateButtonVisibility(button, id);
 });
+
+ItemListWidget.registeredApplications['volview'] = {
+    name: 'VolView',
+    // icon:
+    check: (modelType, model, folder) => {
+        if (modelType === 'item') {
+            if (model.get('name').endsWith('volview.zip')) {
+                // use this
+            } else {
+                try {
+                    if (!model.get('meta') || !model.get('meta').dicom || model.get('meta').dicom.Modality === 'SM') {
+                        return false;
+                    }
+                } catch (e) {
+                    return false;
+                }
+            }
+            if (model.get('meta')._grouping) {
+                return {url: openGroupedItemURL(model, folder)};
+            }
+            return {url: openItemURL(model)};
+        }
+        if (modelType === 'folder') {
+            // TODO: this needs to mimic what is done in python
+            return {url: openResourcesURL(model, {})};
+        }
+    }
+};

@@ -1,6 +1,8 @@
 from datetime import datetime
+from girder import logger
 from girder.utility.server import getApiRoot
 from girder.constants import AccessType
+from girder.models.folder import Folder
 from girder.models.item import Item
 
 SESSION_ZIP_EXTENSION = ".volview.zip"
@@ -203,7 +205,10 @@ def normalizeLinkedResources(linkedResources):
         return {"folders": [], "items": []}
     folders = linkedResources.get("folders", [])
     items = linkedResources.get("items", [])
-    return {"folders": folders, "items": items}
+    result = {"folders": folders, "items": items}
+    if 'filters' in linkedResources:
+        result['fitlers'] = linkedResources['filters']
+    return result
 
 
 def getLinkedResources(item):
@@ -238,3 +243,58 @@ def getNewestDoc(docs):
 def findNewestSession(items):
     sessions = [item for item in items if isSessionItem(item)]
     return getNewestDoc(sessions)
+
+
+def getFilteredFiles(folder, filters):
+    """
+    Given a folder and a set of item filter criteria, find all files that are
+    in items in the folder or any of its sub-folders that match the filter.
+    """
+    folderId = folder['_id']
+    pipeline = [
+        {'$match': {'_id': folderId}},
+        {'$graphLookup': {
+            'from': 'folder',
+            'connectFromField': '_id',
+            'connectToField': 'parentId',
+            'depthField': '_depth',
+            'as': 'folders',
+            'startWith': '$_id',
+        }},
+        {'$addFields': {'folders': {
+            '$concatArrays': [[{'_id': '$_id'}], '$folders']
+        }}},
+        {'$unwind': '$folders'},
+        {'$replaceRoot': {'newRoot': '$folders'}},
+        {'$lookup': {
+            'from': 'item',
+            'localField': '_id',
+            'foreignField': 'folderId',
+            'as': 'items'
+        }},
+        {'$unwind': '$items'},
+        {'$replaceRoot': {'newRoot': '$items'}},
+        {'$match': filters},
+        {'$lookup': {
+            'from': 'file',
+            'localField': '_id',
+            'foreignField': 'itemId',
+            'as': 'files'
+        }},
+        {'$unwind': '$files'},
+        {'$replaceRoot': {'newRoot': '$files'}},
+    ]
+    logger.info('Filtering pipeline: %s', pipeline)
+    filesInFolder = list(Folder().collection.aggregate(pipeline))
+    return filesInFolder
+
+
+def getFilteredSessionFile(folder, filters, user):
+    items = list(Item().find({'folderId': folder['_id'], 'meta.linkedResources.filter': filters}))
+    item = findNewestSession(items)
+    if not item:
+        return None
+    files = singleVolViewZipOrImageFiles(
+        Item().fileList(item, subpath=False, data=False), user=user,
+    )
+    return files

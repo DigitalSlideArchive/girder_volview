@@ -31,6 +31,7 @@ from girder.utility import config
 
 from .dicom import setupEventHandlers
 from .utils import (
+    SESSION_ZIP_EXTENSION,
     isSessionItem,
     isLoadableImage,
     isLoadableFile,
@@ -45,6 +46,8 @@ from .utils import (
     matchesSelectionSet,
     getNewestDoc,
     getTouchedTime,
+    getFilteredFiles,
+    getFilteredSessionFile,
 )
 
 LARGE_IMAGE_CONFIG_FOLDER = "large_image.config_folder"
@@ -137,10 +140,19 @@ def volViewLoadableFolder(self, folder):
     return {"loadable": loadable}
 
 
-def uploadSession(model, parentId, user, size):
+def uploadSession(model, parentId, user, size, metadata=None):
     # modified from girder.api.v1.file.File.initUpload
     parentType = model.__name__.lower()
-    name = "session.volview.zip"
+    name = f"session{SESSION_ZIP_EXTENSION}"
+    try:
+        # If the session was created due to a filter, include that as part of
+        # the name.  Don't fail if it isn't formated as we expect.
+        if metadata and metadata.get('linkedResources') and metadata['linkedResources'].get('filter'):
+            firstFilter = list(iter(metadata['linkedResources']['filter'].values()))[0]
+            name = f'session.{firstFilter}{SESSION_ZIP_EXTENSION}'
+    except Exception:
+        pass
+
     mimeType = "application/zip"
     reference = None
     parent = model().load(id=parentId, user=user, level=AccessType.WRITE, exc=True)
@@ -217,7 +229,10 @@ def saveToFolder(self, folderId, metadata):
             "Expected non-zero Content-Length header",
             "girder.api.v1.folder.volview_save",
         )
-    fileDic = uploadSession(Folder, folderId, user, size)
+    # TODO: Should we check if the folder already has an item with a session,
+    # and, if so, upload to that item rather than calling upload on the
+    # folder?
+    fileDic = uploadSession(Folder, folderId, user, size, metadata)
     # Ensure next downloadResourcesManifest request for will find this
     # session.volview.zip as the freshest session that matches the selection set:
     # If there are session.volview.zip items in linked items,
@@ -305,24 +320,31 @@ def downloadManifest(self, item):
 @autoDescribeRoute(
     Description("Download JSON with file download URIs")
     .modelParam("folderId", model=Folder, level=AccessType.READ)
-    .param("folders", "Folder IDs.")
-    .param("items", "Item IDs.")
+    .param("folders", "Folder IDs.", required=False)
+    .param("items", "Item IDs.", required=False)
+    .jsonParam("filters", "Filters to apply within a folder.", required=False, requireObject=True)
     .produces(["application/json"])
     .errorResponse("ID was invalid.")
     .errorResponse("Read access was denied for the folders or items.", 403)
 )
-def downloadResourceManifest(self, folder, folders, items):
+def downloadResourceManifest(self, folder, folders, items, filters):
     user = self.getCurrentUser()
-    folders = idStringToIdList(folders)
-    items = idStringToIdList(items)
+    folders = idStringToIdList(folders or '')
+    items = idStringToIdList(items or '')
     files = []
     if not folders and not items:
-        # All files in folder (unless volview.zip is found as direct child)
-        filesInFolder = [
-            fileEntry
-            for fileEntry in Folder().fileList(folder, subpath=False, data=False)
-        ]
-        files = singleVolViewZipOrImageFiles(filesInFolder, user=user)
+        if not filters:
+            # All files in folder (unless volview.zip is found as direct child)
+            filesInFolder = [
+                fileEntry
+                for fileEntry in Folder().fileList(folder, subpath=False, data=False)
+            ]
+            files = singleVolViewZipOrImageFiles(filesInFolder, user=user)
+        else:
+            files = getFilteredSessionFile(folder, filters, user)
+            if files is None:
+                filesInFolder = getFilteredFiles(folder, filters)
+                files = [(None, file) for file in filesInFolder]
     else:
         # else load selected files
         selectedItems = loadModels(user, Item, items)

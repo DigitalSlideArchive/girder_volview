@@ -15,6 +15,9 @@
     "girderPlugin": {
         "name": "volview",
         "main": "./main.js",
+        "dependencies": [
+            "large_image"
+        ],
         "webpack": "webpack.helper"
     },
     "scripts": {
