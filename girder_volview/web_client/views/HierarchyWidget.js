@@ -65,7 +65,7 @@ wrap(HierarchyWidget, "render", function (render) {
     ) {
         return;
     }
-    const button = addButton(this.$el, ".g-folder-header-buttons .btn-info");
+    const button = addButton(this.$el, ".g-folder-header-buttons");
     if (!button) {
         return;
     }
