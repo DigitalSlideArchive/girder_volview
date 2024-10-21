@@ -162,13 +162,14 @@ When loading files, VolView can automatically convert images to segment groups
 if they follow a naming convention. For example, an image with name like `foo.seg.bar`
 will be converted to a segment group for a base image named like `foo.baz`.  
 The `segmentation` extension is defined by the `io.segmentGroupExtension` key, which takes a
-string. Files `foo.[segmentGroupExtension].bar` will be automatilly converted to segment groups for a base image named `foo.baz`. The default is `''` and will disable the feature.
+string. Files `[baseFileName].[segmentGroupExtension].bar` will be automatically converted to
+segment groups for a base image named `[baseFileName].baz`. The default is `'seg'`.
 
 This will define `myFile.seg.nrrd` as a segment group for a `myFile.nii` base file.
 
 ```yml
 io:
-  segmentGroupExtension: "seg"
+  segmentGroupExtension: "seg" # "seg" is the default
 ```
 
 ## Table View via Grider Plugin Configuration File
@@ -321,7 +322,7 @@ Then build VolView with the right flags:
 https://github.com/PaulHax/girder_volview/blob/main/volview-girder-client/buildvolview.sh#L14C2-L14C108
 
 ```
-VITE_ENABLE_REMOTE_SAVE=true npm run build:watch -- --base=/static/built/plugins/volview
+VITE_ENABLE_REMOTE_SAVE=true npm run build -- --base=/static/built/plugins/volview
 ```
 
 ### VolView Client Update Steps
