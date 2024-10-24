@@ -159,9 +159,9 @@ io:
 ### Automatic Segment Groups by File Name
 
 When loading files, VolView can automatically convert images to segment groups
-if they follow a naming convention. For example, an image with name like `foo.seg.bar`
-will be converted to a segment group for a base image named like `foo.baz`.  
-The `segmentation` extension is defined by the `io.segmentGroupExtension` key, which takes a
+if they follow a naming convention. For example, an image with name `foo.seg.bar`
+will be converted to a segment group for a base image named `foo.baz`.  
+The `seg` extension is defined by the `io.segmentGroupExtension` key, which takes a
 string. Files `[baseFileName].[segmentGroupExtension].bar` will be automatically converted to
 segment groups for a base image named `[baseFileName].baz`. The default is `'seg'`.
 
@@ -171,6 +171,8 @@ This will define `myFile.seg.nrrd` as a segment group for a `myFile.nii` base fi
 io:
   segmentGroupExtension: "seg" # "seg" is the default
 ```
+
+For multiple segmentation images, the first part of the file name up until the first `.` is what is used to match base + segmentation images.  For example, this group of file names will match: `my-study.nii`, `my-study.foo.seg.nii`, `my-study.bar.seg.nii`
 
 ## Table View via Grider Plugin Configuration File
 
