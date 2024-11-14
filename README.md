@@ -172,7 +172,17 @@ io:
   segmentGroupExtension: "seg" # "seg" is the default
 ```
 
-For multiple segmentation images, the first part of the file name up until the first `.` is what is used to match base + segmentation images.  For example, this group of file names will match: `my-study.nii`, `my-study.foo.seg.nii`, `my-study.bar.seg.nii`
+For multiple segmentation images, the first part of the file name up until the first `.` is what is used to match base + segmentation images. For example, this group of file names will match: `my-study.nii`, `my-study.foo.seg.nii`, `my-study.bar.seg.nii`
+
+### Default Window Level
+
+Will force the window level for all loaded volumes.
+
+```yml
+windowing:
+  level: 100
+  width: 50
+```
 
 ## Table View via Grider Plugin Configuration File
 
