@@ -238,14 +238,15 @@ itemList:
       title: Series Instance UID
 ```
 
-## CORS Error Workaround by Proxying Assetstores
+## Speedup S3 file downloading by disabling proxying
 
-VolView will error if it loads a file from a S3 bucket asset store without some
-[CORS configuration](https://girder.readthedocs.io/en/stable/user-guide.html#s3).
-To workaround needing to change the bucket configuration, the Girder admin can
-change the global [Girder configuration](https://girder.readthedocs.io/en/stable/configuration.html).
-Adding a `[volview]` section with a `proxy_assetstores = True` option routes VolView's
-file download requests through the Girder server, rather than redirecting directly to the S3 bucket.
+The VolView plugin proxies request to download files from S3 by default.
+This avoids a CORS error when loading a file from an S3 bucket asset store without CORS configuration.
+To speed up downloading of files from S3, the Girder admin can:
+
+1. [Configure CORS](https://girder.readthedocs.io/en/stable/user-guide.html#s3) in the S3 bucket for the Girder server.
+2. Change the global [Girder configuration](https://girder.readthedocs.io/en/stable/configuration.html) to add
+   a `[volview]` section with a `proxy_assetstores = False` option. See below:
 
 ```
 [volview]
@@ -254,8 +255,10 @@ file download requests through the Girder server, rather than redirecting direct
 # VolView clients to the S3 assetstore. This will use more server bandwidth.
 # If False, VolView client requests to download files are redirected to S3.
 # Defaults to True.
-proxy_assetstores = True
+proxy_assetstores = False
 ```
+
+3. Configure AWS Cloudfront for the S3 bucket to support HTTP/2 connections
 
 ## API Endpoints
 
