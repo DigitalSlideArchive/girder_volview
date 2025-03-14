@@ -149,11 +149,11 @@ In VolView, show a dialog with the configured keyboard shortcuts by pressing the
 
 ### Saved Segment Group File Format
 
-Edited segment groups are saved as separate files within session.volview.zip files.  By default the segment group file format is `.vti`.  We can change the format to `nrrd`, `nii`, `nii.gz` or `hdf5`
+Edited segment groups are saved as separate files within session.volview.zip files.  By default the segment group file format is `nii.gz`.  Recommended formats: `nrrd`, `nii`, `nii.gz`
 
 ```yml
 io:
-  segmentGroupSaveFormat: "nrrd"
+  segmentGroupSaveFormat: "nii.gz" # default is nii.gz
 ```
 
 ### Automatic Segment Groups by File Name
