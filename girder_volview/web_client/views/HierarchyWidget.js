@@ -100,20 +100,22 @@ wrap(HierarchyWidget, "render", function (render) {
                             loadResources(this.parentModel, volViewResources);
                         },
                     });
-                    return;
+                    return false;
                 } else {
                     const volViewResources = { item: [volViewZip.id] };
                     loadResources(this.parentModel, volViewResources);
-                    return;
+                    return false;
                 }
             }
         }
         loadResources(this.parentModel, resources);
+        return false;
     };
 
     const updateChecked = () => {
         const resources = this._getCheckedResourceParam();
         button.innerHTML = resources.length >= 3 ? openChecked : openFolder;
+        $(button).attr('href', openResourcesURL(this.parentModel, resources));
     };
     updateChecked();
 
