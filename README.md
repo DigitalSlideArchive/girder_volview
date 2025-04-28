@@ -184,59 +184,12 @@ windowing:
   width: 50
 ```
 
-## Table View via Grider Plugin Configuration File
+## Customize File Browsing to Group Images and add Columns
 
-![image](https://github.com/DigitalSlideArchive/girder_volview/assets/16823231/9ab0f04d-9103-431a-ab22-cbf87ee760e2)
+A `.large_image_config.yaml` file can change how images are grouped
+and display columns with image metadata.
 
-To show DICOM tags in a table view, add a `.large_image_config.yaml` file higher in the Girder folder hierarchy. When a DICOM file is imported/uploaded, its DICOM tags are saved on the Item metadata under the top level `dicom` key.
-
-More information on `.large_image_config.yaml` here:
-https://girder.github.io/large_image/girder_config_options.html#large-image-config-yaml
-
-Example `.large_image_config.yaml` file:
-
-```yml
-# If present, show a table with column headers in item lists
-itemList:
-  # Show these columns in order from left to right.  Each column has a
-  # "type" and "value".  It optionally has a "title" used for the column
-  # header, and a "format" used for searching and filtering.  The "label",
-  # if any, is displayed to the left of the column value.  This is more
-  # useful in an grid view than in a column view.
-  columns:
-    - # The "record" type is from the default item record.  The value is
-      # one of "name", "size", or "controls".
-      type: record
-      value: name
-    - type: record
-      value: size
-    - # The "metadata" type is taken from the item's "meta" contents.  It
-      # can be a nested key by using dots in its name.
-      type: metadata
-      value: dicom.Modality
-      title: Modality
-    - type: metadata
-      value: dicom.BodyPartExamined
-      title: Body Part Examined
-    - type: metadata
-      value: dicom.StudyDate
-      title: Study Date
-    - type: metadata
-      value: dicom.StudyDescription
-      title: Study Description
-    - type: metadata
-      value: dicom.SeriesDescription
-      title: Series Description
-    - type: metadata
-      value: dicom.ManufacturerModelName
-      title: Manufacturer Model Name
-    - type: metadata
-      value: dicom.StudyInstanceUID
-      title: Study Instance UID
-    - type: metadata
-      value: dicom.SeriesInstanceUID
-      title: Series Instance UID
-```
+[Example YAMLs and docs](./docs/customize_file_browsing.md)
 
 ## Speedup S3 file downloading by disabling proxying
 
