@@ -1,9 +1,9 @@
-import HierarchyWidget from "@girder/core/views/widgets/HierarchyWidget";
-import ItemListWidget from "@girder/large_image/views/itemList";
-import { restRequest } from "@girder/core/rest";
-import { confirm } from "@girder/core/dialog";
-import { wrap } from "@girder/core/utilities/PluginUtils";
 import { addButton, openResources, openGroupedItemURL, openItemURL, openResourcesURL } from "./open";
+
+const { wrap } = girder.utilities.PluginUtils;
+const { restRequest } = girder.rest;
+const { confirm } = girder.dialog;
+const { HierarchyWidget, ItemListWidget } = girder.views.widgets;
 
 const openFolder = '<i class="icon-link-ext"></i>Open Folder in VolView</a>';
 const openChecked = '<i class="icon-link-ext"></i>Open Checked in VolView</a>';
