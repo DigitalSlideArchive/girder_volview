@@ -1,7 +1,10 @@
+import logging
+from pathlib import Path
+
 import cherrypy
 import errno
 
-from girder import plugin, events
+from girder import plugin
 from girder.api.describe import Description, autoDescribeRoute
 from girder.api import access
 from girder.api.rest import (
@@ -23,7 +26,6 @@ from girder.utility import ziputil
 import yaml
 from girder.models.setting import Setting
 from girder.models.folder import Folder
-from girder import logger
 from girder.models.group import Group
 
 # server settings (from girder.cfg file probably) for proxiable endpoint below
@@ -51,6 +53,8 @@ from .utils import (
 )
 
 LARGE_IMAGE_CONFIG_FOLDER = "large_image.config_folder"
+
+logger = logging.getLogger(__name__)
 
 
 def hasLoadableFile(files, user=None):
@@ -538,9 +542,29 @@ def getFolderConfigFile(self, folder, name):
 
 class GirderPlugin(plugin.GirderPlugin):
     DISPLAY_NAME = "VolView"
-    CLIENT_SOURCE_PATH = "web_client"
 
     def load(self, info):
+        plugin.getPlugin('large_image').load(info)
+
+        plugin.registerPluginStaticContent(
+            plugin='volview',
+            css=[],
+            js=['/girder-plugin-volview.umd.cjs'],
+            staticDir=Path(__file__).parent / 'web_client' / 'dist',
+            tree=info['serverRoot'],
+        )
+
+        info['serverRoot'].mount(
+            None, '/volview',
+            config={
+                '/': {
+                    'tools.staticdir.on': True,
+                    'tools.staticdir.index': 'index.html',
+                    'tools.staticdir.dir': Path(__file__).parent / 'web_client' / 'dist' / 'VolView' / 'dist',
+                }
+            }
+        )
+
         setupEventHandlers()
 
         info["apiRoot"].item.route(

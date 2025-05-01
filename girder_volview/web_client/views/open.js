@@ -1,4 +1,4 @@
-import { getApiRoot } from "@girder/core/rest";
+const getApiRoot = girder.rest.getApiRoot;
 
 const openButton = `<a class="btn btn-sm btn-primary open-in-volview hidden" style="margin-left: 10px" role="button">
                                 <i class="icon-link-ext"></i>Open in VolView</a>`;
@@ -16,10 +16,10 @@ export function addButton($el, parentSelector) {
     return button;
 }
 
-const volViewPath = `static/built/plugins/volview/index.html`;
+const volViewPath = '/volview';
 
 export function openItemURL(item) {
-    const itemRoute = `/${getApiRoot()}/item/${item.id}`;
+    const itemRoute = `${getApiRoot()}/item/${item.id}`;
     const saveParam = `&save=${itemRoute}/volview`;
     const manifestUrl = `${itemRoute}/volview`;
     const downloadParams = `&names=[manifest.json]&urls=${manifestUrl}`;
@@ -34,12 +34,12 @@ export function openItem(item) {
 function resourcesToDownloadParams(folderId, resources) {
     const items = (resources.item || []).join(",");
     const folders = (resources.folder || []).join(",");
-    const manifestUrl = `/${getApiRoot()}/folder/${folderId}/volview?folders=${folders}&items=${items}`;
+    const manifestUrl = `${getApiRoot()}/folder/${folderId}/volview?folders=${folders}&items=${items}`;
     return `&names=[manifest.json]&urls=${encodeURIComponent(manifestUrl)}`;
 }
 
 export function openResourcesURL(folder, resources) {
-    const folderRoute = `/${getApiRoot()}/folder/${folder.id}`;
+    const folderRoute = `${getApiRoot()}/folder/${folder.id}`;
     const metaData = {
         linkedResources: {
             items: resources.item,
@@ -60,7 +60,7 @@ export function openResources(folder, resources) {
 
 export function openGroupedItemURL(item, folder) {
     const folderId = folder ? folder.id : item.get('folderId');
-    const folderRoute = `/${getApiRoot()}/folder/${folderId}`;
+    const folderRoute = `${getApiRoot()}/folder/${folderId}`;
     const groups = item.get('meta')._grouping || {};
     const filter = {};
     (groups.keys || []).forEach((key, idx) => {
@@ -72,7 +72,7 @@ export function openGroupedItemURL(item, folder) {
     const saveParam = `&save=${folderRoute}/volview?metadata=${encodeURIComponent(
         JSON.stringify(metaData)
     )}`;
-    const manifestUrl = `/${getApiRoot()}/folder/${folderId}/volview?filters=${JSON.stringify(filter)}`;
+    const manifestUrl = `${getApiRoot()}/folder/${folderId}/volview?filters=${JSON.stringify(filter)}`;
     const downloadParams = `&names=[manifest.json]&urls=${encodeURIComponent(manifestUrl)}`;
     const newTabUrl = `${volViewPath}?${saveParam}${downloadParams}`;
     return newTabUrl;
