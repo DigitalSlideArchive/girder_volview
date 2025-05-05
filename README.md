@@ -249,7 +249,7 @@ VolView creates a new session.volview.zip file in the Girder Item every time the
 
 Get this running https://github.com/DigitalSlideArchive/digital_slide_archive/tree/master/devops/with-dive-volview
 
-In the `provision.divevolview.yaml` file, add some `volumes` pointing to this girder plugin and optionally
+In the `docker-compose.override.yml` file, add some `volumes` pointing to this girder plugin and optionally
 a VolView repo checkout. Example:
 
 ```yaml
