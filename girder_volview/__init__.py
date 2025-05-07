@@ -295,7 +295,48 @@ def downloadDatasets(self, item):
 )
 def downloadProxiableFile(self, file, name):
     proxyRequest = config.getConfig().get("volview", {}).get("proxy_assetstores", True)
-    return File().download(file, headers=not proxyRequest)
+
+    # below modified from girder.api.v1.file.download
+    rangeRequest = cherrypy.request.headers.get("Range")
+    if rangeRequest and file.get("size") is None:
+        # Ensure the file size is updated
+        File().updateSize(file)
+
+    rangeHeader = cherrypy.lib.httputil.get_ranges(rangeRequest, file.get("size", 0))
+
+    if rangeRequest:
+        if not rangeHeader:
+            # cherrypy found something wrong with range request headers in get_ranges
+            cherrypy.response.status = 416
+            cherrypy.response.headers["Content-Range"] = f"bytes */{file['size']}"
+            return ""
+        # Only support the first range
+        offset, endByte = rangeHeader[0]
+    else:
+        offset = 0
+        endByte = None
+
+    # to get s3_assetstore_adapter to proxy s3, we set headers to False,
+    # but to have a correct partial response, fill in headers and status code
+    if proxyRequest and (
+        offset > 0 or (endByte is not None and endByte < file["size"])
+    ):
+        cherrypy.response.status = 206
+        cherrypy.response.headers["Accept-Ranges"] = "bytes"
+        if endByte is None:
+            endByte = file["size"]
+        # endByte is non-inclusive, so set Content-Range accordingly
+        cherrypy.response.headers["Content-Range"] = (
+            f"bytes {offset}-{endByte-1}/{file['size']}"
+        )
+        cherrypy.response.headers["Content-Length"] = str(endByte - offset)
+    elif proxyRequest:
+        cherrypy.response.headers["Accept-Ranges"] = "bytes"
+        cherrypy.response.headers["Content-Length"] = str(file["size"])
+
+    return File().download(
+        file, offset=offset, endByte=endByte, headers=not proxyRequest
+    )
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
