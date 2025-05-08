@@ -2,12 +2,7 @@
 
 Open Items in [VolView](https://github.com/Kitware/VolView) with a "Open in VolView" button. The button is located in the top right, on an Item's page.
 
-## Supported Files
-
-VolView tries to load all files in a Girder Item.
-`.zip` files, and all `.zip` files they contain, are unzipped and VolView will load all resulting files.
-
-### Supported Image File Formats
+## Supported Image File Formats
 
 - DICOM `.dcm`
 - Nrrd `.nrrd`
@@ -17,12 +12,13 @@ VolView tries to load all files in a Girder Item.
 
 ## Layers of Images
 
-To overlay PET and CT images, place all image files in one Girder Item.
-VolView will show the PET and CT images as separate "volumes".
-First load the base volume, say the CT one. Then click the "Add Layer" icon on the overlay image, probably the PET one.
+To automatically overlay PET and CT DICOM series, open the 2 series together with the Open in VolView button.
 
 The overlaid image is "resampled" to match the physical and pixel space of the base image.  
 If there is no overlap in physical space as gleaned from the images' metadata, the overlay won't work.
+
+You can also layer PET and CT after loading in VolView.
+First load the base volume, say the CT one. Then click the "Add Layer" option on the overlay image, probably PET one.
 
 ## Client Configuration file
 
@@ -210,8 +206,6 @@ To speed up downloading of files from S3, the Girder admin can:
 # Defaults to True.
 proxy_assetstores = False
 ```
-
-3. Configure AWS Cloudfront for the S3 bucket to support HTTP/2 connections
 
 ## API Endpoints
 
