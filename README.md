@@ -251,8 +251,8 @@ services:
   girder:
     volumes:
       - ../with-dive-volview/provision.divevolview.yaml:/opt/digital_slide_archive/devops/dsa/provision.yaml
-      - ../../../girder-volview:/opt/girder_volview
-      - ~/src/volview-stuff/VolView:/opt/volview-package
+      - ../../../girder_volview:/opt/girder_volview
+      - ../../../../VolView:/opt/volview-package
 ```
 
 Comment out the pip install of this plugin here: https://github.com/DigitalSlideArchive/digital_slide_archive/blob/master/devops/with-dive-volview/provision.divevolview.yaml#L3
@@ -284,7 +284,7 @@ Then build VolView with the right flags:
 https://github.com/PaulHax/girder_volview/blob/main/volview-girder-client/buildvolview.sh#L14C2-L14C108
 
 ```
-VITE_ENABLE_REMOTE_SAVE=true npm run build -- --base=/static/built/plugins/volview
+VITE_REMOTE_SERVER_URL= VITE_ENABLE_REMOTE_SAVE=true npm run build
 ```
 
 ### VolView Client Update Steps
