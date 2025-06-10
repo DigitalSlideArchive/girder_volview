@@ -9,7 +9,9 @@ const openFolder = '<i class="icon-link-ext"></i>Open Folder in VolView</a>';
 const openChecked = '<i class="icon-link-ext"></i>Open Checked in VolView</a>';
 
 function setButtonVisibility(button, visible = true) {
-    if (button.length === 0) throw new Error("Button not found");
+    if (button.length === 0) {
+        return;
+    }
     if (visible) {
         button.removeClass("hidden");
     } else {
