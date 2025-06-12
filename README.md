@@ -310,4 +310,3 @@ npm publish
 Update volview-girder-client version in `./grider_volview/web_client/package.json`
 
 To test new client: push up changes to a new branch on GitHub. Change `provision.divevolview.yaml` to point to your branch like this: `git+https://github.com/PaulHax/girder_volview@new-branch`.
-Rebuild DSA Girder docker image.
