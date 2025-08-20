@@ -582,6 +582,7 @@ class GirderPlugin(plugin.GirderPlugin):
     CLIENT_SOURCE_PATH = "web_client"
 
     def load(self, info):
+        plugin.getPlugin('large_image').load(info)
         setupEventHandlers()
 
         info["apiRoot"].item.route(
