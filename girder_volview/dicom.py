@@ -145,8 +145,9 @@ def _parseFile(f):
                 stop_before_pixels=True,
             )
             return _coerceMetadata(dataset)
-    except (pydicom.errors.InvalidDicomError, GirderException, OSError):
+    except (pydicom.errors.InvalidDicomError, GirderException, OSError, ValueError):
         # If pydicom.errors.InvalidDicomError occurs, probably not a dicom file.
         # If GirderException, the file may have been deleted between scanning for import and handling the event
         # OSError can occur on files that are partly written and unclosed
+        # ValueError can occur with corrupted DICOM tags or deferred read issues
         return None
