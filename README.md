@@ -2,12 +2,7 @@
 
 Open Items in [VolView](https://github.com/Kitware/VolView) with a "Open in VolView" button. The button is located in the top right, on an Item's page.
 
-## Supported Files
-
-VolView tries to load all files in a Girder Item.
-`.zip` files, and all `.zip` files they contain, are unzipped and VolView will load all resulting files.
-
-### Supported Image File Formats
+## Supported Image File Formats
 
 - DICOM `.dcm`
 - Nrrd `.nrrd`
@@ -17,12 +12,13 @@ VolView tries to load all files in a Girder Item.
 
 ## Layers of Images
 
-To overlay PET and CT images, place all image files in one Girder Item.
-VolView will show the PET and CT images as separate "volumes".
-First load the base volume, say the CT one. Then click the "Add Layer" icon on the overlay image, probably the PET one.
+To automatically overlay PET and CT DICOM series, open the 2 series together with the Open in VolView button.
 
 The overlaid image is "resampled" to match the physical and pixel space of the base image.  
 If there is no overlap in physical space as gleaned from the images' metadata, the overlay won't work.
+
+You can also layer PET and CT after loading in VolView.
+First load the base volume, say the CT one. Then click the "Add Layer" option on the overlay image, probably PET one.
 
 ## Client Configuration file
 
@@ -211,8 +207,6 @@ To speed up downloading of files from S3, the Girder admin can:
 proxy_assetstores = False
 ```
 
-3. Configure AWS Cloudfront for the S3 bucket to support HTTP/2 connections
-
 ## API Endpoints
 
 - GET folder/:id/volview?items=[itemIds]&folders=[folderIds] -> download JSON with URLS to files or the latest `*.volview.zip` file in the folder
@@ -249,7 +243,7 @@ VolView creates a new session.volview.zip file in the Girder Item every time the
 
 Get this running https://github.com/DigitalSlideArchive/digital_slide_archive/tree/master/devops/with-dive-volview
 
-In the `provision.divevolview.yaml` file, add some `volumes` pointing to this girder plugin and optionally
+In the `docker-compose.override.yml` file, add some `volumes` pointing to this girder plugin and optionally
 a VolView repo checkout. Example:
 
 ```yaml
@@ -257,8 +251,8 @@ services:
   girder:
     volumes:
       - ../with-dive-volview/provision.divevolview.yaml:/opt/digital_slide_archive/devops/dsa/provision.yaml
-      - ../../../girder-volview:/opt/girder_volview
-      - ~/src/volview-stuff/VolView:/opt/volview-package
+      - ../../../girder_volview:/opt/girder_volview
+      - ../../../../VolView:/opt/volview-package
 ```
 
 Comment out the pip install of this plugin here: https://github.com/DigitalSlideArchive/digital_slide_archive/blob/master/devops/with-dive-volview/provision.divevolview.yaml#L3
@@ -290,7 +284,7 @@ Then build VolView with the right flags:
 https://github.com/PaulHax/girder_volview/blob/main/volview-girder-client/buildvolview.sh#L14C2-L14C108
 
 ```
-VITE_ENABLE_REMOTE_SAVE=true npm run build -- --base=/static/built/plugins/volview
+VITE_REMOTE_SERVER_URL= VITE_ENABLE_REMOTE_SAVE=true npm run build
 ```
 
 ### VolView Client Update Steps
@@ -316,4 +310,3 @@ npm publish
 Update volview-girder-client version in `./grider_volview/web_client/package.json`
 
 To test new client: push up changes to a new branch on GitHub. Change `provision.divevolview.yaml` to point to your branch like this: `git+https://github.com/PaulHax/girder_volview@new-branch`.
-Rebuild DSA Girder docker image.

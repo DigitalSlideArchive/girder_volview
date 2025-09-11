@@ -104,6 +104,8 @@ def isDicomFile(file):
 def isLoadableFile(file, user=None):
     if isTiffFile(file) or isDicomFile(file):
         item = Item().load(file.get("itemId"), user=user, level=AccessType.READ)
+        if item is None:
+            return False
         if isTiffFile(file):
             return not item.get("largeImage")
         if item.get("meta", {}).get("dicom", {}).get("Modality", "") == "SM":
