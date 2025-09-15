@@ -134,6 +134,11 @@ def _parseFile(f):
     if "linkUrl" in f:
         # link file, File().open() will error
         return None
+
+    # Skip DICOMDIR files to prevent reported hanging on asseststore import bug (because the file has too many tags to read for _coerceMetadata?)
+    if f.get("name") == "DICOMDIR":
+        return None
+
     try:
         # download file and try to parse dicom
         with File().open(f) as fp:
