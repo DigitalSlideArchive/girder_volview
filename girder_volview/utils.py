@@ -1,6 +1,6 @@
 from datetime import datetime
-from girder import logger
-from girder.utility.server import getApiRoot
+import logging
+
 from girder.constants import AccessType
 from girder.models.folder import Folder
 from girder.models.item import Item
@@ -77,6 +77,8 @@ LOADABLE_MIMES = (
     "application/vnd.unknown.fdf",
 )
 
+logger = logging.getLogger(__name__)
+
 
 def isSessionItem(item):
     return item and SESSION_ZIP_EXTENSION in item["name"]
@@ -131,8 +133,7 @@ def makeFileDownloadUrl(fileModel):
     # Lead with a slash to make the URI relative to origin
     fileUrl = "/".join(
         (
-            "",
-            getApiRoot(),
+            "/api/v1",
             "file",
             str(fileModel["_id"]),
             "proxiable",
@@ -149,8 +150,7 @@ def filesToManifest(files, folderId):
     ]
     configUrl = "/".join(
         (
-            "",
-            getApiRoot(),
+            "/api/v1",
             "folder",
             str(folderId),
             "volview_config",

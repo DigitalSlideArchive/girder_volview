@@ -1,161 +1,44 @@
 {
-    "name": "@girder/volview",
-    "version": "0.1.0",
-    "private": true,
-    "description": "Open items in VolView.",
-    "homepage": "https://github.com/girder/girder_volview",
-    "license": "Apache-2.0",
-    "dependencies": {
-        "copy-webpack-plugin": "^4.5.2",
-        "volview-girder-client": "1.20.0"
+  "name": "@girder/volview",
+  "version": "0.1.0",
+  "description": "Open items in VolView.",
+  "homepage": "https://github.com/girder/girder_volview",
+  "bugs": {
+    "url": "https://github.com/DigitalSlideArchive/girder_volview/issues"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DigitalSlideArchive/girder_volview.git"
+  },
+  "type": "module",
+  "files": [
+    "dist",
+    "package.json"
+  ],
+  "main": "./dist/girder-plugin-volview.umd.cjs",
+  "module": "./dist/girder-plugin-volview.js",
+  "exports": {
+    ".": {
+      "import": "./dist/girder-plugin-volview.js",
+      "require": "./dist/girder-plugin-volview.umd.cjs"
     },
-    "peerDependencies": {
-        "@girder/core": "*"
-    },
-    "girderPlugin": {
-        "name": "volview",
-        "main": "./main.js",
-        "dependencies": [
-            "large_image"
-        ],
-        "webpack": "webpack.helper"
-    },
-    "scripts": {
-        "lint": "eslint . && pug-lint . && stylint"
-    },
-    "devDependencies": {
-        "@girder/eslint-config": "*",
-        "@girder/pug-lint-config": "*",
-        "eslint": "^5",
-        "eslint-config-semistandard": "^13",
-        "eslint-config-standard": "^12",
-        "eslint-plugin-backbone": "*",
-        "eslint-plugin-import": "*",
-        "eslint-plugin-node": "*",
-        "eslint-plugin-promise": "*",
-        "eslint-plugin-standard": "*",
-        "pug-lint": "^2",
-        "stylint": "^2"
-    },
-    "eslintConfig": {
-        "extends": "@girder",
-        "root": true
-    },
-    "pugLintConfig": {
-        "extends": "@girder/pug-lint-config"
-    },
-    "stylintrc": {
-        "blocks": false,
-        "brackets": {
-            "expect": "never",
-            "error": true
-        },
-        "colons": {
-            "expect": "never",
-            "error": true
-        },
-        "colors": false,
-        "commaSpace": {
-            "expect": "always",
-            "error": true
-        },
-        "commentSpace": {
-            "expect": "always",
-            "error": true
-        },
-        "cssLiteral": {
-            "expect": "never",
-            "error": true
-        },
-        "depthLimit": false,
-        "duplicates": {
-            "expect": true,
-            "error": true
-        },
-        "efficient": {
-            "expect": "always",
-            "error": true
-        },
-        "exclude": [
-            "node_modules/**"
-        ],
-        "extendPref": "@extend",
-        "globalDupe": false,
-        "groupOutputByFile": {
-            "expect": true,
-            "error": true
-        },
-        "indentPref": {
-            "expect": 2,
-            "error": true
-        },
-        "leadingZero": {
-            "expect": "always",
-            "error": true
-        },
-        "maxErrors": false,
-        "maxWarnings": false,
-        "mixed": false,
-        "mixins": [],
-        "namingConvention": false,
-        "namingConventionStrict": false,
-        "none": {
-            "expect": "always",
-            "error": true
-        },
-        "noImportant": false,
-        "parenSpace": {
-            "expect": "never",
-            "error": true
-        },
-        "placeholders": false,
-        "prefixVarsWithDollar": {
-            "expect": "always",
-            "error": true
-        },
-        "quotePref": {
-            "expect": "double",
-            "error": true
-        },
-        "reporterOptions": {
-            "columns": [
-                "lineData",
-                "severity",
-                "description",
-                "rule"
-            ],
-            "columnSplitter": "  ",
-            "showHeaders": false,
-            "truncate": true
-        },
-        "semicolons": {
-            "expect": "never",
-            "error": true
-        },
-        "sortOrder": false,
-        "stackedProperties": {
-            "expect": "never",
-            "error": true
-        },
-        "trailingWhitespace": {
-            "expect": "never",
-            "error": true
-        },
-        "universal": {
-            "expect": "never",
-            "error": true
-        },
-        "valid": {
-            "expect": true,
-            "error": true
-        },
-        "zeroUnits": {
-            "expect": "never",
-            "error": true
-        },
-        "zIndexNormalize": {
-            "expect": 5,
-            "error": true
-        }
-    }
+    "./style.css": "./dist/style.css",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "vite build && cp -r node_modules/volview-girder-client/VolView/ dist/VolView",
+    "dev": "vite build --watch"
+  },
+  "author": "",
+  "dependencies": {
+    "@girder/core": "^5.0.0-a10",
+    "volview-girder-client": "^1.13.0"
+  },
+  "devDependencies": {
+    "pug": "^3.0.2",
+    "stylus": "^0.59.0",
+    "vite": "^4.3.9",
+    "vite-plugin-istanbul": "^4.1.0"
+  }
 }
