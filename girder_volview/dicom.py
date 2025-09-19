@@ -1,4 +1,5 @@
 import datetime
+import io
 import sys
 
 import pydicom
@@ -12,6 +13,7 @@ from girder.models.file import File
 from girder.exceptions import GirderException
 
 MAX_TAG_SIZE = 1024 * 128  # bytes
+BUFFER_SIZE_CUTOFF = 1 * 1024 * 1024  # 1MB - buffer files smaller than this in memory
 
 
 def setupEventHandlers():
@@ -27,7 +29,8 @@ def maybeUpgradeMimeType(file):
     # asset store import can set mimeType to None.  Manual upload sets mimeType to "application/octet-stream"
     if mimeType is None or mimeType == "application/octet-stream":
         file["mimeType"] = "application/dicom"
-        File().save(file)
+        # Don't trigger events to avoid recursive processing
+        File().save(file, triggerEvents=False)
 
 
 # Code modified from https://github.com/girder/girder/blob/master/plugins/dicom_viewer/girder_dicom_viewer/__init__.py
@@ -134,18 +137,39 @@ def _parseFile(f):
     if "linkUrl" in f:
         # link file, File().open() will error
         return None
+
+    # Skip DICOMDIR files - they are directory/index files.
+    # Parsing large DICOMDIR files over the BUFFER_SIZE_CUTOFF with pydicom while streaming from S3 is very slow
+    if f.get("name", "").upper() == "DICOMDIR":
+        return None
+
     try:
         # download file and try to parse dicom
         with File().open(f) as fp:
+            # For small files, buffer in memory for better dcmread performance from S3
+            # This provides ~5x speedup for S3 files (0.15s vs 0.8s for 500KB files)
+            file_size = f.get("size", 0)
+            file_handle = (
+                io.BytesIO(fp.read())
+                if (file_size > 0 and file_size < BUFFER_SIZE_CUTOFF)
+                else fp
+            )
+
             dataset = pydicom.dcmread(
-                fp,
+                file_handle,
                 # don't read huge fields, esp. if this isn't even really dicom
                 defer_size=1024,
                 # don't read image data, just metadata
                 stop_before_pixels=True,
             )
+
             return _coerceMetadata(dataset)
-    except (pydicom.errors.InvalidDicomError, GirderException, OSError, ValueError):
+    except (
+        pydicom.errors.InvalidDicomError,
+        GirderException,
+        OSError,
+        ValueError,
+    ):
         # If pydicom.errors.InvalidDicomError occurs, probably not a dicom file.
         # If GirderException, the file may have been deleted between scanning for import and handling the event
         # OSError can occur on files that are partly written and unclosed
