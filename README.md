@@ -26,7 +26,7 @@ Add a `.volview_config.yaml` file higher in the folder hierarchy. Example file:
 
 ```yml
 layout:
-  activeLayout: "Axial Only"
+  gridSize: [1, 1]
 labels:
   defaultLabels:
     artifact:
@@ -52,7 +52,7 @@ Parent `.volview_config.yaml`
 
 ```yml
 layout:
-  activeLayout: "Axial Only"
+  gridSize: [1, 1]
 ```
 
 Result
@@ -62,18 +62,23 @@ shortcuts:
   polygon: "Ctrl+p"
   rectangle: "b"
 layout:
-  activeLayout: "Axial Only"
+  gridSize: [1, 1]
 ```
 
 ### Layout Configuration
 
-To set the initial view, add a `layout: activeLayout` section to the `.volview_config.yaml` file.
+To set the initial view grid, add a `layout: gridSize` section to the `.volview_config.yaml` file. The `gridSize` key takes a tuple `[width, height]` to define the grid dimensions.
 
 ```yml
 layout:
-  # options: Axial Only, Axial Primary, 3D Primary, Quad View, 3D Only
-  activeLayout: "Axial Only"
+  gridSize: [2, 2]
 ```
+
+Common configurations:
+
+- `[1, 1]` - Single view
+- `[2, 1]` - Two views side-by-side
+- `[2, 2]` - Quad view (2x2 grid)
 
 ### Label Configuration
 
