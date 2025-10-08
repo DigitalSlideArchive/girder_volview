@@ -570,7 +570,6 @@ def yamlConfigFile(folder, name, user, addConfig):
 def getFolderConfigFile(self, folder, name):
     user = self.getCurrentUser()
     baseConfig = {
-        "dataBrowser": {"hideSampleData": True},
         "io": {"segmentGroupExtension": "seg", "segmentGroupSaveFormat": "nii.gz"},
     }
     config = yamlConfigFile(folder, name, user, baseConfig)
