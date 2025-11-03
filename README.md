@@ -67,18 +67,80 @@ layout:
 
 ### Layout Configuration
 
-To set the initial view grid, add a `layout: gridSize` section to the `.volview_config.yaml` file. The `gridSize` key takes a tuple `[width, height]` to define the grid dimensions.
+There are a few ways to configure the initial view layout.
+
+#### 1. Grid with Specific View Types
+
+Use a 2D array to specify which view appears in each grid position. Available view types: `axial`, `coronal`, `sagittal`, `volume`, `oblique`
+
+The default:
 
 ```yml
 layout:
-  gridSize: [2, 2]
+  - [axial, coronal]
 ```
 
-Common configurations:
+```yml
+layout:
+  - [axial, sagittal]
+  - [coronal, volume]
+```
 
-- `[1, 1]` - Single view
-- `[2, 1]` - Two views side-by-side
-- `[2, 2]` - Quad view (2x2 grid)
+#### 2. Nested Hierarchical Layout
+
+For complex layouts, use nested rows and columns:
+
+```yml
+layout:
+  direction: row
+  items:
+    - volume
+    - direction: column
+      items:
+        - axial
+        - coronal
+        - sagittal
+```
+
+Direction values:
+
+- `row` - items arranged horizontally
+- `column` - items stacked vertically
+
+You can also specify full view objects:
+
+```yml
+layout:
+  direction: column
+  items:
+    - type: 3D
+      viewDirection: Superior
+      viewUp: Anterior
+    - direction: row
+      items:
+        - type: 2D
+          orientation: Axial
+        - type: 2D
+          orientation: Coronal
+```
+
+View object properties:
+
+- 2D views: `type: 2D`, `orientation: Axial|Coronal|Sagittal`
+- 3D views: `type: 3D`, `viewDirection`, `viewUp`
+- Oblique views: `type: Oblique`
+
+#### Disabled View Types
+
+Prevent certain view types from appearing in the view type switcher:
+
+```yml
+disabledViewTypes:
+  - 3D
+  - Oblique
+```
+
+Valid values: `2D`, `3D`, `Oblique`
 
 ### Label Configuration
 
