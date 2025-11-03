@@ -574,7 +574,8 @@ def getFolderConfigFile(self, folder, name):
         "disabledViewTypes": ["3D", "Oblique"],
         "layout": [["axial", "coronal"]],
     }
-    config = yamlConfigFile(folder, name, user, baseConfig)
+    config = yamlConfigFile(folder, name, user, None) or {}
+    config = _mergeDictionaries(baseConfig, config)
     return config
 
 
