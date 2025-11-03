@@ -571,6 +571,8 @@ def getFolderConfigFile(self, folder, name):
     user = self.getCurrentUser()
     baseConfig = {
         "io": {"segmentGroupExtension": "seg", "segmentGroupSaveFormat": "nii.gz"},
+        "disabledViewTypes": ["3D", "Oblique"],
+        "layout": [["axial", "coronal"]],
     }
     config = yamlConfigFile(folder, name, user, baseConfig)
     return config
