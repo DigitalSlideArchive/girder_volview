@@ -25,8 +25,9 @@ First load the base volume, say the CT one. Then click the "Add Layer" option on
 Add a `.volview_config.yaml` file higher in the folder hierarchy. Example file:
 
 ```yml
-layout:
-  gridSize: [1, 1]
+layouts:
+  Axial:
+    gridSize: ["axial"]
 labels:
   defaultLabels:
     artifact:
@@ -51,8 +52,9 @@ shortcuts:
 Parent `.volview_config.yaml`
 
 ```yml
-layout:
-  gridSize: [1, 1]
+layouts:
+  Axial:
+    gridSize: ["axial"]
 ```
 
 Result
@@ -61,45 +63,44 @@ Result
 shortcuts:
   polygon: "Ctrl+p"
   rectangle: "b"
-layout:
-  gridSize: [1, 1]
+layouts:
+  Axial:
+    gridSize: ["axial"]
 ```
 
 ### Layout Configuration
 
-There are a few ways to configure the initial view layout.
+Define one or more named layouts using the `layouts` key.
+VolView will use the first layout as the default.
+Each named layout will appear in the layout selector menu.
 
-#### 1. Grid with Specific View Types
+#### Grid with Specific View Types
 
-Use a 2D array to specify which view appears in each grid position. Available view types: `axial`, `coronal`, `sagittal`, `volume`, `oblique`
-
-The default:
+Use a 2D array of view type strings to specify both the grid layout and which views appear in each position:
 
 ```yml
-layout:
-  - [axial, coronal]
+layouts:
+  Four Slice Views:
+    - [axial, coronal]
+    - [sagittal, axial]
 ```
 
-```yml
-layout:
-  - [axial, sagittal]
-  - [coronal, volume]
-```
+Available view types: `axial`, `coronal`, `sagittal`, `volume`, `oblique`
 
-#### 2. Nested Hierarchical Layout
+#### Nested Hierarchical Layout
 
-For complex layouts, use nested rows and columns:
+For complex layouts, use this nested structure:
 
 ```yml
-layout:
-  direction: row
-  items:
-    - volume
-    - direction: column
-      items:
-        - axial
-        - coronal
-        - sagittal
+layouts:
+  Axial Primary:
+    direction: row
+    items:
+      - axial
+      - direction: column
+        items:
+          - coronal
+          - sagittal
 ```
 
 Direction values:
@@ -107,37 +108,55 @@ Direction values:
 - `row` - items arranged horizontally
 - `column` - items stacked vertically
 
-You can also specify full view objects:
-
-```yml
-layout:
-  direction: column
-  items:
-    - type: 3D
-      viewDirection: Superior
-      viewUp: Anterior
-    - direction: row
-      items:
-        - type: 2D
-          orientation: Axial
-        - type: 2D
-          orientation: Coronal
-```
-
 View object properties:
 
-- 2D views: `type: 2D`, `orientation: Axial|Coronal|Sagittal`
-- 3D views: `type: 3D`, `viewDirection`, `viewUp`
-- Oblique views: `type: Oblique`
+- 2D views: `type: 2D`, `orientation: Axial|Coronal|Sagittal`, `name` (optional)
+- 3D views: `type: 3D`, `viewDirection` (optional), `viewUp` (optional), `name` (optional)
+- Oblique views: `type: Oblique`, `name` (optional)
+
+#### Multiple Layouts Example
+
+Define multiple named layouts that users can switch between:
+
+```yml
+layouts:
+  Three Slice Views:
+    - [axial, coronal]
+    - [sagittal, axial]
+  Axial Focus:
+    direction: row
+    items:
+      - axial
+      - direction: column
+        items:
+          - coronal
+          - sagittal
+```
+
+#### Simple Grid (gridSize)
+
+Alternatively, use `gridSize` to set the layout grid as `[width, height]`:
+
+```yml
+layouts:
+  Two by Two:
+    gridSize: [2, 2]
+```
 
 #### Disabled View Types
 
-Prevent certain view types from appearing in the view type switcher:
+Prevent certain view types from appearing in the view type switcher with this config option. The 3D and Oblique types are disabled by default:
 
 ```yml
 disabledViewTypes:
   - 3D
   - Oblique
+```
+
+To enable 3D and Oblique views, use an empty list:
+
+```yml
+disabledViewTypes: []
 ```
 
 Valid values: `2D`, `3D`, `Oblique`
@@ -212,30 +231,45 @@ In VolView, show a dialog with the configured keyboard shortcuts by pressing the
 
 ### Saved Segment Group File Format
 
-Edited segment groups are saved as separate files within session.volview.zip files.  By default the segment group file format is `nii.gz`.  Recommended formats: `nrrd`, `nii`, `nii.gz`
+Edited segment groups are saved as separate files within session.volview.zip files.  By default the segment group file format is `nii.gz`.
 
 ```yml
 io:
   segmentGroupSaveFormat: "nii.gz" # default is nii.gz
 ```
 
-### Automatic Segment Groups by File Name
+### Automatic Layers and Segment Groups by File Name
 
-When loading files, VolView can automatically convert images to segment groups
-if they follow a naming convention. For example, an image with name `foo.seg.bar`
-will be converted to a segment group for a base image named `foo.baz`.  
-The `seg` extension is defined by the `io.segmentGroupExtension` key, which takes a
-string. Files `[baseFileName].[segmentGroupExtension].bar` will be automatically converted to
-segment groups for a base image named `[baseFileName].baz`. The default is `'seg'`.
+When loading multiple non DICOM image files, VolView can automatically associate related images based on file naming patterns.
+The extension must appear anywhere in the filename after splitting by dots,
+and the filename must start with the same prefix as the base image (everything before the first dot).
 
-This will define `myFile.seg.nrrd` as a segment group for a `myFile.nii` base file.
+For example, with a base image `patient.nrrd`:
+
+- Layers: `patient.layer.1.pet.nii`, `patient.layer.2.ct.mha`
+- Segment groups: `patient.seg.1.tumor.nii.gz`, `patient.seg.2.lesion.mha`
+
+When multiple layers or segment groups match a base image, they are sorted alphabetically by filename and added in that order.
+
+#### Segment Groups
+
+Use `segmentGroupExtension` to automatically convert matching non-DICOM images to segment groups.
+For example, `myFile.seg.nrrd` becomes a segment group for `myFile.nii`. Defaults to `"seg"`. To disable set to `""`.
 
 ```yml
 io:
   segmentGroupExtension: "seg" # "seg" is the default
 ```
 
-For multiple segmentation images, the first part of the file name up until the first `.` is what is used to match base + segmentation images. For example, this group of file names will match: `my-study.nii`, `my-study.foo.seg.nii`, `my-study.bar.seg.nii`
+#### Layering
+
+Use `layerExtension` to automatically layer matching non-DICOM images on top of the base image.
+For example, `myImage.layer.nii` is layered on top of `myImage.nii`. Defaults to `"layer"` .To disable set to `""`.
+
+```yml
+io:
+  layerExtension: "layer" # "layer" is the default
+```
 
 ### Default Window Level
 
