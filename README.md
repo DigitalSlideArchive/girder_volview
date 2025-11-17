@@ -334,46 +334,24 @@ shell:
 
 ### Develop VolView client
 
-Change the directory the Webpack copy plugin pulls from to your mounted volume with local VolView build
-In here: https://github.com/PaulHax/girder_volview/blob/main/girder_volview/web_client/webpack.helper.js#L9-L14
+To develop with a local VolView build, change the directory the Webpack copy plugin pulls from in `girder_volview/web_client/webpack.helper.js`:
 
 ```js
 new CopyWebpackPlugin([
   {
-    from: "/opt/volview-package/dist",
+    from: "/opt/volview-package/dist", // Point to your mount of VolView
     to: config.output.path,
     toType: "dir",
   },
 ]);
 ```
 
-Then build VolView with the right flags:
-https://github.com/DigitalSlideArchive/girder_volview/blob/main/volview-girder-client/buildvolview.sh#L14C2-L14C108
-
-```
-VITE_REMOTE_SERVER_URL= VITE_ENABLE_REMOTE_SAVE=true npm run build
-```
-
-### VolView Client Update Steps
-
-Change VolView commit SHA in `volview-girder-client/buildvolview.sh`
-
-Build VolView client with Girder specific CLI arguments:
+Then build VolView from source with these env vars:
 
 ```sh
-cd volview-girder-client
-source buildvolview.sh
+VITE_ENABLE_REMOTE_SAVE=true npm run build
 ```
 
-Increase version in `volview-girder-client/package.json`.
+### Updating the VolView Client Version
 
-Publish built VolView `dist` directory to NPM:
-
-```sh
-cd volview-girder-client
-npm publish
-```
-
-Update volview-girder-client version in `./grider_volview/web_client/package.json`
-
-To test new client: push up changes to a new branch on GitHub. Change `provision.divevolview.yaml` to point to your branch like this: `git+https://github.com/PaulHax/girder_volview@new-branch`.
+1. Update the [volview](https://www.npmjs.com/package/volview?activeTab=versions) version in `./girder_volview/web_client/package.json`
