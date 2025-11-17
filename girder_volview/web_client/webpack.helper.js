@@ -9,8 +9,7 @@ module.exports = function (config) {
                 from: path.join(
                     path.resolve(__dirname),
                     "node_modules",
-                    "volview-girder-client",
-                    "VolView",
+                    "volview",
                     "dist"
                 ),
                 to: config.output.path,
