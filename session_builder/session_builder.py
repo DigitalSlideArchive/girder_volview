@@ -25,6 +25,7 @@ Manifest migrations:
 
 import io
 import json
+import uuid
 import zipfile
 from typing import TypedDict
 
@@ -37,6 +38,93 @@ class Label(TypedDict, total=False):
     color: str
     strokeWidth: int
     fillColor: str
+
+
+class SegmentMask(TypedDict):
+    value: int
+    name: str
+    color: list[int]  # [R, G, B, A]
+    visible: bool
+
+
+class LabelMapMetadata(TypedDict):
+    name: str
+    parentImage: str
+    segments: dict  # {"order": [...], "byValue": {...}}
+
+
+class LabelMapEntry(TypedDict):
+    id: str
+    path: str
+    metadata: LabelMapMetadata
+    data: bytes  # VTI file contents
+
+
+# Categorical colors for segments (VolView-like palette)
+SEGMENT_COLORS = [
+    [255, 0, 0, 255],      # red
+    [0, 255, 0, 255],      # green
+    [0, 0, 255, 255],      # blue
+    [255, 255, 0, 255],    # yellow
+    [255, 0, 255, 255],    # magenta
+    [0, 255, 255, 255],    # cyan
+    [255, 128, 0, 255],    # orange
+    [128, 0, 255, 255],    # purple
+    [0, 255, 128, 255],    # spring green
+    [255, 128, 128, 255],  # light red
+    [128, 255, 128, 255],  # light green
+    [128, 128, 255, 255],  # light blue
+]
+
+
+def create_labelmap_entry(
+    labelmap_data: bytes,
+    label_names: dict[int, str],
+    parent_image_id: str = "volume",
+    name: str = "Segmentation",
+    file_format: str = "vti",
+) -> LabelMapEntry:
+    """
+    Create a labelmap entry for inclusion in session zip.
+
+    Args:
+        labelmap_data: Binary contents of labelmap file (VTI format)
+        label_names: Dict mapping segment value to name, e.g. {1: "liver", 2: "spleen"}
+        parent_image_id: ID of the parent image dataset
+        name: Display name for the segment group
+        file_format: File extension (vti, nii.gz, etc.)
+
+    Returns:
+        LabelMapEntry ready for create_session_zip
+    """
+    lm_id = str(uuid.uuid4())
+    path = f"labels/{lm_id}.{file_format}"
+
+    # Build segments metadata
+    order = sorted(label_names.keys())
+    by_value = {}
+    for i, value in enumerate(order):
+        segment_name = label_names[value]
+        color = SEGMENT_COLORS[i % len(SEGMENT_COLORS)]
+        by_value[str(value)] = SegmentMask(
+            value=value,
+            name=segment_name,
+            color=color,
+            visible=True,
+        )
+
+    metadata = LabelMapMetadata(
+        name=name,
+        parentImage=parent_image_id,
+        segments={"order": order, "byValue": by_value},
+    )
+
+    return LabelMapEntry(
+        id=lm_id,
+        path=path,
+        metadata=metadata,
+        data=labelmap_data,
+    )
 
 
 def create_sparse_manifest(
@@ -137,9 +225,21 @@ def _ensure_label(
 
 
 def create_session_zip(manifest: dict) -> bytes:
-    """Package manifest into session.volview.zip bytes."""
+    """Package manifest into session.volview.zip bytes.
+
+    If manifest contains labelMaps with 'data' fields, those are written
+    as separate files in the zip and the 'data' field is removed from
+    the manifest.json output.
+    """
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        # Extract and write labelmap binary data
+        if "labelMaps" in manifest:
+            for lm in manifest["labelMaps"]:
+                if "data" in lm:
+                    zf.writestr(lm["path"], lm["data"])
+                    del lm["data"]
+
         manifest_json = json.dumps(manifest, indent=2)
         zf.writestr("manifest.json", manifest_json)
     return buffer.getvalue()
@@ -300,16 +400,18 @@ def generate_session(
     parent_id: str,
     parent_type: str,
     annotations: list[dict] | None = None,
+    labelmaps: list[LabelMapEntry] | None = None,
     upload: bool = True,
 ) -> tuple[dict, bytes]:
     """
-    Generate session.volview.zip with optional annotations.
+    Generate session.volview.zip with optional annotations and labelmaps.
 
     Args:
         gc: Authenticated GirderClient
         parent_id: Item or folder ID
         parent_type: "item" or "folder"
         annotations: List of annotation dicts (see format below)
+        labelmaps: List of LabelMapEntry dicts (from create_labelmap_entry)
         upload: Whether to upload to Girder
 
     Returns:
@@ -343,6 +445,9 @@ def generate_session(
         if "imageId" not in annotation:
             annotation = {**annotation, "imageId": dataset_id}
         _apply_annotation(manifest, annotation)
+
+    if labelmaps:
+        manifest["labelMaps"] = list(labelmaps)
 
     zip_bytes = create_session_zip(manifest)
 
