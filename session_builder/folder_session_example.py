@@ -12,13 +12,9 @@ Usage:
 """
 
 import argparse
-import sys
-from pathlib import Path
 from girder_client import GirderClient
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "girder_volview"))
-
-from volview_session import generate_session
+from session_builder import generate_session
 
 
 def make_session(api_url: str, api_key: str, folder_id: str):

@@ -1,6 +1,6 @@
-# VolView Session Examples
+# VolView Session Builder
 
-Example for generating VolView sessions with annotations using the Python API.
+Generate VolView sessions with annotations using the Python API.
 
 ## Prerequisites
 
@@ -22,7 +22,7 @@ The Girder item ID containing the image files you want to load in VolView. The g
 
 ## Example
 
-Uses `volview_session.py` to generate sessions programmatically.
+Uses `session_builder.py` to generate sessions programmatically.
 
 ```bash
 uv run item_session_example.py \
@@ -47,7 +47,7 @@ Annotations are dictionaries with the following fields:
 ```python
 {
     "type": "rectangle" | "ruler" | "polygon",
-    "imageId": "0",                    # index into dataSources
+    "imageId": "volume",               # dataset ID (defaults to "volume")
     "firstPoint": [x, y, z],           # rectangle/ruler
     "secondPoint": [x, y, z],          # rectangle/ruler
     "points": [[x, y, z], ...],        # polygon only

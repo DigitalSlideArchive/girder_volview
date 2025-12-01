@@ -24,16 +24,13 @@ Usage:
 """
 
 import argparse
-import sys
 import tempfile
 from pathlib import Path
 
 import itk
 from girder_client import GirderClient
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "girder_volview"))
-
-from volview_session import generate_session
+from session_builder import generate_session
 
 
 def download_item_files(gc: GirderClient, item_id: str, dest_dir: Path) -> Path:
