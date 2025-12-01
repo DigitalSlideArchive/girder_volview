@@ -15,6 +15,12 @@ Usage:
     from session_builder import create_sparse_manifest, add_rectangle, create_session_zip
 
 API key docs: https://girder.readthedocs.io/en/latest/user-guide.html#api-keys
+
+VolView manifest schema (Zod):
+    https://github.com/Kitware/VolView/blob/main/src/io/state-file/schema.ts
+
+Manifest migrations:
+    https://github.com/Kitware/VolView/blob/main/src/io/state-file/migrations.ts
 """
 
 import io
@@ -22,13 +28,15 @@ import json
 import zipfile
 from typing import TypedDict
 
-MANIFEST_VERSION = "6.1.0"
+# Must match a version VolView can migrate to current. See migrations.ts link above.
+MANIFEST_VERSION = "6.1.1"
 
 
 class Label(TypedDict, total=False):
     name: str
     color: str
     strokeWidth: int
+    fillColor: str
 
 
 def create_sparse_manifest(
@@ -97,31 +105,30 @@ def _build_tool_entry(
     return entry
 
 
+def _next_label_name(manifest: dict, tool_type: str) -> str:
+    """Generate next label name like 'Label 1', 'Label 2', etc."""
+    existing = manifest.get("tools", {}).get(tool_type, {}).get("labels", {})
+    return f"Label {len(existing) + 1}"
+
+
 def _ensure_label(
     manifest: dict,
     tool_type: str,
-    label: Label | str,
+    label: Label | str | None = None,
 ) -> str:
     """Create/update label in manifest if not exists. Returns label name."""
-    if isinstance(label, str):
-        label_name = label
-        label_config = {
-            "labelName": label_name,
-            "color": "red",
-            "strokeWidth": 1,
-            "fillColor": "transparent",
-        }
-    else:
-        label_name = label.get("name", "default")
-        label_config = {
-            "labelName": label_name,
-            "color": label.get("color", "red"),
-            "strokeWidth": label.get("strokeWidth", 1),
-            "fillColor": "transparent",
-        }
-
     if tool_type not in manifest["tools"]:
         manifest["tools"][tool_type] = {"tools": [], "labels": {}}
+
+    if label is None:
+        label_name = _next_label_name(manifest, tool_type)
+        label_config = {"labelName": label_name}
+    elif isinstance(label, str):
+        label_name = label
+        label_config = {"labelName": label_name}
+    else:
+        label_name = label.get("name") or _next_label_name(manifest, tool_type)
+        label_config = {"labelName": label_name, **{k: v for k, v in label.items() if k != "name"}}
 
     if label_name not in manifest["tools"][tool_type]["labels"]:
         manifest["tools"][tool_type]["labels"][label_name] = label_config

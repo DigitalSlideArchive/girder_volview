@@ -6,6 +6,8 @@
 # ///
 """
 Example: Generate a VolView session from a Girder folder with a rectangle annotation.
+Rectangle is created in the MRI-PROSTATEx sample MRI scan:
+https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download
 
 Usage:
     uv run folder_session_example.py --api-url URL --api-key KEY --folder-id ID
@@ -28,6 +30,8 @@ def make_session(api_url: str, api_key: str, folder_id: str):
     folder = gc.getFolder(folder_id)
     print(f"Found folder: {folder['name']}")
 
+    # Coordinates for MRI-PROSTATEx sample MRI scan:
+    # https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download
     annotations = [
         {
             "type": "rectangle",
