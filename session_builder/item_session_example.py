@@ -35,7 +35,7 @@ def make_session(api_url: str, api_key: str, item_id: str):
     annotations = [
         {
             "type": "rectangle",
-            "imageId": "0",
+            "imageID": "volume",
             "firstPoint": [281.8206054852409, -42.94960034417328, 477.2959518432617],
             "secondPoint": [334.10922362127144, -1.9831074603214844, 477.2959518432617],
             "slice": 80,
