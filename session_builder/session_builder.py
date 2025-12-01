@@ -9,10 +9,10 @@ VolView Session Builder - Generate session.volview.zip files from Girder resourc
 
 Usage:
     # Standalone with uv
-    uv run volview_session.py --api-url URL --api-key KEY --item-id ID [--annotations file.json] [--upload]
+    uv run session_builder.py --api-url URL --api-key KEY --item-id ID [--annotations file.json] [--upload]
 
     # As library
-    from volview_session import create_sparse_manifest, add_rectangle, create_session_zip
+    from session_builder import create_sparse_manifest, add_rectangle, create_session_zip
 
 API key docs: https://girder.readthedocs.io/en/latest/user-guide.html#api-keys
 """

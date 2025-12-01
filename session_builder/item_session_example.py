@@ -5,22 +5,16 @@
 # ]
 # ///
 """
-Example: Using volview_session.py Python API to generate VolView sessions.
+Example: Using session_builder.py Python API to generate VolView sessions.
 
 Usage:
-    uv run python_api_example.py --api-url URL --api-key KEY --item-id ID
+    uv run item_session_example.py --api-url URL --api-key KEY --item-id ID
 """
 
 import argparse
-import sys
-from pathlib import Path
 from girder_client import GirderClient
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "girder_volview"))
-
-from volview_session import (
-    generate_session,
-)
+from session_builder import generate_session
 
 
 def make_session(api_url: str, api_key: str, item_id: str):
