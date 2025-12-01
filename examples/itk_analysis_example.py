@@ -9,14 +9,18 @@
 Example: Download image from Girder, run ITK analysis, create session with annotations.
 
 This example:
-1. Downloads a NIfTI file from a Girder item
+1. Downloads image file(s) from a Girder item or folder (supports DICOM series)
 2. Thresholds to find the body (non-air region)
 3. Extracts the body contour on the middle slice
 4. Creates a polygon annotation tracing the body outline
 5. Uploads session back to Girder
 
 Usage:
+    # For a single file item (NIfTI, etc.)
     uv run itk_analysis_example.py --api-url URL --api-key KEY --item-id ID
+
+    # For a folder of DICOM files
+    uv run itk_analysis_example.py --api-url URL --api-key KEY --folder-id ID
 """
 
 import argparse
@@ -32,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "girder_volview"))
 from volview_session import generate_session
 
 
-def download_first_file(gc: GirderClient, item_id: str, dest_dir: Path) -> Path:
+def download_item_files(gc: GirderClient, item_id: str, dest_dir: Path) -> Path:
     """Download first file from item, return local path."""
     files = list(gc.listFile(item_id))
     if not files:
@@ -42,6 +46,19 @@ def download_first_file(gc: GirderClient, item_id: str, dest_dir: Path) -> Path:
     local_path = dest_dir / file_info["name"]
     gc.downloadFile(file_info["_id"], str(local_path))
     return local_path
+
+
+def download_folder_files(gc: GirderClient, folder_id: str, dest_dir: Path) -> Path:
+    """Download all files from folder items, return directory path for ITK to read."""
+    dicom_dir = dest_dir / "dicom"
+    dicom_dir.mkdir()
+
+    for item in gc.listItem(folder_id):
+        for file_info in gc.listFile(item["_id"]):
+            local_path = dicom_dir / file_info["name"]
+            gc.downloadFile(file_info["_id"], str(local_path))
+
+    return dicom_dir
 
 
 def extract_body_contour(image_path: Path) -> list[dict]:
@@ -55,13 +72,12 @@ def extract_body_contour(image_path: Path) -> list[dict]:
     """
     image = itk.imread(str(image_path), pixel_type=itk.SS)
 
-    # Threshold to get body (above -500 HU for CT)
-    threshold = itk.BinaryThresholdImageFilter.New(image)
-    threshold.SetLowerThreshold(-500)
-    threshold.SetInsideValue(1)
-    threshold.SetOutsideValue(0)
-    threshold.Update()
-    binary = threshold.GetOutput()
+    # Otsu threshold to separate foreground from background (works for CT and MRI)
+    otsu = itk.OtsuThresholdImageFilter.New(image)
+    otsu.SetInsideValue(1)
+    otsu.SetOutsideValue(0)
+    otsu.Update()
+    binary = otsu.GetOutput()
 
     # Find connected components and keep the largest (the body)
     connected = itk.ConnectedComponentImageFilter.New(binary)
@@ -152,7 +168,9 @@ def extract_body_contour(image_path: Path) -> list[dict]:
     ]
 
 
-def make_session(api_url: str, api_key: str, item_id: str):
+def make_session(
+    api_url: str, api_key: str, item_id: str | None = None, folder_id: str | None = None
+):
     """Download image, run ITK analysis, create annotated session."""
     print("=== ITK Analysis Session Example ===\n")
 
@@ -160,15 +178,28 @@ def make_session(api_url: str, api_key: str, item_id: str):
     gc.authenticate(apiKey=api_key)
     print(f"Authenticated to {api_url}")
 
-    item = gc.getItem(item_id)
-    print(f"Found item: {item['name']}")
+    if item_id:
+        parent_id = item_id
+        parent_type = "item"
+        item = gc.getItem(item_id)
+        print(f"Found item: {item['name']}")
+    else:
+        parent_id = folder_id
+        parent_type = "folder"
+        folder = gc.getFolder(folder_id)
+        print(f"Found folder: {folder['name']}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmppath = Path(tmpdir)
 
         print("Downloading image...")
-        image_path = download_first_file(gc, item_id, tmppath)
-        print(f"Downloaded: {image_path.name}")
+        if item_id:
+            image_path = download_item_files(gc, item_id, tmppath)
+            print(f"Downloaded: {image_path.name}")
+        else:
+            image_path = download_folder_files(gc, folder_id, tmppath)
+            file_count = len(list(image_path.iterdir()))
+            print(f"Downloaded {file_count} files to {image_path.name}/")
 
         print("Extracting body contour...")
         annotations = extract_body_contour(image_path)
@@ -180,14 +211,18 @@ def make_session(api_url: str, api_key: str, item_id: str):
 
     manifest, zip_bytes = generate_session(
         gc,
-        parent_id=item_id,
-        parent_type="item",
+        parent_id=parent_id,
+        parent_type=parent_type,
         annotations=annotations,
         upload=True,
     )
 
     print(f"\nGenerated session with {len(annotations)} polygon annotation")
-    print(f"Session uploaded to item ({len(zip_bytes)} bytes)")
+    print(f"Session has {len(manifest['dataSources'])} data sources")
+    if annotations:
+        polygon_tool = manifest['tools']['polygons']['tools'][0]
+        print(f"Polygon imageID: {polygon_tool['imageID']}")
+    print(f"Session uploaded to {parent_type} ({len(zip_bytes)} bytes)")
 
     return manifest
 
@@ -198,10 +233,12 @@ def main():
     )
     parser.add_argument("--api-url", required=True, help="Girder API URL")
     parser.add_argument("--api-key", required=True, help="Girder API key")
-    parser.add_argument("--item-id", required=True, help="Item ID with image file")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--item-id", help="Item ID with image file")
+    group.add_argument("--folder-id", help="Folder ID with DICOM files")
     args = parser.parse_args()
 
-    make_session(args.api_url, args.api_key, args.item_id)
+    make_session(args.api_url, args.api_key, args.item_id, args.folder_id)
 
 
 if __name__ == "__main__":
