@@ -31,24 +31,45 @@ class Label(TypedDict, total=False):
     strokeWidth: int
 
 
-def create_sparse_manifest(data_sources: list[dict]) -> dict:
+def create_sparse_manifest(
+    data_sources: list[dict], dataset_id: str = "volume"
+) -> dict:
     """
     Create minimal VolView manifest from data source URLs.
 
+    Groups all sources into a collection and creates a named dataset.
+    This ensures annotations can reliably reference the resulting volume
+    regardless of which individual files successfully load.
+
     Args:
         data_sources: List of {url: str, name?: str} dicts
+        dataset_id: ID to assign to the dataset (used by annotations as imageID)
 
     Returns:
-        Manifest dict with version, dataSources, and tools.
+        Manifest dict with version, dataSources, datasets, and tools.
     """
     sources = []
+    source_ids = []
     for i, source in enumerate(data_sources):
         entry = {"id": i, "type": "uri", "uri": source["url"]}
         if "name" in source:
             entry["name"] = source["name"]
         sources.append(entry)
+        source_ids.append(i)
 
-    return {"version": MANIFEST_VERSION, "dataSources": sources, "tools": {}}
+    # Add collection that groups all sources
+    collection_id = len(sources)
+    sources.append({"id": collection_id, "type": "collection", "sources": source_ids})
+
+    # Create dataset referencing the collection
+    datasets = [{"id": dataset_id, "dataSourceId": collection_id}]
+
+    return {
+        "version": MANIFEST_VERSION,
+        "dataSources": sources,
+        "datasets": datasets,
+        "tools": {},
+    }
 
 
 def _build_tool_entry(
@@ -398,14 +419,13 @@ def generate_session(
     else:
         data_sources = get_folder_files(gc, parent_id)
 
-    manifest = create_sparse_manifest(data_sources)
+    dataset_id = "volume"
+    manifest = create_sparse_manifest(data_sources, dataset_id)
 
-    # When VolView merges multiple files (e.g., DICOM series) into one volume,
-    # the last data source ID ends up mapped to that volume.
-    last_source_id = str(len(data_sources) - 1)
+    # Annotations without imageId default to the dataset
     for annotation in annotations or []:
         if "imageId" not in annotation:
-            annotation = {**annotation, "imageId": last_source_id}
+            annotation = {**annotation, "imageId": dataset_id}
         _apply_annotation(manifest, annotation)
 
     zip_bytes = create_session_zip(manifest)
