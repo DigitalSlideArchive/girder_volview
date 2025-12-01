@@ -12,7 +12,7 @@ Usage:
     uv run session_builder.py --api-url URL --api-key KEY --item-id ID [--annotations file.json] [--upload]
 
     # As library
-    from session_builder import create_sparse_manifest, add_rectangle, create_session_zip
+    from session_builder import generate_session, create_sparse_manifest, create_session_zip
 
 API key docs: https://girder.readthedocs.io/en/latest/user-guide.html#api-keys
 
@@ -134,80 +134,6 @@ def _ensure_label(
         manifest["tools"][tool_type]["labels"][label_name] = label_config
 
     return label_name
-
-
-def add_rectangle(
-    manifest: dict,
-    image_id: str,
-    first_point: list[float],
-    second_point: list[float],
-    slice_num: int = 0,
-    plane_normal: list[float] | None = None,
-    plane_origin: list[float] | None = None,
-    label: Label | str = "default",
-    metadata: dict | None = None,
-) -> None:
-    """Add rectangle annotation to manifest (mutates manifest)."""
-    if plane_normal is None:
-        plane_normal = [0, 0, 1]
-    if plane_origin is None:
-        plane_origin = [0, 0, 0]
-
-    label_name = _ensure_label(manifest, "rectangles", label)
-    tool_data = {"firstPoint": first_point, "secondPoint": second_point}
-    entry = _build_tool_entry(
-        tool_data, image_id, slice_num, plane_normal, plane_origin, label_name, metadata
-    )
-    manifest["tools"]["rectangles"]["tools"].append(entry)
-
-
-def add_ruler(
-    manifest: dict,
-    image_id: str,
-    first_point: list[float],
-    second_point: list[float],
-    slice_num: int = 0,
-    plane_normal: list[float] | None = None,
-    plane_origin: list[float] | None = None,
-    label: Label | str = "default",
-    metadata: dict | None = None,
-) -> None:
-    """Add ruler annotation to manifest (mutates manifest)."""
-    if plane_normal is None:
-        plane_normal = [0, 0, 1]
-    if plane_origin is None:
-        plane_origin = [0, 0, 0]
-
-    label_name = _ensure_label(manifest, "rulers", label)
-    tool_data = {"firstPoint": first_point, "secondPoint": second_point}
-    entry = _build_tool_entry(
-        tool_data, image_id, slice_num, plane_normal, plane_origin, label_name, metadata
-    )
-    manifest["tools"]["rulers"]["tools"].append(entry)
-
-
-def add_polygon(
-    manifest: dict,
-    image_id: str,
-    points: list[list[float]],
-    slice_num: int = 0,
-    plane_normal: list[float] | None = None,
-    plane_origin: list[float] | None = None,
-    label: Label | str = "default",
-    metadata: dict | None = None,
-) -> None:
-    """Add polygon annotation to manifest (mutates manifest)."""
-    if plane_normal is None:
-        plane_normal = [0, 0, 1]
-    if plane_origin is None:
-        plane_origin = [0, 0, 0]
-
-    label_name = _ensure_label(manifest, "polygons", label)
-    tool_data = {"points": points}
-    entry = _build_tool_entry(
-        tool_data, image_id, slice_num, plane_normal, plane_origin, label_name, metadata
-    )
-    manifest["tools"]["polygons"]["tools"].append(entry)
 
 
 def create_session_zip(manifest: dict) -> bytes:
@@ -339,6 +265,10 @@ def upload_session(
 def _apply_annotation(manifest: dict, annotation: dict) -> None:
     """Apply a single annotation to the manifest."""
     ann_type = annotation.get("type")
+    if ann_type not in ("rectangle", "ruler", "polygon"):
+        return
+
+    tool_type = f"{ann_type}s"  # rectangles, rulers, polygons
     image_id = annotation.get("imageId", "0")
     slice_num = annotation.get("slice", 0)
     plane_normal = annotation.get("planeNormal", [0, 0, 1])
@@ -347,43 +277,22 @@ def _apply_annotation(manifest: dict, annotation: dict) -> None:
 
     label_name = annotation.get("label", "default")
     color = annotation.get("color", "#ff0000")
-    label: Label | str = {"name": label_name, "color": color, "strokeWidth": 2}
+    label: Label = {"name": label_name, "color": color, "strokeWidth": 2}
 
-    if ann_type == "rectangle":
-        add_rectangle(
-            manifest,
-            image_id,
-            annotation["firstPoint"],
-            annotation["secondPoint"],
-            slice_num,
-            plane_normal,
-            plane_origin,
-            label,
-            metadata,
-        )
-    elif ann_type == "ruler":
-        add_ruler(
-            manifest,
-            image_id,
-            annotation["firstPoint"],
-            annotation["secondPoint"],
-            slice_num,
-            plane_normal,
-            plane_origin,
-            label,
-            metadata,
-        )
-    elif ann_type == "polygon":
-        add_polygon(
-            manifest,
-            image_id,
-            annotation["points"],
-            slice_num,
-            plane_normal,
-            plane_origin,
-            label,
-            metadata,
-        )
+    label_name = _ensure_label(manifest, tool_type, label)
+
+    if ann_type == "polygon":
+        tool_data = {"points": annotation["points"]}
+    else:
+        tool_data = {
+            "firstPoint": annotation["firstPoint"],
+            "secondPoint": annotation["secondPoint"],
+        }
+
+    entry = _build_tool_entry(
+        tool_data, image_id, slice_num, plane_normal, plane_origin, label_name, metadata
+    )
+    manifest["tools"][tool_type]["tools"].append(entry)
 
 
 def generate_session(

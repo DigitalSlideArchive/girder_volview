@@ -5,7 +5,9 @@
 # ]
 # ///
 """
-Example: Using session_builder.py Python API to generate VolView sessions.
+Example: Generate a VolView session from a Girder item with a rectangle annotation.
+Rectangle is created in the CT_Electrodes sample CT scan:
+https://raw.githubusercontent.com/neurolabusc/niivue-images/main/CT_Electrodes.nii.gz
 
 Usage:
     uv run item_session_example.py --api-url URL --api-key KEY --item-id ID
@@ -18,7 +20,7 @@ from session_builder import generate_session
 
 
 def make_session(api_url: str, api_key: str, item_id: str):
-    """Generate session from Girder item with annotations."""
+    """Generate session from Girder item with a rectangle annotation."""
     print("=== Generate session from Girder item ===\n")
 
     gc = GirderClient(apiUrl=api_url)
@@ -28,24 +30,19 @@ def make_session(api_url: str, api_key: str, item_id: str):
     item = gc.getItem(item_id)
     print(f"Found item: {item['name']}")
 
+    # Coordinates for CT_Electrodes sample CT scan:
+    # https://raw.githubusercontent.com/neurolabusc/niivue-images/main/CT_Electrodes.nii.gz
     annotations = [
         {
             "type": "rectangle",
             "imageId": "0",
-            "firstPoint": [100, 100, 0],
-            "secondPoint": [200, 200, 0],
-            "slice": 50,
-            "label": "finding",
-            "color": "#ff6600",
-            "metadata": {"notes": "Suspicious region"},
-        },
-        {
-            "type": "ruler",
-            "imageId": "0",
-            "firstPoint": [50, 50, 0],
-            "secondPoint": [150, 50, 0],
-            "slice": 50,
-            "label": "diameter",
+            "firstPoint": [281.8206054852409, -42.94960034417328, 477.2959518432617],
+            "secondPoint": [334.10922362127144, -1.9831074603214844, 477.2959518432617],
+            "slice": 80,
+            "planeNormal": [0, 0, 1],
+            "planeOrigin": [388.260009765625, 81.11995697021484, 477.2959518432617],
+            "label": "Label 1",
+            "color": "red",
         },
     ]
 
