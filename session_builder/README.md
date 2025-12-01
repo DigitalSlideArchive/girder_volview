@@ -40,6 +40,20 @@ uv run item_session_example.py \
   --item-id 689e31559a0902efec348da2
 ```
 
+## How It Works
+
+The session builder creates a `session.volview.zip` containing a `manifest.json` that configures VolView.
+
+**Data Source → Collection → Dataset pattern:**
+
+1. Each file URL becomes a numbered "uri" data source (id: 0, 1, 2, ...)
+2. A "collection" source groups all uri sources together
+3. A "dataset" with ID `"volume"` references the collection
+4. When VolView loads, the collection becomes a single volume
+5. Annotations reference the dataset ID (`"volume"`), not individual source IDs
+
+This ensures annotations work regardless of how many files are loaded.
+
 ## Annotation Format
 
 Annotations are dictionaries with the following fields:
@@ -47,7 +61,7 @@ Annotations are dictionaries with the following fields:
 ```python
 {
     "type": "rectangle" | "ruler" | "polygon",
-    "imageId": "volume",               # dataset ID (defaults to "volume")
+    "imageID": "volume",               # dataset ID (defaults to "volume")
     "firstPoint": [x, y, z],           # rectangle/ruler
     "secondPoint": [x, y, z],          # rectangle/ruler
     "points": [[x, y, z], ...],        # polygon only

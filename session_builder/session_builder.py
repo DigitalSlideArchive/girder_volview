@@ -133,9 +133,15 @@ def create_sparse_manifest(
     """
     Create minimal VolView manifest from data source URLs.
 
-    Groups all sources into a collection and creates a named dataset.
-    This ensures annotations can reliably reference the resulting volume
-    regardless of which individual files successfully load.
+    How the collection pattern works:
+        1. Each URL becomes a numbered "uri" data source (id: 0, 1, 2, ...)
+        2. A "collection" source groups all uri sources together
+        3. A "dataset" references the collection with a stable ID
+        4. When VolView loads, the collection becomes a single volume
+        5. Annotations reference the dataset ID (e.g., "volume") not source IDs
+
+    This pattern ensures annotations work regardless of how many files
+    are loaded or which individual files succeed.
 
     Args:
         data_sources: List of {url: str, name?: str} dicts
@@ -369,7 +375,7 @@ def _apply_annotation(manifest: dict, annotation: dict) -> None:
         return
 
     tool_type = f"{ann_type}s"  # rectangles, rulers, polygons
-    image_id = annotation.get("imageId", "0")
+    image_id = annotation.get("imageID", "volume")
     slice_num = annotation.get("slice", 0)
     plane_normal = annotation.get("planeNormal", [0, 0, 1])
     plane_origin = annotation.get("planeOrigin", [0, 0, 0])
@@ -420,10 +426,10 @@ def generate_session(
     Annotation format:
         {
             "type": "rectangle" | "ruler" | "polygon",
-            "imageId": "0",
-            "firstPoint": [x, y, z],      # rectangle/ruler
-            "secondPoint": [x, y, z],     # rectangle/ruler
-            "points": [[x,y,z], ...],     # polygon
+            "imageID": "volume",           # dataset ID (default: "volume")
+            "firstPoint": [x, y, z],       # rectangle/ruler
+            "secondPoint": [x, y, z],      # rectangle/ruler
+            "points": [[x,y,z], ...],      # polygon
             "slice": 0,
             "planeNormal": [0, 0, 1],
             "planeOrigin": [0, 0, 0],
@@ -440,10 +446,9 @@ def generate_session(
     dataset_id = "volume"
     manifest = create_sparse_manifest(data_sources, dataset_id)
 
-    # Annotations without imageId default to the dataset
     for annotation in annotations or []:
-        if "imageId" not in annotation:
-            annotation = {**annotation, "imageId": dataset_id}
+        if "imageID" not in annotation:
+            annotation = {**annotation, "imageID": dataset_id}
         _apply_annotation(manifest, annotation)
 
     if labelmaps:
