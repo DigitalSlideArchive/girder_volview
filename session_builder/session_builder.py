@@ -26,11 +26,14 @@ Manifest migrations:
 import io
 import json
 import uuid
+from pathlib import Path
 from typing import TypedDict
 from girder_client import GirderClient
 
 # Must match a version VolView can migrate to current. See migrations.ts link above.
 MANIFEST_VERSION = "6.1.1"
+
+SESSION_FILE_EXTENSIONS = (".volview.zip", ".volview.json")
 
 
 class Label(TypedDict, total=False):
@@ -268,7 +271,7 @@ def get_item_files(gc, item_id: str) -> list[dict]:
             "file_id": str(f["_id"]),
         }
         for f in files
-        if not f["name"].endswith((".volview.zip", ".volview.json"))
+        if not f["name"].endswith(SESSION_FILE_EXTENSIONS)
     ]
 
 
@@ -290,29 +293,19 @@ def get_folder_files(
     Returns:
         List of {url: str, name: str, file_id: str} dicts
     """
-    api_url = gc.urlBase
     result = []
+    items_to_process = []
 
-    if item_ids or folder_ids:
-        for item_id in item_ids or []:
-            result.extend(get_item_files(gc, item_id))
-        for fid in folder_ids or []:
-            for item in gc.listItem(fid):
-                result.extend(get_item_files(gc, str(item["_id"])))
-    else:
-        for item in gc.listItem(folder_id):
-            files = list(gc.listFile(str(item["_id"])))
-            for f in files:
-                if not f["name"].endswith((".volview.zip", ".volview.json")):
-                    result.append(
-                        {
-                            "url": make_file_download_url(
-                                api_url, str(f["_id"]), f["name"]
-                            ),
-                            "name": f["name"],
-                            "file_id": str(f["_id"]),
-                        }
-                    )
+    if item_ids:
+        items_to_process.extend(item_ids)
+    if folder_ids:
+        for fid in folder_ids:
+            items_to_process.extend(str(item["_id"]) for item in gc.listItem(fid))
+    if not items_to_process:
+        items_to_process = [str(item["_id"]) for item in gc.listItem(folder_id)]
+
+    for item_id in items_to_process:
+        result.extend(get_item_files(gc, item_id))
 
     return result
 
@@ -373,6 +366,39 @@ def upload_labelmap(
         parentType=parent_type,
     )
     return make_file_download_url(gc.urlBase, str(file_doc["_id"]), filename)
+
+
+def download_folder_files(
+    gc: GirderClient,
+    folder_id: str,
+    dest_dir: Path,
+    extra_exclude: tuple[str, ...] = (),
+) -> list[Path]:
+    """
+    Download all files from folder items, filtering session files.
+
+    Args:
+        gc: Authenticated GirderClient
+        folder_id: Folder ID to download from
+        dest_dir: Directory to download files into
+        extra_exclude: Additional file extensions to exclude
+
+    Returns:
+        List of downloaded file paths
+    """
+    files_dir = dest_dir / "files"
+    files_dir.mkdir()
+
+    exclude = SESSION_FILE_EXTENSIONS + extra_exclude
+    downloaded = []
+    for item in gc.listItem(folder_id):
+        for file_info in gc.listFile(item["_id"]):
+            if file_info["name"].endswith(exclude):
+                continue
+            local_path = files_dir / file_info["name"]
+            gc.downloadFile(file_info["_id"], str(local_path))
+            downloaded.append(local_path)
+    return downloaded
 
 
 #  High-Level Workflow Function
@@ -459,6 +485,11 @@ def generate_session(
         data_sources = get_item_files(gc, parent_id)
     else:
         data_sources = get_folder_files(gc, parent_id)
+
+    # Filter out labelmap URLs from main image sources to avoid loading them twice
+    if labelmaps:
+        labelmap_urls = {lm["url"] for lm in labelmaps}
+        data_sources = [ds for ds in data_sources if ds["url"] not in labelmap_urls]
 
     dataset_id = "volume"
     manifest = create_sparse_manifest(data_sources, dataset_id)

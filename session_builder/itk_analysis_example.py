@@ -33,7 +33,7 @@ import numpy as np
 import itk
 from girder_client import GirderClient
 
-from session_builder import generate_session
+from session_builder import generate_session, download_folder_files
 
 
 def download_item_files(gc: GirderClient, item_id: str, dest_dir: Path) -> Path:
@@ -46,29 +46,6 @@ def download_item_files(gc: GirderClient, item_id: str, dest_dir: Path) -> Path:
     local_path = dest_dir / file_info["name"]
     gc.downloadFile(file_info["_id"], str(local_path))
     return local_path
-
-
-def download_folder_files(gc: GirderClient, folder_id: str, dest_dir: Path) -> Path:
-    """Download all files from folder items.
-
-    Returns single file path if only one file, otherwise directory for DICOM series.
-    Filters out VolView session files (.volview.zip, .volview.json).
-    """
-    files_dir = dest_dir / "files"
-    files_dir.mkdir()
-
-    downloaded_files = []
-    for item in gc.listItem(folder_id):
-        for file_info in gc.listFile(item["_id"]):
-            if file_info["name"].endswith((".volview.zip", ".volview.json")):
-                continue
-            local_path = files_dir / file_info["name"]
-            gc.downloadFile(file_info["_id"], str(local_path))
-            downloaded_files.append(local_path)
-
-    if len(downloaded_files) == 1:
-        return downloaded_files[0]
-    return files_dir
 
 
 def read_image_as_3d(image_path: Path):
@@ -247,12 +224,13 @@ def make_session(
             image_path = download_item_files(gc, item_id, tmppath)
             print(f"Downloaded: {image_path.name}")
         else:
-            image_path = download_folder_files(gc, folder_id, tmppath)
-            if image_path.is_file():
+            downloaded = download_folder_files(gc, folder_id, tmppath)
+            if len(downloaded) == 1:
+                image_path = downloaded[0]
                 print(f"Downloaded: {image_path.name}")
             else:
-                file_count = len(list(image_path.iterdir()))
-                print(f"Downloaded {file_count} files to {image_path.name}/")
+                image_path = downloaded[0].parent  # files_dir for DICOM series
+                print(f"Downloaded {len(downloaded)} files to {image_path.name}/")
 
         print("Reading image...")
         image = read_image_as_3d(image_path)

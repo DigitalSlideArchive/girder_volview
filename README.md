@@ -10,17 +10,14 @@ Open Items in [VolView](https://github.com/Kitware/VolView) with a "Open in VolV
 - VTK image `.vti`
 - And many more. Try dragging and dropping the file(s) on the [VolView Demo Site](https://volview.netlify.app/)
 
-## Layers of Images
-
-To automatically overlay PET and CT DICOM series, open the 2 series together with the Open in VolView button.
-
-The overlaid image is "resampled" to match the physical and pixel space of the base image.  
-If there is no overlap in physical space as gleaned from the images' metadata, the overlay won't work.
-
-You can also layer PET and CT after loading in VolView.
-First load the base volume, say the CT one. Then click the "Add Layer" option on the overlay image, probably PET one.
-
 ## Client Configuration file
+
+Using the client YAML file, anyone can change:
+
+- The default view layout
+- Associate files to layer or apply as segmentations via file name
+- Default window and level
+- Default labels for vector annotation tools
 
 Add a `.volview_config.yaml` file higher in the folder hierarchy. Example file:
 
@@ -280,6 +277,12 @@ windowing:
   level: 100
   width: 50
 ```
+
+## Session Builder
+
+Generate VolView sessions programmatically with Python. Create sessions with annotations or labelmaps from analysis pipelines.
+
+See [session_builder/README.md](./session_builder/README.md) for API docs and examples.
 
 ## Customize File Browsing to Group Images and add Columns
 
