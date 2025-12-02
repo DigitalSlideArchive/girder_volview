@@ -55,7 +55,7 @@ def make_session(api_url: str, api_key: str, item_id: str):
     )
 
     print(f"Generated session with {len(manifest['dataSources'])} data sources")
-    print(f"Session uploaded to item ({len(json_bytes)} bytes)")
+    print("Session uploaded to item")
 
     return manifest
 

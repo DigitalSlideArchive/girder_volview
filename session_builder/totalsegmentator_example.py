@@ -37,6 +37,7 @@ from totalsegmentator.nifti_ext_header import load_multilabel_nifti
 from session_builder import (
     generate_session,
     upload_labelmap,
+    download_folder_files,
     LabelMapInput,
 )
 
@@ -53,32 +54,6 @@ def download_item_files(
     local_path = dest_dir / file_info["name"]
     gc.downloadFile(file_info["_id"], str(local_path))
     return local_path, file_info["name"]
-
-
-def download_folder_files(
-    gc: GirderClient, folder_id: str, dest_dir: Path
-) -> tuple[Path, str]:
-    """Download all files from folder items for DICOM series."""
-    files_dir = dest_dir / "files"
-    files_dir.mkdir()
-
-    downloaded_files = []
-    for item in gc.listItem(folder_id):
-        for file_info in gc.listFile(item["_id"]):
-            if file_info["name"].endswith((".volview.zip", ".volview.json")):
-                continue
-            if file_info["name"].endswith(".seg.nii.gz"):
-                continue
-            local_path = files_dir / file_info["name"]
-            gc.downloadFile(file_info["_id"], str(local_path))
-            downloaded_files.append((local_path, file_info["name"]))
-
-    if len(downloaded_files) == 1:
-        local_path, filename = downloaded_files[0]
-        return local_path, get_base_name(filename)
-
-    folder = gc.getFolder(folder_id)
-    return files_dir, folder["name"]
 
 
 def get_base_name(filename: str) -> str:
@@ -165,14 +140,19 @@ def segment_and_upload(
             base_name = get_base_name(original_name)
             print(f"Downloaded: {original_name}")
         else:
-            image_path, base_name = download_folder_files(gc, folder_id, tmppath)
-            if image_path.is_file():
+            downloaded = download_folder_files(
+                gc, folder_id, tmppath, extra_exclude=(".seg.nii.gz",)
+            )
+            if len(downloaded) == 1:
+                image_path = downloaded[0]
+                base_name = get_base_name(image_path.name)
                 print(f"Downloaded: {image_path.name}")
             else:
-                file_count = len(list(image_path.iterdir()))
-                print(f"Downloaded {file_count} files (DICOM series)")
+                image_path = downloaded[0].parent  # files_dir for DICOM series
+                base_name = folder["name"]  # folder fetched earlier
+                print(f"Downloaded {len(downloaded)} files (DICOM series)")
 
-        seg_path = tmppath / f"{base_name}.seg.nii.gz"
+        seg_path = tmppath / f"{base_name}-total.seg.nii.gz"
 
         print(f"\nRunning TotalSegmentator (fast={fast})...")
         if roi_subset:
@@ -193,15 +173,14 @@ def segment_and_upload(
         print(f"Segmentation size: {len(seg_bytes) / 1024 / 1024:.1f} MB")
 
         print("\nUploading segmentation file to Girder...")
-        seg_filename = f"{base_name}.seg.nii.gz"
         seg_url = upload_labelmap(
             gc,
             labelmap_bytes=seg_bytes,
-            filename=seg_filename,
+            filename=seg_path.name,
             parent_id=parent_id,
             parent_type=parent_type,
         )
-        print(f"Uploaded: {seg_filename}")
+        print(f"Uploaded: {seg_path.name}")
 
         print("\nGenerating VolView session with segment metadata...")
         labelmap: LabelMapInput = {
