@@ -14,7 +14,7 @@ Example: `http://localhost:8080/api/v1`
 
 Create an API key from your Girder user account settings.
 
-Docs: https://girder.readthedocs.io/en/latest/user-guide.html#api-keys
+https://girder.readthedocs.io/en/latest/user-guide.html#api-keys
 
 ### Item ID
 

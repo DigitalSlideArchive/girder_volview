@@ -83,6 +83,7 @@ def create_labelmap_entry(
     parent_image_id: str = "volume",
     name: str = "Segmentation",
     file_format: str = "vti",
+    filename: str | None = None,
 ) -> LabelMapEntry:
     """
     Create a labelmap entry for inclusion in session zip.
@@ -93,12 +94,14 @@ def create_labelmap_entry(
         parent_image_id: ID of the parent image dataset
         name: Display name for the segment group
         file_format: File extension (vti, nii.gz, etc.)
+        filename: Base filename without extension (default: UUID)
 
     Returns:
         LabelMapEntry ready for create_session_zip
     """
     lm_id = str(uuid.uuid4())
-    path = f"labels/{lm_id}.{file_format}"
+    file_basename = filename or lm_id
+    path = f"labels/{file_basename}.{file_format}"
 
     # Build segments metadata
     order = sorted(label_names.keys())
@@ -288,7 +291,7 @@ def get_item_files(gc, item_id: str) -> list[dict]:
             "file_id": str(f["_id"]),
         }
         for f in files
-        if not f["name"].endswith(".volview.zip")
+        if not f["name"].endswith((".volview.zip", ".volview.json"))
     ]
 
 
@@ -323,7 +326,7 @@ def get_folder_files(
         for item in gc.listItem(folder_id):
             files = list(gc.listFile(str(item["_id"])))
             for f in files:
-                if not f["name"].endswith(".volview.zip"):
+                if not f["name"].endswith((".volview.zip", ".volview.json")):
                     result.append(
                         {
                             "url": make_file_download_url(
