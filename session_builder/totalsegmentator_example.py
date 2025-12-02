@@ -35,8 +35,9 @@ from totalsegmentator.python_api import totalsegmentator
 from totalsegmentator.nifti_ext_header import load_multilabel_nifti
 
 from session_builder import (
-    create_labelmap_entry,
     generate_session,
+    upload_labelmap,
+    LabelMapInput,
 )
 
 
@@ -191,17 +192,25 @@ def segment_and_upload(
         seg_bytes = read_file_bytes(seg_path)
         print(f"Segmentation size: {len(seg_bytes) / 1024 / 1024:.1f} MB")
 
-        print("\nGenerating VolView session with segment metadata...")
-        labelmap = create_labelmap_entry(
-            labelmap_data=seg_bytes,
-            label_names=label_names,
-            parent_image_id="volume",
-            name=f"TotalSegmentator ({base_name})",
-            file_format="nii.gz",
-            filename=f"{base_name}-total.seg",
+        print("\nUploading segmentation file to Girder...")
+        seg_filename = f"{base_name}.seg.nii.gz"
+        seg_url = upload_labelmap(
+            gc,
+            labelmap_bytes=seg_bytes,
+            filename=seg_filename,
+            parent_id=parent_id,
+            parent_type=parent_type,
         )
+        print(f"Uploaded: {seg_filename}")
 
-        manifest, zip_bytes = generate_session(
+        print("\nGenerating VolView session with segment metadata...")
+        labelmap: LabelMapInput = {
+            "url": seg_url,
+            "name": f"TotalSegmentator ({base_name})",
+            "label_names": label_names,
+        }
+
+        manifest, json_bytes = generate_session(
             gc,
             parent_id=parent_id,
             parent_type=parent_type,
@@ -209,7 +218,7 @@ def segment_and_upload(
             upload=True,
         )
 
-        print(f"\nSession uploaded ({len(zip_bytes) / 1024 / 1024:.1f} MB)")
+        print(f"\nSession uploaded ({len(json_bytes)} bytes)")
         print(f"Contains {len(label_names)} named segments")
 
 

@@ -5,14 +5,14 @@
 # ]
 # ///
 """
-VolView Session Builder - Generate session.volview.zip files from Girder resources.
+VolView Session Builder - Generate session.volview.json files from Girder resources.
 
 Usage:
     # Standalone with uv
     uv run session_builder.py --api-url URL --api-key KEY --item-id ID [--annotations file.json] [--upload]
 
     # As library
-    from session_builder import generate_session, create_sparse_manifest, create_session_zip
+    from session_builder import generate_session, create_sparse_manifest, upload_labelmap
 
 API key docs: https://girder.readthedocs.io/en/latest/user-guide.html#api-keys
 
@@ -26,8 +26,8 @@ Manifest migrations:
 import io
 import json
 import uuid
-import zipfile
 from typing import TypedDict
+from girder_client import GirderClient
 
 # Must match a version VolView can migrate to current. See migrations.ts link above.
 MANIFEST_VERSION = "6.1.1"
@@ -55,22 +55,27 @@ class LabelMapMetadata(TypedDict):
 
 class LabelMapEntry(TypedDict):
     id: str
-    path: str
+    dataSourceId: int
     metadata: LabelMapMetadata
-    data: bytes  # VTI file contents
+
+
+class LabelMapInput(TypedDict):
+    url: str  # Download URL for the labelmap file
+    name: str  # Display name for the segment group
+    label_names: dict[int, str]  # {1: "liver", 2: "spleen", ...}
 
 
 # Categorical colors for segments (VolView-like palette)
 SEGMENT_COLORS = [
-    [255, 0, 0, 255],      # red
-    [0, 255, 0, 255],      # green
-    [0, 0, 255, 255],      # blue
-    [255, 255, 0, 255],    # yellow
-    [255, 0, 255, 255],    # magenta
-    [0, 255, 255, 255],    # cyan
-    [255, 128, 0, 255],    # orange
-    [128, 0, 255, 255],    # purple
-    [0, 255, 128, 255],    # spring green
+    [255, 0, 0, 255],  # red
+    [0, 255, 0, 255],  # green
+    [0, 0, 255, 255],  # blue
+    [255, 255, 0, 255],  # yellow
+    [255, 0, 255, 255],  # magenta
+    [0, 255, 255, 255],  # cyan
+    [255, 128, 0, 255],  # orange
+    [128, 0, 255, 255],  # purple
+    [0, 255, 128, 255],  # spring green
     [255, 128, 128, 255],  # light red
     [128, 255, 128, 255],  # light green
     [128, 128, 255, 255],  # light blue
@@ -78,32 +83,25 @@ SEGMENT_COLORS = [
 
 
 def create_labelmap_entry(
-    labelmap_data: bytes,
+    data_source_id: int,
     label_names: dict[int, str],
     parent_image_id: str = "volume",
     name: str = "Segmentation",
-    file_format: str = "vti",
-    filename: str | None = None,
 ) -> LabelMapEntry:
     """
-    Create a labelmap entry for inclusion in session zip.
+    Create a labelmap entry that references a URI data source.
 
     Args:
-        labelmap_data: Binary contents of labelmap file (VTI format)
+        data_source_id: ID of the data source in manifest's dataSources array
         label_names: Dict mapping segment value to name, e.g. {1: "liver", 2: "spleen"}
         parent_image_id: ID of the parent image dataset
         name: Display name for the segment group
-        file_format: File extension (vti, nii.gz, etc.)
-        filename: Base filename without extension (default: UUID)
 
     Returns:
-        LabelMapEntry ready for create_session_zip
+        LabelMapEntry for inclusion in manifest
     """
     lm_id = str(uuid.uuid4())
-    file_basename = filename or lm_id
-    path = f"labels/{file_basename}.{file_format}"
 
-    # Build segments metadata
     order = sorted(label_names.keys())
     by_value = {}
     for i, value in enumerate(order):
@@ -124,9 +122,8 @@ def create_labelmap_entry(
 
     return LabelMapEntry(
         id=lm_id,
-        path=path,
+        dataSourceId=data_source_id,
         metadata=metadata,
-        data=labelmap_data,
     )
 
 
@@ -173,6 +170,7 @@ def create_sparse_manifest(
         "version": MANIFEST_VERSION,
         "dataSources": sources,
         "datasets": datasets,
+        "primarySelection": dataset_id,
         "tools": {},
     }
 
@@ -225,7 +223,10 @@ def _ensure_label(
         label_config = {"labelName": label_name}
     else:
         label_name = label.get("name") or _next_label_name(manifest, tool_type)
-        label_config = {"labelName": label_name, **{k: v for k, v in label.items() if k != "name"}}
+        label_config = {
+            "labelName": label_name,
+            **{k: v for k, v in label.items() if k != "name"},
+        }
 
     if label_name not in manifest["tools"][tool_type]["labels"]:
         manifest["tools"][tool_type]["labels"][label_name] = label_config
@@ -233,33 +234,9 @@ def _ensure_label(
     return label_name
 
 
-def create_session_zip(manifest: dict) -> bytes:
-    """Package manifest into session.volview.zip bytes.
-
-    If manifest contains labelMaps with 'data' fields, those are written
-    as separate files in the zip and the 'data' field is removed from
-    the manifest.json output.
-    """
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        # Extract and write labelmap binary data
-        if "labelMaps" in manifest:
-            for lm in manifest["labelMaps"]:
-                if "data" in lm:
-                    zf.writestr(lm["path"], lm["data"])
-                    del lm["data"]
-
-        manifest_json = json.dumps(manifest, indent=2)
-        zf.writestr("manifest.json", manifest_json)
-    return buffer.getvalue()
-
-
-def load_manifest_from_zip(zip_bytes: bytes) -> dict:
-    """Extract and parse manifest.json from zip bytes."""
-    buffer = io.BytesIO(zip_bytes)
-    with zipfile.ZipFile(buffer, "r") as zf:
-        manifest_json = zf.read("manifest.json")
-        return json.loads(manifest_json)
+def serialize_manifest(manifest: dict) -> bytes:
+    """Serialize manifest to JSON bytes for session.volview.json."""
+    return json.dumps(manifest, indent=2).encode("utf-8")
 
 
 #  Girder Client Functions
@@ -344,28 +321,58 @@ def upload_session(
     gc,
     parent_id: str,
     parent_type: str,
-    zip_bytes: bytes,
+    json_bytes: bytes,
 ) -> dict:
     """
-    Upload session.volview.zip to Girder, returns file doc.
+    Upload session.volview.json to Girder, returns file doc.
 
     Args:
         gc: Authenticated GirderClient
         parent_id: Item or folder ID
         parent_type: "item" or "folder"
-        zip_bytes: The session zip bytes
+        json_bytes: The session JSON bytes
 
     Returns:
         File document from Girder
     """
     return gc.uploadFile(
         parentId=parent_id,
-        stream=io.BytesIO(zip_bytes),
-        name="session.volview.zip",
-        size=len(zip_bytes),
+        stream=io.BytesIO(json_bytes),
+        name="session.volview.json",
+        size=len(json_bytes),
         parentType=parent_type,
-        mimeType="application/zip",
+        mimeType="application/json",
     )
+
+
+def upload_labelmap(
+    gc,
+    labelmap_bytes: bytes,
+    filename: str,
+    parent_id: str,
+    parent_type: str,
+) -> str:
+    """
+    Upload labelmap file to Girder and return download URL.
+
+    Args:
+        gc: Authenticated GirderClient
+        labelmap_bytes: Binary contents of labelmap file
+        filename: Filename for the uploaded file (e.g. "segmentation.seg.nii.gz")
+        parent_id: Item or folder ID
+        parent_type: "item" or "folder"
+
+    Returns:
+        Download URL for the uploaded file
+    """
+    file_doc = gc.uploadFile(
+        parentId=parent_id,
+        stream=io.BytesIO(labelmap_bytes),
+        name=filename,
+        size=len(labelmap_bytes),
+        parentType=parent_type,
+    )
+    return make_file_download_url(gc.urlBase, str(file_doc["_id"]), filename)
 
 
 #  High-Level Workflow Function
@@ -409,22 +416,22 @@ def generate_session(
     parent_id: str,
     parent_type: str,
     annotations: list[dict] | None = None,
-    labelmaps: list[LabelMapEntry] | None = None,
+    labelmaps: list[LabelMapInput] | None = None,
     upload: bool = True,
 ) -> tuple[dict, bytes]:
     """
-    Generate session.volview.zip with optional annotations and labelmaps.
+    Generate session.volview.json with optional annotations and labelmaps.
 
     Args:
         gc: Authenticated GirderClient
         parent_id: Item or folder ID
         parent_type: "item" or "folder"
         annotations: List of annotation dicts (see format below)
-        labelmaps: List of LabelMapEntry dicts (from create_labelmap_entry)
+        labelmaps: List of LabelMapInput dicts with url, name, label_names
         upload: Whether to upload to Girder
 
     Returns:
-        (manifest, zip_bytes)
+        (manifest, json_bytes)
 
     Annotation format:
         {
@@ -439,6 +446,13 @@ def generate_session(
             "label": "default",
             "color": "#ff0000",
             "metadata": {"key": "value"}
+        }
+
+    LabelMapInput format:
+        {
+            "url": "https://.../seg.nii.gz",  # Download URL for labelmap
+            "name": "TotalSegmentator",       # Display name
+            "label_names": {1: "liver", ...}  # Segment value -> name mapping
         }
     """
     if parent_type == "item":
@@ -455,14 +469,36 @@ def generate_session(
         _apply_annotation(manifest, annotation)
 
     if labelmaps:
-        manifest["labelMaps"] = list(labelmaps)
+        manifest["labelMaps"] = []
+        for lm_input in labelmaps:
+            data_source_id = len(manifest["dataSources"])
+            manifest["dataSources"].append(
+                {
+                    "id": data_source_id,
+                    "type": "uri",
+                    "uri": lm_input["url"],
+                }
+            )
+            manifest["datasets"].append(
+                {
+                    "id": str(data_source_id),
+                    "dataSourceId": data_source_id,
+                }
+            )
+            labelmap_entry = create_labelmap_entry(
+                data_source_id=data_source_id,
+                label_names=lm_input["label_names"],
+                parent_image_id=dataset_id,
+                name=lm_input["name"],
+            )
+            manifest["labelMaps"].append(labelmap_entry)
 
-    zip_bytes = create_session_zip(manifest)
+    json_bytes = serialize_manifest(manifest)
 
     if upload:
-        upload_session(gc, parent_id, parent_type, zip_bytes)
+        upload_session(gc, parent_id, parent_type, json_bytes)
 
-    return manifest, zip_bytes
+    return manifest, json_bytes
 
 
 # CLI Interface
@@ -472,7 +508,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Generate session.volview.zip from Girder resources"
+        description="Generate session.volview.json from Girder resources"
     )
     parser.add_argument("--api-url", required=True, help="Girder API URL")
     parser.add_argument("--api-key", required=True, help="Girder API key")
@@ -501,8 +537,6 @@ def main():
     if args.item_id and args.folder_id:
         parser.error("Cannot specify both --item-id and --folder-id")
 
-    from girder_client import GirderClient
-
     gc = GirderClient(apiUrl=args.api_url)
     gc.authenticate(apiKey=args.api_key)
 
@@ -514,13 +548,13 @@ def main():
     parent_id = args.item_id or args.folder_id
     parent_type = "item" if args.item_id else "folder"
 
-    manifest, zip_bytes = generate_session(
+    manifest, json_bytes = generate_session(
         gc, parent_id, parent_type, annotations, upload=args.upload
     )
 
     if args.output:
         with open(args.output, "wb") as f:
-            f.write(zip_bytes)
+            f.write(json_bytes)
         print(f"Session saved to {args.output}")
     elif not args.upload:
         print(json.dumps(manifest, indent=2))

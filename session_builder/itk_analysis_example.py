@@ -267,7 +267,7 @@ def make_session(
         else:
             print("No contour found")
 
-    manifest, zip_bytes = generate_session(
+    manifest, json_bytes = generate_session(
         gc,
         parent_id=parent_id,
         parent_type=parent_type,
@@ -280,7 +280,7 @@ def make_session(
     if annotations:
         polygon_tool = manifest["tools"]["polygons"]["tools"][0]
         print(f"Polygon imageID: {polygon_tool['imageID']}")
-    print(f"Session uploaded to {parent_type} ({len(zip_bytes)} bytes)")
+    print(f"Session uploaded to {parent_type} ({len(json_bytes)} bytes)")
 
     return manifest
 
