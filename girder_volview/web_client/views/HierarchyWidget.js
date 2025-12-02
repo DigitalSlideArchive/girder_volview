@@ -80,7 +80,7 @@ wrap(HierarchyWidget, "render", function (render) {
                 this.itemListView.collection.get(cid)
             );
             const volViewZipsNewestFirst = items
-                .filter((item) => item.attributes.name.includes(".volview.zip"))
+                .filter((item) => item.attributes.name.includes(".volview.zip") || item.attributes.name.includes(".volview.json"))
                 .sort(
                     (a, b) =>
                         new Date(b.attributes.created) -
@@ -153,7 +153,7 @@ ItemListWidget.registeredApplications['volview'] = {
     // icon:
     check: (modelType, model, folder) => {
         if (modelType === 'item') {
-            if (model.get('name').endsWith('volview.zip')) {
+            if (model.get('name').endsWith('volview.zip') || model.get('name').endsWith('volview.json')) {
                 // use this
             } else {
                 try {

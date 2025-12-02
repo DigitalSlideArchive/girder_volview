@@ -64,7 +64,7 @@ def download_folder_files(
     downloaded_files = []
     for item in gc.listItem(folder_id):
         for file_info in gc.listFile(item["_id"]):
-            if file_info["name"].endswith(".volview.zip"):
+            if file_info["name"].endswith((".volview.zip", ".volview.json")):
                 continue
             if file_info["name"].endswith(".seg.nii.gz"):
                 continue
@@ -198,6 +198,7 @@ def segment_and_upload(
             parent_image_id="volume",
             name=f"TotalSegmentator ({base_name})",
             file_format="nii.gz",
+            filename=f"{base_name}-total.seg",
         )
 
         manifest, zip_bytes = generate_session(
@@ -210,7 +211,6 @@ def segment_and_upload(
 
         print(f"\nSession uploaded ({len(zip_bytes) / 1024 / 1024:.1f} MB)")
         print(f"Contains {len(label_names)} named segments")
-        print("\nOpen in VolView to see segmentation with proper names!")
 
 
 def main():

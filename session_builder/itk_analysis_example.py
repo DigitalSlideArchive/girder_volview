@@ -28,6 +28,7 @@ Usage:
 import argparse
 import tempfile
 from pathlib import Path
+import numpy as np
 
 import itk
 from girder_client import GirderClient
@@ -51,7 +52,7 @@ def download_folder_files(gc: GirderClient, folder_id: str, dest_dir: Path) -> P
     """Download all files from folder items.
 
     Returns single file path if only one file, otherwise directory for DICOM series.
-    Filters out VolView session files (.volview.zip).
+    Filters out VolView session files (.volview.zip, .volview.json).
     """
     files_dir = dest_dir / "files"
     files_dir.mkdir()
@@ -59,7 +60,7 @@ def download_folder_files(gc: GirderClient, folder_id: str, dest_dir: Path) -> P
     downloaded_files = []
     for item in gc.listItem(folder_id):
         for file_info in gc.listFile(item["_id"]):
-            if file_info["name"].endswith(".volview.zip"):
+            if file_info["name"].endswith((".volview.zip", ".volview.json")):
                 continue
             local_path = files_dir / file_info["name"]
             gc.downloadFile(file_info["_id"], str(local_path))
@@ -80,7 +81,6 @@ def read_image_as_3d(image_path: Path):
 
     Returns ITK image with pixel type SS (signed short).
     """
-    import numpy as np
 
     if image_path.is_dir():
         # DICOM series
@@ -91,7 +91,9 @@ def read_image_as_3d(image_path: Path):
             raise ValueError(f"No DICOM files found in {image_path}")
         reader = itk.ImageSeriesReader.New(FileNames=file_names)
         reader.Update()
-        return itk.cast_image_filter(reader.GetOutput(), ttype=[type(reader.GetOutput()), itk.Image[itk.SS, 3]])
+        return itk.cast_image_filter(
+            reader.GetOutput(), ttype=[type(reader.GetOutput()), itk.Image[itk.SS, 3]]
+        )
 
     image = itk.imread(str(image_path), pixel_type=itk.SS)
     dimension = image.GetImageDimension()
@@ -259,7 +261,9 @@ def make_session(
         annotations = extract_body_contour(image)
 
         if annotations:
-            print(f"Found contour with {annotations[0]['metadata']['num_points']} points")
+            print(
+                f"Found contour with {annotations[0]['metadata']['num_points']} points"
+            )
         else:
             print("No contour found")
 
@@ -274,7 +278,7 @@ def make_session(
     print(f"\nGenerated session with {len(annotations)} polygon annotation")
     print(f"Session has {len(manifest['dataSources'])} data sources")
     if annotations:
-        polygon_tool = manifest['tools']['polygons']['tools'][0]
+        polygon_tool = manifest["tools"]["polygons"]["tools"][0]
         print(f"Polygon imageID: {polygon_tool['imageID']}")
     print(f"Session uploaded to {parent_type} ({len(zip_bytes)} bytes)")
 

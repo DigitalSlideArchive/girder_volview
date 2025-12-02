@@ -6,6 +6,8 @@ from girder.models.folder import Folder
 from girder.models.item import Item
 
 SESSION_ZIP_EXTENSION = ".volview.zip"
+SESSION_JSON_EXTENSION = ".volview.json"
+SESSION_EXTENSIONS = (SESSION_ZIP_EXTENSION, SESSION_JSON_EXTENSION)
 
 # https://github.com/Kitware/VolView/blob/main/src/io/mimeTypes.ts
 LOADABLE_EXTENSIONS = (
@@ -79,11 +81,11 @@ LOADABLE_MIMES = (
 
 
 def isSessionItem(item):
-    return item and SESSION_ZIP_EXTENSION in item["name"]
+    return item and any(ext in item["name"] for ext in SESSION_EXTENSIONS)
 
 
 def isSessionFile(file):
-    return file.get("name").endswith(SESSION_ZIP_EXTENSION)
+    return file.get("name").endswith(SESSION_EXTENSIONS)
 
 
 def isTiffFile(file):
@@ -168,9 +170,9 @@ def sameLevelSessionFile(fileEntry):
     # example: itemName == "session.volview.zip (1)" and fileName == session.volview.zip, then path == session.volview.zip (1)/session.volview.zip
     paths = fileEntry[0].split("/")
     rootPath = paths[0]
-    itemNameIncludesSessionZip = rootPath.find(SESSION_ZIP_EXTENSION) != -1
-    directChildSessionZip = len(paths) <= 2 and itemNameIncludesSessionZip
-    return directChildSessionZip and isSessionFile(fileEntry[1])
+    itemNameIncludesSession = any(ext in rootPath for ext in SESSION_EXTENSIONS)
+    directChildSession = len(paths) <= 2 and itemNameIncludesSession
+    return directChildSession and isSessionFile(fileEntry[1])
 
 
 def singleVolViewZipOrImageFiles(fileEntries, user=None):
