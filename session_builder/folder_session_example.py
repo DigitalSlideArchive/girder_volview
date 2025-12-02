@@ -53,7 +53,7 @@ def make_session(api_url: str, api_key: str, folder_id: str):
         },
     ]
 
-    manifest, zip_bytes = generate_session(
+    manifest, json_bytes = generate_session(
         gc,
         parent_id=folder_id,
         parent_type="folder",
@@ -62,7 +62,7 @@ def make_session(api_url: str, api_key: str, folder_id: str):
     )
 
     print(f"Generated session with {len(manifest['dataSources'])} data sources")
-    print(f"Session uploaded to folder ({len(zip_bytes)} bytes)")
+    print(f"Session uploaded to folder ({len(json_bytes)} bytes)")
 
     return manifest
 
