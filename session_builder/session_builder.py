@@ -375,7 +375,7 @@ def make_file_download_url(api_url: str, file_id: str, file_name: str) -> str:
     return f"{api_url}/file/{file_id}/proxiable/{file_name}"
 
 
-def get_item_files(gc, item_id: str) -> list[dict]:
+def get_item_files(gc: GirderClient, item_id: str) -> list[dict]:
     """
     Get loadable files from a Girder item.
 
@@ -399,8 +399,20 @@ def get_item_files(gc, item_id: str) -> list[dict]:
     ]
 
 
+def download_item_files(gc: GirderClient, item_id: str, dest_dir: Path) -> Path:
+    """Download first file from item, return local path."""
+    files = list(gc.listFile(item_id))
+    if not files:
+        raise ValueError(f"No files in item {item_id}")
+
+    file_info = files[0]
+    local_path = dest_dir / file_info["name"]
+    gc.downloadFile(file_info["_id"], str(local_path))
+    return local_path
+
+
 def get_folder_files(
-    gc,
+    gc: GirderClient,
     folder_id: str,
     item_ids: list[str] | None = None,
     folder_ids: list[str] | None = None,
@@ -435,7 +447,7 @@ def get_folder_files(
 
 
 def upload_session(
-    gc,
+    gc: GirderClient,
     parent_id: str,
     parent_type: str,
     json_bytes: bytes,
@@ -463,7 +475,7 @@ def upload_session(
 
 
 def upload_labelmap(
-    gc,
+    gc: GirderClient,
     labelmap_bytes: bytes,
     filename: str,
     parent_id: str,
@@ -526,7 +538,7 @@ def download_folder_files(
 
 
 def generate_session(
-    gc,
+    gc: GirderClient,
     parent_id: str,
     parent_type: str,
     annotations: list[dict] | None = None,

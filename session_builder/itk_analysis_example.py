@@ -33,19 +33,7 @@ import numpy as np
 import itk
 from girder_client import GirderClient
 
-from session_builder import generate_session, download_folder_files
-
-
-def download_item_files(gc: GirderClient, item_id: str, dest_dir: Path) -> Path:
-    """Download first file from item, return local path."""
-    files = list(gc.listFile(item_id))
-    if not files:
-        raise ValueError(f"No files in item {item_id}")
-
-    file_info = files[0]
-    local_path = dest_dir / file_info["name"]
-    gc.downloadFile(file_info["_id"], str(local_path))
-    return local_path
+from session_builder import generate_session, download_folder_files, download_item_files
 
 
 def read_image_as_3d(image_path: Path):
