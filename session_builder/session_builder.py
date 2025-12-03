@@ -13,17 +13,17 @@ Usage:
 
     # As library (high-level)
     from session_builder import generate_session
-    manifest, json_bytes = generate_session(gc, parent_id, "folder", annotations, labelmaps)
+    manifest, json_bytes = generate_session(gc, parent_id, "folder", annotations, segment_groups)
 
     # As library (composable)
     from session_builder import (
-        create_manifest, add_dataset, add_annotation, add_labelmap,
+        create_manifest, add_dataset, add_annotation, add_segment_group,
         serialize_manifest, upload_session, get_folder_files
     )
     manifest = create_manifest()
     manifest = add_dataset(manifest, get_folder_files(gc, folder_id), "volume")
     manifest = add_annotation(manifest, annotation)
-    manifest = add_labelmap(manifest, url, dataset_id="volume", label_names=label_names)
+    manifest = add_segment_group(manifest, url, dataset_id="volume", label_names=label_names)
     json_bytes = serialize_manifest(manifest)
     upload_session(gc, folder_id, "folder", json_bytes)
 
@@ -61,20 +61,20 @@ class SegmentMask(TypedDict):
     visible: bool
 
 
-class LabelMapMetadata(TypedDict):
+class SegmentGroupMetadata(TypedDict):
     name: str
     parentImage: str
     segments: dict  # {"order": [...], "byValue": {...}}
 
 
-class LabelMapEntry(TypedDict):
+class SegmentGroupEntry(TypedDict):
     id: str
     dataSourceId: int
-    metadata: LabelMapMetadata
+    metadata: SegmentGroupMetadata
 
 
-class LabelMapInput(TypedDict):
-    url: str  # Download URL for the labelmap file
+class SegmentGroupInput(TypedDict):
+    url: str  # Download URL for the segment group file
     name: str  # Display name for the segment group
     label_names: dict[int, str]  # {1: "liver", 2: "spleen", ...}
 
@@ -96,14 +96,14 @@ SEGMENT_COLORS = [
 ]
 
 
-def create_labelmap_entry(
+def create_segment_group_entry(
     data_source_id: int,
     label_names: dict[int, str],
     parent_image_id: str = "volume",
     name: str = "Segmentation",
-) -> LabelMapEntry:
+) -> SegmentGroupEntry:
     """
-    Create a labelmap entry that references a URI data source.
+    Create a segment group entry that references a URI data source.
 
     Args:
         data_source_id: ID of the data source in manifest's dataSources array
@@ -112,9 +112,9 @@ def create_labelmap_entry(
         name: Display name for the segment group
 
     Returns:
-        LabelMapEntry for inclusion in manifest
+        SegmentGroupEntry for inclusion in manifest
     """
-    lm_id = str(uuid.uuid4())
+    sg_id = str(uuid.uuid4())
 
     order = sorted(label_names.keys())
     by_value = {}
@@ -128,14 +128,14 @@ def create_labelmap_entry(
             visible=True,
         )
 
-    metadata = LabelMapMetadata(
+    metadata = SegmentGroupMetadata(
         name=name,
         parentImage=parent_image_id,
         segments={"order": order, "byValue": by_value},
     )
 
-    return LabelMapEntry(
-        id=lm_id,
+    return SegmentGroupEntry(
+        id=sg_id,
         dataSourceId=data_source_id,
         metadata=metadata,
     )
@@ -304,7 +304,7 @@ def add_annotation(
     return {**manifest, "tools": new_tools}
 
 
-def add_labelmap(
+def add_segment_group(
     manifest: dict,
     url: str,
     dataset_id: str,
@@ -312,17 +312,17 @@ def add_labelmap(
     name: str = "Segmentation",
 ) -> dict:
     """
-    Add a labelmap to the manifest. Returns a new manifest copy.
+    Add a segment group to the manifest. Returns a new manifest copy.
 
     Args:
         manifest: Existing manifest dict
-        url: Download URL for the labelmap file
+        url: Download URL for the segment group file
         dataset_id: ID of the parent image dataset
         label_names: Dict mapping segment value to name, e.g. {1: "liver", 2: "spleen"}
         name: Display name for the segment group
 
     Returns:
-        New manifest dict with the labelmap added.
+        New manifest dict with the segment group added.
     """
     new_sources = list(manifest["dataSources"])
     data_source_id = len(new_sources)
@@ -343,21 +343,21 @@ def add_labelmap(
         }
     )
 
-    labelmap_entry = create_labelmap_entry(
+    segment_group_entry = create_segment_group_entry(
         data_source_id=data_source_id,
         label_names=label_names,
         parent_image_id=dataset_id,
         name=name,
     )
 
-    new_labelmaps = list(manifest.get("labelMaps", []))
-    new_labelmaps.append(labelmap_entry)
+    new_segment_groups = list(manifest.get("segmentGroups", []))
+    new_segment_groups.append(segment_group_entry)
 
     return {
         **manifest,
         "dataSources": new_sources,
         "datasets": new_datasets,
-        "labelMaps": new_labelmaps,
+        "segmentGroups": new_segment_groups,
     }
 
 
@@ -474,19 +474,19 @@ def upload_session(
     )
 
 
-def upload_labelmap(
+def upload_segment_group(
     gc: GirderClient,
-    labelmap_bytes: bytes,
+    segment_group_bytes: bytes,
     filename: str,
     parent_id: str,
     parent_type: str,
 ) -> str:
     """
-    Upload labelmap file to Girder and return download URL.
+    Upload segment group file to Girder and return download URL.
 
     Args:
         gc: Authenticated GirderClient
-        labelmap_bytes: Binary contents of labelmap file
+        segment_group_bytes: Binary contents of segment group file
         filename: Filename for the uploaded file (e.g. "segmentation.seg.nii.gz")
         parent_id: Item or folder ID
         parent_type: "item" or "folder"
@@ -496,9 +496,9 @@ def upload_labelmap(
     """
     file_doc = gc.uploadFile(
         parentId=parent_id,
-        stream=io.BytesIO(labelmap_bytes),
+        stream=io.BytesIO(segment_group_bytes),
         name=filename,
-        size=len(labelmap_bytes),
+        size=len(segment_group_bytes),
         parentType=parent_type,
     )
     return make_file_download_url(gc.urlBase, str(file_doc["_id"]), filename)
@@ -542,18 +542,18 @@ def generate_session(
     parent_id: str,
     parent_type: str,
     annotations: list[dict] | None = None,
-    labelmaps: list[LabelMapInput] | None = None,
+    segment_groups: list[SegmentGroupInput] | None = None,
     upload: bool = True,
 ) -> tuple[dict, bytes]:
     """
-    Generate session.volview.json with optional annotations and labelmaps.
+    Generate session.volview.json with optional annotations and segment groups.
 
     Args:
         gc: Authenticated GirderClient
         parent_id: Item or folder ID
         parent_type: "item" or "folder"
         annotations: List of annotation dicts (see format below)
-        labelmaps: List of LabelMapInput dicts with url, name, label_names
+        segment_groups: List of SegmentGroupInput dicts with url, name, label_names
         upload: Whether to upload to Girder
 
     Returns:
@@ -574,9 +574,9 @@ def generate_session(
             "metadata": {"key": "value"}
         }
 
-    LabelMapInput format:
+    SegmentGroupInput format:
         {
-            "url": "https://.../seg.nii.gz",  # Download URL for labelmap
+            "url": "https://.../seg.nii.gz",  # Download URL for segment group
             "name": "TotalSegmentator",       # Display name
             "label_names": {1: "liver", ...}  # Segment value -> name mapping
         }
@@ -586,10 +586,10 @@ def generate_session(
     else:
         data_sources = get_folder_files(gc, parent_id)
 
-    # Filter out labelmap URLs from main image sources to avoid loading them twice
-    if labelmaps:
-        labelmap_urls = {lm["url"] for lm in labelmaps}
-        data_sources = [ds for ds in data_sources if ds["url"] not in labelmap_urls]
+    # Filter out segment group URLs from main image sources to avoid loading them twice
+    if segment_groups:
+        segment_group_urls = {sg["url"] for sg in segment_groups}
+        data_sources = [ds for ds in data_sources if ds["url"] not in segment_group_urls]
 
     dataset_id = "volume"
     manifest = create_manifest()
@@ -598,13 +598,13 @@ def generate_session(
     for annotation in annotations or []:
         manifest = add_annotation(manifest, annotation, dataset_id=dataset_id)
 
-    for lm_input in labelmaps or []:
-        manifest = add_labelmap(
+    for sg_input in segment_groups or []:
+        manifest = add_segment_group(
             manifest,
-            url=lm_input["url"],
+            url=sg_input["url"],
             dataset_id=dataset_id,
-            label_names=lm_input["label_names"],
-            name=lm_input["name"],
+            label_names=sg_input["label_names"],
+            name=sg_input["name"],
         )
 
     json_bytes = serialize_manifest(manifest)

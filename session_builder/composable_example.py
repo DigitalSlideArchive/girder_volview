@@ -44,8 +44,9 @@ def make_session(api_url: str, api_key: str, item_id: str):
     print(f"Found {len(data_sources)} files")
 
     # Build manifest step by step
+    dataset_id = "volume"
     manifest = create_manifest()
-    manifest = add_dataset(manifest, data_sources, "volume")
+    manifest = add_dataset(manifest, data_sources, dataset_id)
 
     # Add annotation (coordinates for CT_Electrodes sample CT scan)
     manifest = add_annotation(
@@ -60,7 +61,7 @@ def make_session(api_url: str, api_key: str, item_id: str):
             "label": "Label 1",
             "color": "red",
         },
-        dataset_id="volume",
+        dataset_id=dataset_id,
     )
 
     # Serialize and upload

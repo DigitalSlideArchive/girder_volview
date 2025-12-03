@@ -15,7 +15,7 @@ Generate VolView sessions with annotations using the Python API.
 | `folder_session_example.py`   | Create session from a Girder folder with rectangle annotation              |
 | `composable_example.py`       | Build session step-by-step using the composable API                        |
 | `itk_analysis_example.py`     | Download image, run ITK body contour extraction, create polygon annotation |
-| `totalsegmentator_example.py` | Run TotalSegmentator on CT, upload labelmap with named segments            |
+| `totalsegmentator_example.py` | Run TotalSegmentator on CT, upload segment group with named segments       |
 
 Run examples with `uv`:
 
@@ -29,7 +29,7 @@ uv run totalsegmentator_example.py --api-url URL --api-key KEY --item-id ID --fa
 
 ## API Reference
 
-### `generate_session(gc, parent_id, parent_type, annotations=None, labelmaps=None, upload=True)`
+### `generate_session(gc, parent_id, parent_type, annotations=None, segment_groups=None, upload=True)`
 
 Main entry point. Generates a VolView session from a Girder item or folder.
 
@@ -40,8 +40,8 @@ manifest, json_bytes = generate_session(
     gc,
     parent_id="item_or_folder_id",
     parent_type="item",  # or "folder"
-    annotations=[...],   # optional annotation dicts
-    labelmaps=[...],     # optional LabelMapInput dicts
+    annotations=[...],       # optional annotation dicts
+    segment_groups=[...],    # optional SegmentGroupInput dicts
     upload=True,
 )
 ```
@@ -52,7 +52,7 @@ Build manifests incrementally with these functions (each returns a new copy):
 
 ```python
 from session_builder import (
-    create_manifest, add_dataset, add_annotation, add_labelmap,
+    create_manifest, add_dataset, add_annotation, add_segment_group,
     serialize_manifest, upload_session, get_folder_files
 )
 
@@ -60,7 +60,7 @@ from session_builder import (
 manifest = create_manifest()
 manifest = add_dataset(manifest, get_folder_files(gc, folder_id), "volume")
 manifest = add_annotation(manifest, {"type": "rectangle", ...}, dataset_id="volume")
-manifest = add_labelmap(manifest, url="...", dataset_id="volume", label_names={1: "liver"})
+manifest = add_segment_group(manifest, url="...", dataset_id="volume", label_names={1: "liver"})
 
 # Serialize and upload
 json_bytes = serialize_manifest(manifest)
@@ -79,13 +79,13 @@ Add a dataset to the manifest. If multiple data sources, creates a collection to
 
 Add an annotation to the manifest. `dataset_id` specifies the target dataset (falls back to `annotation["imageID"]`, then `"volume"`). See [Annotation Format](#annotation-format) below.
 
-#### `add_labelmap(manifest, url, dataset_id, label_names, name="Segmentation")`
+#### `add_segment_group(manifest, url, dataset_id, label_names, name="Segmentation")`
 
-Add a labelmap with named segments. `dataset_id` is the parent image dataset. `label_names` maps segment values to names (e.g., `{1: "liver", 2: "spleen"}`).
+Add a segment group with named segments. `dataset_id` is the parent image dataset. `label_names` maps segment values to names (e.g., `{1: "liver", 2: "spleen"}`).
 
-### `upload_labelmap(gc, labelmap_bytes, filename, parent_id, parent_type)`
+### `upload_segment_group(gc, segment_group_bytes, filename, parent_id, parent_type)`
 
-Upload a labelmap file to Girder, returns download URL for use in `LabelMapInput`.
+Upload a segment group file to Girder, returns download URL for use in `SegmentGroupInput`.
 
 ### `get_item_files(gc, item_id)` / `get_folder_files(gc, folder_id)`
 
