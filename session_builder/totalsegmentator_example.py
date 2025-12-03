@@ -35,11 +35,16 @@ from totalsegmentator.python_api import totalsegmentator
 from totalsegmentator.nifti_ext_header import load_multilabel_nifti
 
 from session_builder import (
-    generate_session,
-    upload_labelmap,
+    create_manifest,
+    add_dataset,
+    add_segment_group,
+    serialize_manifest,
+    get_item_files,
+    get_folder_files,
+    upload_session,
+    upload_segment_group,
     download_folder_files,
     download_item_files,
-    LabelMapInput,
 )
 
 
@@ -154,9 +159,9 @@ def segment_and_upload(
         seg_bytes = seg_path.read_bytes()
 
         print("\nUploading segmentation file to Girder...")
-        seg_url = upload_labelmap(
+        seg_url = upload_segment_group(
             gc,
-            labelmap_bytes=seg_bytes,
+            segment_group_bytes=seg_bytes,
             filename=seg_path.name,
             parent_id=parent_id,
             parent_type=parent_type,
@@ -164,19 +169,28 @@ def segment_and_upload(
         print(f"Uploaded: {seg_path.name}")
 
         print("\nGenerating VolView session with segment metadata...")
-        labelmap: LabelMapInput = {
-            "url": seg_url,
-            "name": f"TotalSegmentator ({base_name})",
-            "label_names": label_names,
-        }
+        if parent_type == "item":
+            data_sources = get_item_files(gc, parent_id)
+        else:
+            data_sources = get_folder_files(gc, parent_id)
 
-        manifest, json_bytes = generate_session(
-            gc,
-            parent_id=parent_id,
-            parent_type=parent_type,
-            labelmaps=[labelmap],
-            upload=True,
+        data_sources = [
+            ds for ds in data_sources if not ds["name"].endswith("-total.seg.nii.gz")
+        ]
+
+        dataset_id = "volume"
+        manifest = create_manifest()
+        manifest = add_dataset(manifest, data_sources, dataset_id)
+        manifest = add_segment_group(
+            manifest,
+            url=seg_url,
+            dataset_id=dataset_id,
+            label_names=label_names,
+            name=f"TotalSegmentator ({base_name})",
         )
+
+        json_bytes = serialize_manifest(manifest)
+        upload_session(gc, parent_id, parent_type, json_bytes)
 
         print("\nSession uploaded")
         print(f"Contains {len(label_names)} named segments")
