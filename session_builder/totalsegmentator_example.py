@@ -38,22 +38,9 @@ from session_builder import (
     generate_session,
     upload_labelmap,
     download_folder_files,
+    download_item_files,
     LabelMapInput,
 )
-
-
-def download_item_files(
-    gc: GirderClient, item_id: str, dest_dir: Path
-) -> tuple[Path, str]:
-    """Download first file from item, return local path and original name."""
-    files = list(gc.listFile(item_id))
-    if not files:
-        raise ValueError(f"No files in item {item_id}")
-
-    file_info = files[0]
-    local_path = dest_dir / file_info["name"]
-    gc.downloadFile(file_info["_id"], str(local_path))
-    return local_path, file_info["name"]
 
 
 def get_base_name(filename: str) -> str:
@@ -131,9 +118,9 @@ def segment_and_upload(
 
         print("Downloading image...")
         if item_id:
-            image_path, original_name = download_item_files(gc, item_id, tmppath)
-            base_name = get_base_name(original_name)
-            print(f"Downloaded: {original_name}")
+            image_path = download_item_files(gc, item_id, tmppath)
+            base_name = get_base_name(image_path.name)
+            print(f"Downloaded: {image_path.name}")
         else:
             downloaded = download_folder_files(
                 gc, folder_id, tmppath, extra_exclude=(".seg.nii.gz",)
