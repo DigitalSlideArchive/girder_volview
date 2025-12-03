@@ -100,11 +100,6 @@ def extract_label_names(seg_path: Path) -> dict[int, str]:
     return {v: name for v, name in label_map.items() if v in present_values}
 
 
-def read_file_bytes(path: Path) -> bytes:
-    """Read file as bytes."""
-    return path.read_bytes()
-
-
 def segment_and_upload(
     api_url: str,
     api_key: str,
@@ -169,8 +164,7 @@ def segment_and_upload(
             f"Found {len(label_names)} segments: {', '.join(list(label_names.values())[:5])}..."
         )
 
-        seg_bytes = read_file_bytes(seg_path)
-        print(f"Segmentation size: {len(seg_bytes) / 1024 / 1024:.1f} MB")
+        seg_bytes = seg_path.read_bytes()
 
         print("\nUploading segmentation file to Girder...")
         seg_url = upload_labelmap(
@@ -197,7 +191,7 @@ def segment_and_upload(
             upload=True,
         )
 
-        print(f"\nSession uploaded ({len(json_bytes)} bytes)")
+        print("\nSession uploaded")
         print(f"Contains {len(label_names)} named segments")
 
 

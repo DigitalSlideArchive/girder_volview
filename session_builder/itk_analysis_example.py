@@ -258,7 +258,7 @@ def make_session(
     if annotations:
         polygon_tool = manifest["tools"]["polygons"]["tools"][0]
         print(f"Polygon imageID: {polygon_tool['imageID']}")
-    print(f"Session uploaded to {parent_type} ({len(json_bytes)} bytes)")
+    print(f"Session uploaded to {parent_type}")
 
     return manifest
 
