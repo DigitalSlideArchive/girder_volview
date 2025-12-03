@@ -13,6 +13,7 @@ Generate VolView sessions with annotations using the Python API.
 | ----------------------------- | -------------------------------------------------------------------------- |
 | `item_session_example.py`     | Create session from a single Girder item with rectangle annotation         |
 | `folder_session_example.py`   | Create session from a Girder folder with rectangle annotation              |
+| `composable_example.py`       | Build session step-by-step using the composable API                        |
 | `itk_analysis_example.py`     | Download image, run ITK body contour extraction, create polygon annotation |
 | `totalsegmentator_example.py` | Run TotalSegmentator on CT, upload labelmap with named segments            |
 
@@ -21,6 +22,7 @@ Run examples with `uv`:
 ```bash
 uv run item_session_example.py --api-url URL --api-key KEY --item-id ID
 uv run folder_session_example.py --api-url URL --api-key KEY --folder-id ID
+uv run composable_example.py --api-url URL --api-key KEY --item-id ID
 uv run itk_analysis_example.py --api-url URL --api-key KEY --item-id ID
 uv run totalsegmentator_example.py --api-url URL --api-key KEY --item-id ID --fast
 ```
@@ -44,17 +46,42 @@ manifest, json_bytes = generate_session(
 )
 ```
 
-### `create_sparse_manifest(data_sources, dataset_id="volume")`
+### Composable API
 
-Create minimal VolView manifest from data source URLs.
+Build manifests incrementally with these functions (each returns a new copy):
 
 ```python
-from session_builder import create_sparse_manifest
+from session_builder import (
+    create_manifest, add_dataset, add_annotation, add_labelmap,
+    serialize_manifest, upload_session, get_folder_files
+)
 
-manifest = create_sparse_manifest([
-    {"url": "https://example.com/image.nii.gz", "name": "CT scan"}
-])
+# Build manifest step by step
+manifest = create_manifest()
+manifest = add_dataset(manifest, get_folder_files(gc, folder_id), "volume")
+manifest = add_annotation(manifest, {"type": "rectangle", ...}, dataset_id="volume")
+manifest = add_labelmap(manifest, url="...", dataset_id="volume", label_names={1: "liver"})
+
+# Serialize and upload
+json_bytes = serialize_manifest(manifest)
+upload_session(gc, folder_id, "folder", json_bytes)
 ```
+
+#### `create_manifest()`
+
+Create an empty VolView manifest with version, empty dataSources/datasets, and tools.
+
+#### `add_dataset(manifest, data_sources, dataset_id)`
+
+Add a dataset to the manifest. If multiple data sources, creates a collection to group them.
+
+#### `add_annotation(manifest, annotation, dataset_id=None)`
+
+Add an annotation to the manifest. `dataset_id` specifies the target dataset (falls back to `annotation["imageID"]`, then `"volume"`). See [Annotation Format](#annotation-format) below.
+
+#### `add_labelmap(manifest, url, dataset_id, label_names, name="Segmentation")`
+
+Add a labelmap with named segments. `dataset_id` is the parent image dataset. `label_names` maps segment values to names (e.g., `{1: "liver", 2: "spleen"}`).
 
 ### `upload_labelmap(gc, labelmap_bytes, filename, parent_id, parent_type)`
 

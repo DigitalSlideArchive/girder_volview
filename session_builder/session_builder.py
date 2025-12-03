@@ -11,18 +11,29 @@ Usage:
     # Standalone with uv
     uv run session_builder.py --api-url URL --api-key KEY --item-id ID [--annotations file.json] [--upload]
 
-    # As library
-    from session_builder import generate_session, create_sparse_manifest, upload_labelmap
+    # As library (high-level)
+    from session_builder import generate_session
+    manifest, json_bytes = generate_session(gc, parent_id, "folder", annotations, labelmaps)
+
+    # As library (composable)
+    from session_builder import (
+        create_manifest, add_dataset, add_annotation, add_labelmap,
+        serialize_manifest, upload_session, get_folder_files
+    )
+    manifest = create_manifest()
+    manifest = add_dataset(manifest, get_folder_files(gc, folder_id), "volume")
+    manifest = add_annotation(manifest, annotation)
+    manifest = add_labelmap(manifest, url, dataset_id="volume", label_names=label_names)
+    json_bytes = serialize_manifest(manifest)
+    upload_session(gc, folder_id, "folder", json_bytes)
 
 API key docs: https://girder.readthedocs.io/en/latest/user-guide.html#api-keys
 
 VolView manifest schema (Zod):
     https://github.com/Kitware/VolView/blob/main/src/io/state-file/schema.ts
-
-Manifest migrations:
-    https://github.com/Kitware/VolView/blob/main/src/io/state-file/migrations.ts
 """
 
+import copy
 import io
 import json
 import uuid
@@ -130,52 +141,73 @@ def create_labelmap_entry(
     )
 
 
-def create_sparse_manifest(
-    data_sources: list[dict], dataset_id: str = "volume"
-) -> dict:
+def create_manifest() -> dict:
     """
-    Create minimal VolView manifest from data source URLs.
+    Create an empty VolView manifest.
+
+    Returns:
+        Manifest dict with version, empty dataSources/datasets, and tools.
+    """
+    return {
+        "version": MANIFEST_VERSION,
+        "dataSources": [],
+        "datasets": [],
+        "tools": {},
+    }
+
+
+def add_dataset(manifest: dict, data_sources: list[dict], dataset_id: str) -> dict:
+    """
+    Add a dataset to the manifest. Returns a new manifest copy.
 
     How the collection pattern works:
-        1. Each URL becomes a numbered "uri" data source (id: 0, 1, 2, ...)
-        2. A "collection" source groups all uri sources together
-        3. A "dataset" references the collection with a stable ID
+        1. Each URL becomes a numbered "uri" data source
+        2. If multiple sources, a "collection" groups them together
+        3. A "dataset" references the collection (or single source)
         4. When VolView loads, the collection becomes a single volume
-        5. Annotations reference the dataset ID (e.g., "volume") not source IDs
-
-    This pattern ensures annotations work regardless of how many files
-    are loaded or which individual files succeed.
+        5. Annotations reference the dataset ID, not source IDs
 
     Args:
+        manifest: Existing manifest dict
         data_sources: List of {url: str, name?: str} dicts
         dataset_id: ID to assign to the dataset (used by annotations as imageID)
 
     Returns:
-        Manifest dict with version, dataSources, datasets, and tools.
+        New manifest dict with the dataset added.
     """
-    sources = []
+    new_sources = list(manifest["dataSources"])
+    start_id = len(new_sources)
+
     source_ids = []
     for i, source in enumerate(data_sources):
-        entry = {"id": i, "type": "uri", "uri": source["url"]}
+        entry = {"id": start_id + i, "type": "uri", "uri": source["url"]}
         if "name" in source:
             entry["name"] = source["name"]
-        sources.append(entry)
-        source_ids.append(i)
+        new_sources.append(entry)
+        source_ids.append(start_id + i)
 
-    # Add collection that groups all sources
-    collection_id = len(sources)
-    sources.append({"id": collection_id, "type": "collection", "sources": source_ids})
+    if len(source_ids) > 1:
+        collection_id = len(new_sources)
+        new_sources.append(
+            {"id": collection_id, "type": "collection", "sources": source_ids}
+        )
+        data_source_id = collection_id
+    else:
+        data_source_id = source_ids[0] if source_ids else start_id
 
-    # Create dataset referencing the collection
-    datasets = [{"id": dataset_id, "dataSourceId": collection_id}]
+    new_datasets = list(manifest["datasets"])
+    new_datasets.append({"id": dataset_id, "dataSourceId": data_source_id})
 
-    return {
-        "version": MANIFEST_VERSION,
-        "dataSources": sources,
-        "datasets": datasets,
-        "primarySelection": dataset_id,
-        "tools": {},
+    new_manifest = {
+        **manifest,
+        "dataSources": new_sources,
+        "datasets": new_datasets,
     }
+
+    if "primarySelection" not in manifest:
+        new_manifest["primarySelection"] = dataset_id
+
+    return new_manifest
 
 
 def _build_tool_entry(
@@ -203,38 +235,130 @@ def _build_tool_entry(
     return entry
 
 
-def _next_label_name(manifest: dict, tool_type: str) -> str:
-    """Generate next label name like 'Label 1', 'Label 2', etc."""
-    existing = manifest.get("tools", {}).get(tool_type, {}).get("labels", {})
-    return f"Label {len(existing) + 1}"
+def add_annotation(
+    manifest: dict, annotation: dict, dataset_id: str | None = None
+) -> dict:
+    """
+    Add an annotation to the manifest. Returns a new manifest copy.
 
+    Args:
+        manifest: Existing manifest dict
+        annotation: Annotation dict with format:
+            {
+                "type": "rectangle" | "ruler" | "polygon",
+                "imageID": "volume",           # dataset ID (fallback if dataset_id not provided)
+                "firstPoint": [x, y, z],       # rectangle/ruler
+                "secondPoint": [x, y, z],      # rectangle/ruler
+                "points": [[x,y,z], ...],      # polygon
+                "slice": 0,
+                "planeNormal": [0, 0, 1],
+                "planeOrigin": [0, 0, 0],
+                "label": "default",
+                "color": "#ff0000",
+                "metadata": {"key": "value"}
+            }
+        dataset_id: Target dataset ID. Falls back to annotation["imageID"], then "volume".
 
-def _ensure_label(
-    manifest: dict,
-    tool_type: str,
-    label: Label | str | None = None,
-) -> str:
-    """Create/update label in manifest if not exists. Returns label name."""
-    if tool_type not in manifest["tools"]:
-        manifest["tools"][tool_type] = {"tools": [], "labels": {}}
+    Returns:
+        New manifest dict with the annotation added.
+    """
+    ann_type = annotation.get("type")
+    if ann_type not in ("rectangle", "ruler", "polygon"):
+        return manifest
 
-    if label is None:
-        label_name = _next_label_name(manifest, tool_type)
-        label_config = {"labelName": label_name}
-    elif isinstance(label, str):
-        label_name = label
-        label_config = {"labelName": label_name}
-    else:
-        label_name = label.get("name") or _next_label_name(manifest, tool_type)
-        label_config = {
+    new_tools = copy.deepcopy(manifest.get("tools", {}))
+
+    tool_type = f"{ann_type}s"
+    image_id = dataset_id or annotation.get("imageID", "volume")
+    slice_num = annotation.get("slice", 0)
+    plane_normal = annotation.get("planeNormal", [0, 0, 1])
+    plane_origin = annotation.get("planeOrigin", [0, 0, 0])
+    metadata = annotation.get("metadata")
+
+    label_name = annotation.get("label", "default")
+    color = annotation.get("color", "#ff0000")
+    label: Label = {"name": label_name, "color": color, "strokeWidth": 2}
+
+    if tool_type not in new_tools:
+        new_tools[tool_type] = {"tools": [], "labels": {}}
+
+    if label_name not in new_tools[tool_type]["labels"]:
+        new_tools[tool_type]["labels"][label_name] = {
             "labelName": label_name,
             **{k: v for k, v in label.items() if k != "name"},
         }
 
-    if label_name not in manifest["tools"][tool_type]["labels"]:
-        manifest["tools"][tool_type]["labels"][label_name] = label_config
+    if ann_type == "polygon":
+        tool_data = {"points": annotation["points"]}
+    else:
+        tool_data = {
+            "firstPoint": annotation["firstPoint"],
+            "secondPoint": annotation["secondPoint"],
+        }
 
-    return label_name
+    entry = _build_tool_entry(
+        tool_data, image_id, slice_num, plane_normal, plane_origin, label_name, metadata
+    )
+    new_tools[tool_type]["tools"].append(entry)
+
+    return {**manifest, "tools": new_tools}
+
+
+def add_labelmap(
+    manifest: dict,
+    url: str,
+    dataset_id: str,
+    label_names: dict[int, str],
+    name: str = "Segmentation",
+) -> dict:
+    """
+    Add a labelmap to the manifest. Returns a new manifest copy.
+
+    Args:
+        manifest: Existing manifest dict
+        url: Download URL for the labelmap file
+        dataset_id: ID of the parent image dataset
+        label_names: Dict mapping segment value to name, e.g. {1: "liver", 2: "spleen"}
+        name: Display name for the segment group
+
+    Returns:
+        New manifest dict with the labelmap added.
+    """
+    new_sources = list(manifest["dataSources"])
+    data_source_id = len(new_sources)
+
+    new_sources.append(
+        {
+            "id": data_source_id,
+            "type": "uri",
+            "uri": url,
+        }
+    )
+
+    new_datasets = list(manifest["datasets"])
+    new_datasets.append(
+        {
+            "id": str(data_source_id),
+            "dataSourceId": data_source_id,
+        }
+    )
+
+    labelmap_entry = create_labelmap_entry(
+        data_source_id=data_source_id,
+        label_names=label_names,
+        parent_image_id=dataset_id,
+        name=name,
+    )
+
+    new_labelmaps = list(manifest.get("labelMaps", []))
+    new_labelmaps.append(labelmap_entry)
+
+    return {
+        **manifest,
+        "dataSources": new_sources,
+        "datasets": new_datasets,
+        "labelMaps": new_labelmaps,
+    }
 
 
 def serialize_manifest(manifest: dict) -> bytes:
@@ -401,42 +525,6 @@ def download_folder_files(
     return downloaded
 
 
-#  High-Level Workflow Function
-
-
-def _apply_annotation(manifest: dict, annotation: dict) -> None:
-    """Apply a single annotation to the manifest."""
-    ann_type = annotation.get("type")
-    if ann_type not in ("rectangle", "ruler", "polygon"):
-        return
-
-    tool_type = f"{ann_type}s"  # rectangles, rulers, polygons
-    image_id = annotation.get("imageID", "volume")
-    slice_num = annotation.get("slice", 0)
-    plane_normal = annotation.get("planeNormal", [0, 0, 1])
-    plane_origin = annotation.get("planeOrigin", [0, 0, 0])
-    metadata = annotation.get("metadata")
-
-    label_name = annotation.get("label", "default")
-    color = annotation.get("color", "#ff0000")
-    label: Label = {"name": label_name, "color": color, "strokeWidth": 2}
-
-    label_name = _ensure_label(manifest, tool_type, label)
-
-    if ann_type == "polygon":
-        tool_data = {"points": annotation["points"]}
-    else:
-        tool_data = {
-            "firstPoint": annotation["firstPoint"],
-            "secondPoint": annotation["secondPoint"],
-        }
-
-    entry = _build_tool_entry(
-        tool_data, image_id, slice_num, plane_normal, plane_origin, label_name, metadata
-    )
-    manifest["tools"][tool_type]["tools"].append(entry)
-
-
 def generate_session(
     gc,
     parent_id: str,
@@ -492,37 +580,20 @@ def generate_session(
         data_sources = [ds for ds in data_sources if ds["url"] not in labelmap_urls]
 
     dataset_id = "volume"
-    manifest = create_sparse_manifest(data_sources, dataset_id)
+    manifest = create_manifest()
+    manifest = add_dataset(manifest, data_sources, dataset_id)
 
     for annotation in annotations or []:
-        if "imageID" not in annotation:
-            annotation = {**annotation, "imageID": dataset_id}
-        _apply_annotation(manifest, annotation)
+        manifest = add_annotation(manifest, annotation, dataset_id=dataset_id)
 
-    if labelmaps:
-        manifest["labelMaps"] = []
-        for lm_input in labelmaps:
-            data_source_id = len(manifest["dataSources"])
-            manifest["dataSources"].append(
-                {
-                    "id": data_source_id,
-                    "type": "uri",
-                    "uri": lm_input["url"],
-                }
-            )
-            manifest["datasets"].append(
-                {
-                    "id": str(data_source_id),
-                    "dataSourceId": data_source_id,
-                }
-            )
-            labelmap_entry = create_labelmap_entry(
-                data_source_id=data_source_id,
-                label_names=lm_input["label_names"],
-                parent_image_id=dataset_id,
-                name=lm_input["name"],
-            )
-            manifest["labelMaps"].append(labelmap_entry)
+    for lm_input in labelmaps or []:
+        manifest = add_labelmap(
+            manifest,
+            url=lm_input["url"],
+            dataset_id=dataset_id,
+            label_names=lm_input["label_names"],
+            name=lm_input["name"],
+        )
 
     json_bytes = serialize_manifest(manifest)
 
