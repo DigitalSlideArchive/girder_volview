@@ -42,7 +42,7 @@ from typing import TypedDict
 from girder_client import GirderClient
 
 # Must match a version VolView can migrate to current. See migrations.ts link above.
-MANIFEST_VERSION = "6.1.1"
+MANIFEST_VERSION = "6.2.0"
 
 SESSION_FILE_EXTENSIONS = (".volview.zip", ".volview.json")
 

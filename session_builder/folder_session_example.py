@@ -6,8 +6,8 @@
 # ///
 """
 Example: Generate a VolView session from a Girder folder with a rectangle annotation.
-Rectangle is created in the MRI-PROSTATEx sample MRI scan:
-https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download
+Rectangle is created in the CT_Electrodes sample CT scan:
+https://raw.githubusercontent.com/neurolabusc/niivue-images/main/CT_Electrodes.nii.gz
 
 Usage:
     uv run folder_session_example.py --api-url URL --api-key KEY --folder-id ID
@@ -30,25 +30,23 @@ def make_session(api_url: str, api_key: str, folder_id: str):
     folder = gc.getFolder(folder_id)
     print(f"Found folder: {folder['name']}")
 
-    # Coordinates for MRI-PROSTATEx sample MRI scan:
-    # https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download
+    # Coordinates for CT_Electrodes sample CT scan:
+    # https://raw.githubusercontent.com/neurolabusc/niivue-images/main/CT_Electrodes.nii.gz
     annotations = [
         {
             "type": "rectangle",
-            "firstPoint": [-65.36087045590452, -15.919061788109012, 37.31865385684797],
-            "secondPoint": [22.78165684736155, 47.65944636974224, 21.46675198654735],
-            "slice": 9,
-            "planeNormal": [
-                1.4080733262381892e-17,
-                0.24192188680171967,
-                0.9702957272529602,
-            ],
-            "planeOrigin": [-117.91325380387, -75.35208187384475, 52.136969503946816],
+            "firstPoint": [281.8206054852409, -42.94960034417328, 477.2959518432617],
+            "secondPoint": [334.10922362127144, -1.9831074603214844, 477.2959518432617],
+            "slice": 80,
+            "planeNormal": [0, 0, 1],
+            "planeOrigin": [388.260009765625, 81.11995697021484, 477.2959518432617],
             "label": "lesion",
-            "color": "#ffff00",
+            "color": "#ff6b6b",
             "metadata": {
-                "source": "expert annotation",
-                "confidence": "0.9",
+                "model": "LesionDetector-v2",
+                "confidence": "0.87",
+                "detection_threshold": "0.5",
+                "inference_time_ms": "234",
             },
         },
     ]
