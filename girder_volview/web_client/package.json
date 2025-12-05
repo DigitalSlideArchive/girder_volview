@@ -7,7 +7,7 @@
     "license": "Apache-2.0",
     "dependencies": {
         "copy-webpack-plugin": "^4.5.2",
-        "volview": "4.4.2-dev.435118664a7f24a391478028a1a740b13f534432.0"
+        "volview": "4.4.2-dev.51471bd6987359ac4523fe736e0856ecb73a31d5.0"
     },
     "peerDependencies": {
         "@girder/core": "*"
