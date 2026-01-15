@@ -3,6 +3,7 @@ from pathlib import Path
 
 import cherrypy
 import errno
+import copy
 
 from girder import plugin
 from girder.api.describe import Description, autoDescribeRoute
@@ -55,6 +56,25 @@ from .utils import (
 LARGE_IMAGE_CONFIG_FOLDER = "large_image.config_folder"
 
 logger = logging.getLogger(__name__)
+
+
+BASE_CONFIG = {
+    "io": {"segmentGroupExtension": "seg", "segmentGroupSaveFormat": "nii.gz", "layerExtension": "layer"},
+    "disabledViewTypes": ["3D", "Oblique"],
+    "layouts": {
+        "Axial Coronal Sagittal": {
+            "direction": "row",
+            "items": [
+                "axial",
+                {
+                    "direction": "column",
+                    "items": ["coronal", "sagittal"]
+                }
+            ]
+        },
+        "Axial Only": [["axial"]],
+    },
+}
 
 
 def hasLoadableFile(files, user=None):
@@ -573,11 +593,9 @@ def yamlConfigFile(folder, name, user, addConfig):
 )
 def getFolderConfigFile(self, folder, name):
     user = self.getCurrentUser()
-    baseConfig = {
-        "dataBrowser": {"hideSampleData": True},
-        "io": {"segmentGroupExtension": "seg", "segmentGroupSaveFormat": "nii.gz"},
-    }
-    config = yamlConfigFile(folder, name, user, baseConfig)
+    baseConfig = copy.deepcopy(BASE_CONFIG)
+    config = yamlConfigFile(folder, name, user, None) or {}
+    config = _mergeDictionaries(baseConfig, config)
     return config
 
 
