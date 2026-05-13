@@ -237,7 +237,8 @@ io:
 
 ### Automatic Layers and Segment Groups by File Name
 
-When loading multiple non DICOM image files, VolView can automatically associate related images based on file naming patterns.
+When loading multiple image files, VolView can automatically associate related images based on file naming patterns.
+For non-DICOM base images, the matching rule is based on the base filename prefix.
 The extension must appear anywhere in the filename after splitting by dots,
 and the filename must start with the same prefix as the base image (everything before the first dot).
 
@@ -267,6 +268,10 @@ For example, `myImage.layer.nii` is layered on top of `myImage.nii`. Defaults to
 io:
   layerExtension: "layer" # "layer" is the default
 ```
+
+For DICOM-specific association rules, explicit `segmentGroups` /
+`parentToLayers` session manifest examples, and notes on using DICOM tags versus
+file names, see [Loading Layers and Segmentations](./docs/loading_layers_and_segmentations.md).
 
 ### Default Window Level
 

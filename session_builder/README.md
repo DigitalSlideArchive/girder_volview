@@ -83,6 +83,8 @@ Add an annotation to the manifest. `dataset_id` specifies the target dataset (fa
 
 Add a segment group with named segments. `dataset_id` is the parent image dataset. `label_names` maps segment values to names (e.g., `{1: "liver", 2: "spleen"}`).
 
+For explicit manifest fields, DICOM association rules, and scalar layer examples, see [Loading Layers and Segmentations](../docs/loading_layers_and_segmentations.md).
+
 ### `upload_segment_group(gc, segment_group_bytes, filename, parent_id, parent_type)`
 
 Upload a segment group file to Girder, returns download URL for use in `SegmentGroupInput`.

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<executable>
+  <category>Demo</category>
+  <title>Demo Median Filter</title>
+  <description>Demo task: apply a median filter to an input image.</description>
+  <version>0.1.0</version>
+  <license>Apache 2.0</license>
+  <contributor>VolView</contributor>
+  <parameters>
+    <label>IO</label>
+    <description>Input/output parameters.</description>
+    <image>
+      <name>inputVolume</name>
+      <label>Input Volume</label>
+      <channel>input</channel>
+      <description>Input volume (e.g. NIfTI)</description>
+      <longflag>input</longflag>
+    </image>
+    <image>
+      <name>outputVolume</name>
+      <label>Output Volume</label>
+      <channel>output</channel>
+      <description>Filtered output volume</description>
+      <longflag>output</longflag>
+    </image>
+  </parameters>
+  <parameters>
+    <label>Filter parameters</label>
+    <description>Tuning</description>
+    <integer>
+      <name>radius</name>
+      <label>Radius</label>
+      <description>Median filter radius (voxels)</description>
+      <longflag>radius</longflag>
+      <default>1</default>
+      <constraints>
+        <minimum>1</minimum>
+        <maximum>10</maximum>
+        <step>1</step>
+      </constraints>
+    </integer>
+    <boolean>
+      <name>normalize</name>
+      <label>Normalize</label>
+      <description>Normalize output intensity</description>
+      <longflag>normalize</longflag>
+      <default>false</default>
+    </boolean>
+    <string-enumeration>
+      <name>kernelShape</name>
+      <label>Kernel Shape</label>
+      <description>Shape of the structuring element</description>
+      <longflag>kernel</longflag>
+      <default>box</default>
+      <element>box</element>
+      <element>ball</element>
+      <element>cross</element>
+    </string-enumeration>
+  </parameters>
+</executable>

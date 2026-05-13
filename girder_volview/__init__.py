@@ -31,6 +31,8 @@ from girder.models.group import Group
 from girder.utility import config
 
 from .dicom import setupEventHandlers
+from .facade import addProcessingRoutes
+from .facade.processing import buildProcessingConfigBlock
 from .utils import (
     SESSION_ZIP_EXTENSION,
     isSessionItem,
@@ -608,6 +610,11 @@ def getFolderConfigFile(self, folder, name):
     baseConfig = copy.deepcopy(BASE_CONFIG)
     config = yamlConfigFile(folder, name, user, None) or {}
     config = _mergeDictionaries(baseConfig, config)
+    # Inject per-launch processing config dynamically (not in BASE_CONFIG —
+    # the providers list depends on the folder being launched).
+    processing = buildProcessingConfigBlock(folder, user)
+    if processing:
+        _mergeDictionaries(config, {"processing": processing})
     return config
 
 
@@ -641,3 +648,8 @@ class GirderPlugin(plugin.GirderPlugin):
         info["apiRoot"].item.route(
             "GET", (":itemId", "volview", "datasets"), downloadDatasets
         )
+
+        # ------------------------------------------------------------------
+        # Processing provider facade
+        # ------------------------------------------------------------------
+        addProcessingRoutes(info)
