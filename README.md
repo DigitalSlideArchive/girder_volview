@@ -343,6 +343,15 @@ VolView creates a new session.volview.zip file in the Girder Item every time the
 1. If user clicks refresh in VolView, the `GET folder/:id/volview?items=[...ids]&folders=[...ids]` end point is hit again. If a session.volview.zip is in the `items` parameter, the plugin reads the volview.zip's `linkedResources` and searches for a newer session.volview.zips with matching `linkedResources` and returns that if found.
 1. If user checks a new set of folders or items that does not include a session.volview.zip item, the `GET folder/:id/volview` endpoint does not pick a session.volview.zip with matching `linkedResources` as `lastOpened` metadata on one of the checked items/folders is newer than the matching session.volview.zip. This allows opening of images with a clean slate.
 
+### Open Filter-Linked Session (Grouped DICOM Row)
+
+Filter-linked sessions use `linkedResources.filter` (a metadata-key/value dict like `{"meta.dicom.StudyInstanceUID": "..."}`) in place of explicit item/folder IDs. The grouped DICOM row opener produces these.
+
+1. User clicks Open on a grouped row. Browser opens VolView with a manifest URL of `GET folder/:id/volview?filters={...}`. The endpoint returns the newest session.volview.zip whose `linkedResources.filter` is *equal* to the row's filter (strict set-equality on the filter list); if none exists, it returns the raw DICOM files matching the filter.
+1. User clicks Save. A new session.volview.zip is created in the folder with the row's filter recorded under `linkedResources.filter`.
+1. User clicks refresh in VolView. The same `?filters={...}` URL is hit again and now resolves to the just-saved session (newest matching by `getTouchedTime`, which honors `meta.lastOpened`).
+1. User checks an older filter-linked session item in the file browser and clicks "Open Checked in VolView". Client bumps `lastOpened` on the checked item, then opens VolView with `?items=<id>`. The endpoint reads the checked session's `linkedResources.filter` and returns the newest matching session — which is the just-touched older one. Subsequent saves create newer matching sessions; refresh picks them up via the same touched-time rule. This is what makes "go back in history" and "refresh after save" use the same code path.
+
 ## Development
 
 Get this running https://github.com/DigitalSlideArchive/digital_slide_archive/tree/master/devops/with-dive-volview

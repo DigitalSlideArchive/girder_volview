@@ -58,22 +58,39 @@ export function openResources(folder, resources) {
     window.open(openResourcesURL(folder, resources), "_blank").focus();
 }
 
-export function openGroupedItemURL(item, folder) {
-    const folderId = folder ? folder.id : item.get('folderId');
-    const folderRoute = `/${getApiRoot()}/folder/${folderId}`;
-    const groups = item.get('meta')._grouping || {};
+export function groupingFilterForItem(item) {
+    const groups = (item.get('meta') || {})._grouping || {};
     const filter = {};
     (groups.keys || []).forEach((key, idx) => {
         if ((groups.values || [])[idx] !== undefined) {
             filter[key] = groups.values[idx];
         }
     });
-    const metaData = {linkedResources: {filter: filter}};
+    return filter;
+}
+
+function volViewURLWithFilter(folderId, filterPayload) {
+    const folderRoute = `/${getApiRoot()}/folder/${folderId}`;
+    const metaData = {linkedResources: {filter: filterPayload}};
     const saveParam = `&save=${folderRoute}/volview?metadata=${encodeURIComponent(
         JSON.stringify(metaData)
     )}`;
-    const manifestUrl = `/${getApiRoot()}/folder/${folderId}/volview?filters=${JSON.stringify(filter)}`;
+    const manifestUrl = `/${getApiRoot()}/folder/${folderId}/volview?filters=${encodeURIComponent(
+        JSON.stringify(filterPayload)
+    )}`;
     const downloadParams = `&names=[manifest.json]&urls=${encodeURIComponent(manifestUrl)}`;
-    const newTabUrl = `${volViewPath}?${saveParam}${downloadParams}`;
-    return newTabUrl;
+    return `${volViewPath}?${saveParam}${downloadParams}`;
+}
+
+export function openGroupedItemURL(item, folder) {
+    const folderId = folder ? folder.id : item.get('folderId');
+    return volViewURLWithFilter(folderId, groupingFilterForItem(item));
+}
+
+export function openCheckedGroupedURL(folder, filterList) {
+    return volViewURLWithFilter(folder.id, filterList);
+}
+
+export function openCheckedGrouped(folder, filterList) {
+    window.open(openCheckedGroupedURL(folder, filterList), "_blank").focus();
 }

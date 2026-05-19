@@ -3,7 +3,16 @@ import ItemListWidget from "@girder/large_image/views/itemList";
 import { restRequest } from "@girder/core/rest";
 import { confirm } from "@girder/core/dialog";
 import { wrap } from "@girder/core/utilities/PluginUtils";
-import { addButton, openResources, openGroupedItemURL, openItemURL, openResourcesURL } from "./open";
+import {
+    addButton,
+    groupingFilterForItem,
+    openCheckedGrouped,
+    openCheckedGroupedURL,
+    openGroupedItemURL,
+    openItemURL,
+    openResources,
+    openResourcesURL,
+} from "./open";
 
 const openFolder = '<i class="icon-link-ext"></i>Open Folder in VolView</a>';
 const openChecked = '<i class="icon-link-ext"></i>Open Checked in VolView</a>';
@@ -30,6 +39,27 @@ function updateButtonVisibility(el, folderId) {
         const loadable = loadableJSON.loadable;
         setButtonVisibility(el, loadable);
     });
+}
+
+function isGroupedItemList(itemListView) {
+    if (!itemListView || typeof itemListView._confList !== "function") {
+        return false;
+    }
+    const conf = itemListView._confList();
+    return !!(conf && conf.group && conf.group.keys && conf.group.keys.length);
+}
+
+function checkedGroupingFilters(itemListView, resources) {
+    if (!isGroupedItemList(itemListView)) {
+        return null;
+    }
+    const ids = (resources && resources.item) || [];
+    const filters = ids
+        .map((cid) => itemListView.collection.get(cid))
+        .filter((model) => model && (model.get("meta") || {})._grouping)
+        .map((model) => groupingFilterForItem(model))
+        .filter((f) => Object.keys(f).length > 0);
+    return filters.length ? filters : null;
 }
 
 function loadResources(parentModel, resources) {
@@ -75,6 +105,12 @@ wrap(HierarchyWidget, "render", function (render) {
     button.onclick = () => {
         const resources = JSON.parse(this._getCheckedResourceParam());
 
+        const groupedFilters = checkedGroupingFilters(this.itemListView, resources);
+        if (groupedFilters) {
+            openCheckedGrouped(this.parentModel, groupedFilters);
+            return false;
+        }
+
         if (resources.item && resources.item.length > 0) {
             const items = resources.item.map((cid) =>
                 this.itemListView.collection.get(cid)
@@ -115,8 +151,19 @@ wrap(HierarchyWidget, "render", function (render) {
     };
 
     const updateChecked = () => {
-        const resources = this._getCheckedResourceParam();
-        button.innerHTML = resources.length >= 3 ? openChecked : openFolder;
+        const resourceParam = this._getCheckedResourceParam();
+        const resources = JSON.parse(resourceParam);
+        const groupedFilters = checkedGroupingFilters(this.itemListView, resources);
+        if (groupedFilters) {
+            button.innerHTML = openChecked;
+            $(button).attr('href', openCheckedGroupedURL(this.parentModel, groupedFilters));
+            return;
+        }
+        const hasResources = (
+            (resources.item && resources.item.length) ||
+            (resources.folder && resources.folder.length)
+        );
+        button.innerHTML = hasResources ? openChecked : openFolder;
         $(button).attr('href', openResourcesURL(this.parentModel, resources));
     };
     updateChecked();
