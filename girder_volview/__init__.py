@@ -15,7 +15,7 @@ from girder.constants import AccessType, TokenScope, SortDir
 from girder.models.file import File
 from girder.models.upload import Upload
 from girder.utility import RequestBodyStream
-from girder.exceptions import GirderException
+from girder.exceptions import GirderException, RestException
 
 from girder.models.item import Item
 from girder.utility import ziputil
@@ -49,6 +49,7 @@ from .utils import (
     getTouchedTime,
     getFilteredFiles,
     getFilteredSessionFile,
+    sessionNameFromFilter,
 )
 
 LARGE_IMAGE_CONFIG_FOLDER = "large_image.config_folder"
@@ -165,11 +166,10 @@ def uploadSession(model, parentId, user, size, metadata=None):
     parentType = model.__name__.lower()
     name = f"session{SESSION_ZIP_EXTENSION}"
     try:
-        # If the session was created due to a filter, include that as part of
-        # the name.  Don't fail if it isn't formated as we expect.
-        if metadata and metadata.get('linkedResources') and metadata['linkedResources'].get('filter'):
-            firstFilter = list(iter(metadata['linkedResources']['filter'].values()))[0]
-            name = f'session.{firstFilter}{SESSION_ZIP_EXTENSION}'
+        # Metadata comes from the client; don't fail the save if the shape
+        # isn't what we expect.
+        linkedFilter = (metadata or {}).get("linkedResources", {}).get("filter")
+        name = sessionNameFromFilter(linkedFilter, SESSION_ZIP_EXTENSION)
     except Exception:
         pass
 
@@ -383,7 +383,7 @@ def downloadManifest(self, item):
     .modelParam("folderId", model=Folder, level=AccessType.READ)
     .param("folders", "Folder IDs.", required=False)
     .param("items", "Item IDs.", required=False)
-    .jsonParam("filters", "Filters to apply within a folder.", required=False, requireObject=True)
+    .jsonParam("filters", "Filter (dict) or filter list (array of dicts) to apply within a folder.", required=False)
     .produces(["application/json"])
     .errorResponse("ID was invalid.")
     .errorResponse("Read access was denied for the folders or items.", 403)
@@ -392,6 +392,11 @@ def downloadResourceManifest(self, folder, folders, items, filters):
     user = self.getCurrentUser()
     folders = idStringToIdList(folders or '')
     items = idStringToIdList(items or '')
+    # filters is either a dict, a list of dicts, or absent. Anything else
+    # (bare scalar, null parsed to None already short-circuits via `if not
+    # filters`) gets rejected here rather than 500ing in Mongo.
+    if filters is not None and not isinstance(filters, (dict, list)):
+        raise RestException("filters must be a JSON object or array of objects")
     files = []
     if not folders and not items:
         if not filters:
@@ -400,7 +405,9 @@ def downloadResourceManifest(self, folder, folders, items, filters):
                 fileEntry
                 for fileEntry in Folder().fileList(folder, subpath=False, data=False)
             ]
-            files = singleVolViewZipOrImageFiles(filesInFolder, user=user)
+            files = singleVolViewZipOrImageFiles(
+                filesInFolder, user=user, includeFilterLinkedSessions=False,
+            )
         else:
             files = getFilteredSessionFile(folder, filters, user)
             if files is None:
@@ -414,6 +421,15 @@ def downloadResourceManifest(self, folder, folders, items, filters):
         newestSelectedSession = findNewestSession(selectedItems)
         if newestSelectedSession:
             linkedResources = getLinkedResources(newestSelectedSession)
+            linkedFilter = linkedResources.get("filter")
+            if linkedFilter:
+                files = getFilteredSessionFile(folder, linkedFilter, user)
+                if files is None:
+                    files = singleVolViewZipOrImageFiles(
+                        Item().fileList(newestSelectedSession, subpath=False, data=False),
+                        user=user,
+                    )
+                return filesToManifest(files, folder["_id"])
             folders = linkedResources["folders"]
             items = linkedResources["items"]
 

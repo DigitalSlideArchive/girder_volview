@@ -9,6 +9,66 @@ SESSION_ZIP_EXTENSION = ".volview.zip"
 SESSION_JSON_EXTENSION = ".volview.json"
 SESSION_EXTENSIONS = (SESSION_ZIP_EXTENSION, SESSION_JSON_EXTENSION)
 
+SAFE_NAME_MAX = 80
+SESSION_NAME_MAX = SAFE_NAME_MAX * 3
+# Suffix-matched against filter keys so both 'meta.dicom.PatientID' and
+# 'dicom.PatientID' get the same canonical position.
+PREFERRED_FILTER_SUFFIXES = (
+    "PatientID",
+    "StudyInstanceUID",
+    "SeriesInstanceUID",
+)
+
+
+def safeNameComponent(value):
+    safe = "".join(
+        ch if ch.isalnum() or ch in ".-_" else "_" for ch in str(value)
+    )
+    return safe.strip("._")[:SAFE_NAME_MAX]
+
+
+def _filterKeyPriority(key):
+    keyStr = str(key)
+    for index, suffix in enumerate(PREFERRED_FILTER_SUFFIXES):
+        if keyStr.endswith(suffix):
+            return (0, index, keyStr)
+    return (1, 0, keyStr)
+
+
+def _promoteFilterToList(value):
+    """Normalize dict-or-list filter input to a list of dicts.
+    Returns None for non-conforming values.
+    """
+    if isinstance(value, dict):
+        return [value]
+    if isinstance(value, list) and all(isinstance(v, dict) for v in value):
+        return value
+    return None
+
+
+def sessionNameFromFilter(linkedFilter, extension):
+    filtersList = _promoteFilterToList(linkedFilter)
+    if not filtersList:
+        return f"session{extension}"
+    sortedFilters = sorted(
+        filtersList,
+        key=lambda d: tuple(sorted(d.items())),
+    )
+    parts = []
+    seen = set()
+    for filterDict in sortedFilters:
+        for key in sorted(filterDict, key=_filterKeyPriority):
+            component = safeNameComponent(filterDict[key])
+            if component and component not in seen:
+                parts.append(component)
+                seen.add(component)
+    if not parts:
+        return f"session{extension}"
+    joined = ".".join(parts)
+    if len(joined) > SESSION_NAME_MAX:
+        joined = joined[:SESSION_NAME_MAX].rstrip(".")
+    return f"session.{joined}{extension}"
+
 # https://github.com/Kitware/VolView/blob/main/src/io/mimeTypes.ts
 LOADABLE_EXTENSIONS = (
     # VolView app
@@ -175,9 +235,34 @@ def sameLevelSessionFile(fileEntry):
     return directChildSession and isSessionFile(fileEntry[1])
 
 
-def singleVolViewZipOrImageFiles(fileEntries, user=None):
+def filterLinkedSessionItemIds(fileEntries):
+    sessionItemIds = {
+        fileEntry[1].get("itemId")
+        for fileEntry in fileEntries
+        if sameLevelSessionFile(fileEntry) and fileEntry[1].get("itemId")
+    }
+    if not sessionItemIds:
+        return set()
+    matches = Item().find(
+        {
+            "_id": {"$in": list(sessionItemIds)},
+            "meta.linkedResources.filter": {"$exists": True},
+        },
+        fields=["_id"],
+    )
+    return {item["_id"] for item in matches}
+
+
+def singleVolViewZipOrImageFiles(fileEntries, user=None, includeFilterLinkedSessions=True):
+    fileEntries = list(fileEntries)
+    excludedItemIds = (
+        set() if includeFilterLinkedSessions
+        else filterLinkedSessionItemIds(fileEntries)
+    )
     sessions = [
-        fileEntry for fileEntry in fileEntries if sameLevelSessionFile(fileEntry)
+        fileEntry for fileEntry in fileEntries
+        if sameLevelSessionFile(fileEntry)
+        and fileEntry[1].get("itemId") not in excludedItemIds
     ]
     if sessions:
         # load latest session
@@ -210,8 +295,8 @@ def normalizeLinkedResources(linkedResources):
     folders = linkedResources.get("folders", [])
     items = linkedResources.get("items", [])
     result = {"folders": folders, "items": items}
-    if 'filters' in linkedResources:
-        result['fitlers'] = linkedResources['filters']
+    if 'filter' in linkedResources:
+        result['filter'] = linkedResources['filter']
     return result
 
 
@@ -230,8 +315,8 @@ def matchesSelectionSet(folders, items, item):
 
 
 def getTouchedTime(item):
-    if item.get("meta").get("lastOpened"):
-        dateString = item.get("meta").get("lastOpened")
+    if item.get("meta", {}).get("lastOpened"):
+        dateString = item.get("meta", {}).get("lastOpened")
         return datetime.strptime(dateString, "%Y-%m-%dT%H:%M:%S.%fZ")
     return item.get("updated") or item.get("created")
 
@@ -253,7 +338,15 @@ def getFilteredFiles(folder, filters):
     """
     Given a folder and a set of item filter criteria, find all files that are
     in items in the folder or any of its sub-folders that match the filter.
+    Accepts a single filter dict or a list of dicts (OR-unioned).
     """
+    filtersList = _promoteFilterToList(filters) or []
+    if len(filtersList) > 1:
+        itemMatch = {'$or': filtersList}
+    elif filtersList:
+        itemMatch = filtersList[0]
+    else:
+        itemMatch = {}
     folderId = folder['_id']
     pipeline = [
         {'$match': {'_id': folderId}},
@@ -278,7 +371,7 @@ def getFilteredFiles(folder, filters):
         }},
         {'$unwind': '$items'},
         {'$replaceRoot': {'newRoot': '$items'}},
-        {'$match': filters},
+        {'$match': itemMatch},
         {'$lookup': {
             'from': 'file',
             'localField': '_id',
@@ -293,11 +386,40 @@ def getFilteredFiles(folder, filters):
     return filesInFolder
 
 
+def filterMatchesSession(rowFilter, sessionFilter):
+    """A row filter matches a session filter when they have the same set of
+    filter dicts. Both arguments may be a single dict or a list of dicts; a
+    dict is treated as a single-element list. Order is irrelevant; cardinality
+    must match and each dict must be content-equal to a counterpart on the
+    other side.
+    """
+    rowList = _promoteFilterToList(rowFilter)
+    sessionList = _promoteFilterToList(sessionFilter)
+    if rowList is None or sessionList is None:
+        return False
+
+    def canon(d):
+        return tuple(sorted(d.items()))
+
+    return sorted(map(canon, rowList)) == sorted(map(canon, sessionList))
+
+
 def getFilteredSessionFile(folder, filters, user):
-    items = list(Item().find({'folderId': folder['_id'], 'meta.linkedResources.filter': filters}))
-    item = findNewestSession(items)
+    candidates = list(Item().find(
+        {
+            'folderId': folder['_id'],
+            'meta.linkedResources.filter': {'$exists': True},
+        },
+        fields=['_id', 'name', 'meta.linkedResources', 'meta.lastOpened', 'updated', 'created'],
+    ))
+    matches = [
+        item for item in candidates
+        if filterMatchesSession(filters, item.get('meta', {}).get('linkedResources', {}).get('filter'))
+    ]
+    item = findNewestSession(matches)
     if not item:
         return None
+    item = Item().load(item['_id'], user=user, level=AccessType.READ)
     files = singleVolViewZipOrImageFiles(
         Item().fileList(item, subpath=False, data=False), user=user,
     )
