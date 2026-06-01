@@ -4,20 +4,18 @@ Translates VolView-native processing requests into `slicer_cli_web` calls and
 projects Girder jobs back into the VolView provider contract.
 
 SourceRef plumbing:
-- Refs are HMAC-signed encodings of `{fileId, itemId, folderId}`.
+- Refs are provider-owned opaque strings. For this Girder provider they are
+  raw Girder model ids.
 - On every resolution the facade re-loads the document with the *user's*
   permissions (`AccessType.READ` for inputs, `AccessType.WRITE` for output
-  folders). The HMAC is defense-in-depth; the Girder permission check is the
-  security boundary.
+  folders). The Girder permission check is the security boundary.
 """
 
-import base64
 import copy
-import hashlib
-import hmac
 import json
 import os
 
+from bson.objectid import ObjectId
 from girder import logger
 from girder.api import access
 from girder.api.describe import Description, autoDescribeRoute
@@ -41,64 +39,49 @@ def _readSampleXml():
 
 
 # ---------------------------------------------------------------------------
-# SourceRef — HMAC-signed `{fileId, itemId, folderId}` handle
+# SourceRef — provider-owned opaque handle
 # ---------------------------------------------------------------------------
 
-_SOURCE_REF_SECRET = os.environ.get(
-    "VOLVIEW_SOURCEREF_SECRET", os.urandom(32).hex()
-).encode("utf-8")
-
-
-def _b64encode(raw):
-    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
-
-
-def _b64decode(s):
-    pad = "=" * (-len(s) % 4)
-    return base64.urlsafe_b64decode(s + pad)
-
-
 def encodeSourceRef(fileId=None, itemId=None, folderId=None):
-    payload = {}
+    """Return the Girder id VolView should pass back as an opaque sourceRef."""
     if fileId is not None:
-        payload["fileId"] = str(fileId)
+        return str(fileId)
     if itemId is not None:
-        payload["itemId"] = str(itemId)
+        return str(itemId)
     if folderId is not None:
-        payload["folderId"] = str(folderId)
-    raw = json.dumps(payload, sort_keys=True).encode("utf-8")
-    sig = hmac.new(_SOURCE_REF_SECRET, raw, hashlib.sha256).digest()
-    return f"{_b64encode(raw)}.{_b64encode(sig)}"
+        return str(folderId)
+    raise RestException("Cannot create sourceRef without a Girder id")
 
 
-def decodeSourceRef(ref):
+def _stripTypedSourceRef(ref, expectedType):
+    """Accept raw ids and optional `girder:<type>:<id>` refs."""
+    if not isinstance(ref, str) or not ref:
+        raise RestException("Malformed sourceRef")
+    prefix = f"girder:{expectedType}:"
+    if ref.startswith(prefix):
+        return ref[len(prefix):]
+    return ref
+
+
+def _looksLikeSourceRef(value, expectedType):
+    if not isinstance(value, str):
+        return False
     try:
-        payloadB64, sigB64 = ref.split(".", 1)
-        raw = _b64decode(payloadB64)
-        sig = _b64decode(sigB64)
-    except (ValueError, TypeError) as exc:
-        raise RestException("Malformed sourceRef") from exc
-    expected = hmac.new(_SOURCE_REF_SECRET, raw, hashlib.sha256).digest()
-    if not hmac.compare_digest(sig, expected):
-        raise RestException("Invalid sourceRef signature")
-    return json.loads(raw.decode("utf-8"))
+        candidate = _stripTypedSourceRef(value, expectedType)
+    except RestException:
+        return False
+    return ObjectId.is_valid(candidate)
 
 
 def resolveSourceRefToFile(ref, user):
-    """Verify HMAC + load the file with the user's READ permission."""
-    payload = decodeSourceRef(ref)
-    fileId = payload.get("fileId")
-    if not fileId:
-        raise RestException("sourceRef missing fileId")
+    """Load the referenced file with the user's READ permission."""
+    fileId = _stripTypedSourceRef(ref, "file")
     f = File().load(fileId, user=user, level=AccessType.READ, exc=True)
     return f
 
 
 def resolveSourceRefToFolder(ref, user, level=AccessType.WRITE):
-    payload = decodeSourceRef(ref)
-    folderId = payload.get("folderId")
-    if not folderId:
-        raise RestException("sourceRef missing folderId")
+    folderId = _stripTypedSourceRef(ref, "folder")
     folder = Folder().load(folderId, user=user, level=level, exc=True)
     return folder
 
@@ -241,10 +224,11 @@ def _uniquifyItemName(folder, candidate):
 def _firstSourceRefFile(values, user):
     """Resolve the first SourceRef-looking value to a file doc, if any."""
     for v in (values or {}).values():
-        if isinstance(v, str) and "." in v and len(v) > 24:
+        if _looksLikeSourceRef(v, "file"):
             try:
                 return resolveSourceRefToFile(v, user)
-            except RestException:
+            except Exception as exc:
+                logger.debug("Skipping unresolved sourceRef candidate: %s", exc)
                 continue
     return None
 
@@ -361,14 +345,16 @@ def _translateValuesToSlicerParams(values, doc_xml, user, folder):
         elif isinstance(value, (int, float)):
             params[paramName] = str(value)
         elif isinstance(value, str):
-            # Could be a SourceRef (signed) or a plain string. Try to decode.
-            if "." in value and len(value) > 24:
+            # Could be a Girder file sourceRef or a plain string.
+            if _looksLikeSourceRef(value, "file"):
                 try:
                     f = resolveSourceRefToFile(value, user)
                     params[paramName] = str(f["_id"])
                     continue
-                except RestException:
-                    pass
+                except Exception as exc:
+                    logger.debug(
+                        "Leaving unresolved sourceRef-like value as string: %s", exc
+                    )
             params[paramName] = value
         elif isinstance(value, dict) and "name" in value:
             # ProcessingOutputRequest
@@ -582,14 +568,15 @@ def _runDemoTask(folder, user, values):
     from girder_jobs.constants import JobStatus
     from girder_jobs.models.job import Job as JobModel
 
-    # Resolve the first SourceRef in values (if any) to find the input.
+    # Resolve the first sourceRef in values (if any) to find the input.
     inputFile = None
     for v in (values or {}).values():
-        if isinstance(v, str) and "." in v and len(v) > 24:
+        if _looksLikeSourceRef(v, "file"):
             try:
                 inputFile = resolveSourceRefToFile(v, user)
                 break
-            except RestException:
+            except Exception as exc:
+                logger.debug("Skipping unresolved demo sourceRef candidate: %s", exc)
                 continue
     if inputFile is None:
         items = list(Folder().childItems(folder, user=user, limit=1))
