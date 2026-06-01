@@ -509,133 +509,234 @@ def _collectJobResults(job, user):
 
 
 # ---------------------------------------------------------------------------
-# Demo task — creates a real Girder Job for end-to-end testing without
-# requiring a docker image to be registered. The "job" immediately succeeds
-# and returns the launched input file as its result so the layer-attach path
-# is exercised by VolView.
+# Built-in task — threshold segmentation. Runs in-process (no Docker, no extra
+# deps beyond pydicom + numpy) so the end-to-end "submit job -> load segment
+# group" path can be exercised against any DICOM folder. Reads the input image,
+# labels voxels whose intensity is within [lowerThreshold, upperThreshold], and
+# writes a NRRD labelmap in the input's physical space (LPS) so it overlays the
+# parent volume exactly.
 # ---------------------------------------------------------------------------
 
-_DEMO_JOB_TYPE = "volview_processing_demo"
+_BUILTIN_JOB_TYPE = "volview_processing_builtin"
+_BUILTIN_TASK_ID = "threshold"
 
 
-def _writeDerivedFile(inputFile, folder, user, targetName):
-    """Copy `inputFile` bytes into a new Girder item/file in `folder` named
-    `targetName`.
+def _nrrdMaskBytes(mask, directions, origin):
+    """Serialize a uint8 mask volume to a self-contained NRRD (raw, LPS).
 
-    Produces a *distinct* file so VolView's loader treats it as a new dataset
-    (no self-referential collisions on layer attach).
+    `mask` is a C-contiguous array shaped (nk, nj, ni) (slices, rows, columns).
+    `directions` are the (i, j, k) space-direction vectors in LPS, already
+    scaled by spacing. `origin` is the LPS position of voxel (0, 0, 0).
+
+    NRRD stores the fastest-varying axis first, so `sizes` is `ni nj nk` and the
+    raw bytes are the C-order array (last axis = columns = i varies fastest).
     """
+    import numpy as np
+
+    nk, nj, ni = mask.shape
+
+    def _vec(v):
+        return "(%s)" % ",".join("%.12g" % float(x) for x in v)
+
+    header = "\n".join([
+        "NRRD0004",
+        "type: unsigned char",
+        "dimension: 3",
+        "space: left-posterior-superior",
+        "sizes: %d %d %d" % (ni, nj, nk),
+        "space directions: %s %s %s" % (
+            _vec(directions[0]), _vec(directions[1]), _vec(directions[2]),
+        ),
+        "kinds: domain domain domain",
+        "endian: little",
+        "encoding: raw",
+        "space origin: %s" % _vec(origin),
+    ]) + "\n\n"
+    data = np.ascontiguousarray(mask, dtype=np.uint8).tobytes()
+    return header.encode("ascii") + data
+
+
+def _thresholdDicomToNrrd(dicomBytes, lower, upper):
+    """Read a DICOM file, threshold it, return (nrrdBytes, voxelCount).
+
+    Geometry (orientation/spacing/origin) is taken from the DICOM headers in
+    LPS, matching how itk-wasm reconstructs the same series in VolView, so the
+    resulting labelmap aligns with the parent volume.
+    """
+    import io as _io
+    import numpy as np
+    import pydicom
+
+    ds = pydicom.dcmread(_io.BytesIO(dicomBytes))
+    arr = ds.pixel_array
+    if arr.ndim == 2:
+        arr = arr[np.newaxis, ...]  # (nk=1, nj=rows, ni=columns)
+    elif arr.ndim != 3:
+        raise RestException("Unsupported pixel array shape for thresholding")
+
+    mask = ((arr >= lower) & (arr <= upper)).astype(np.uint8)
+
+    # DICOM PixelSpacing is [row spacing, column spacing]: row spacing is the
+    # distance along the column direction (axis j), column spacing along the
+    # row direction (axis i).
+    ps = [float(x) for x in (getattr(ds, "PixelSpacing", None) or [1.0, 1.0])]
+    row_sp, col_sp = ps[0], ps[1]
+    slice_sp = float(
+        getattr(ds, "SpacingBetweenSlices", None)
+        or getattr(ds, "SliceThickness", None)
+        or 1.0
+    )
+    iop = [float(x) for x in (
+        getattr(ds, "ImageOrientationPatient", None) or [1, 0, 0, 0, 1, 0]
+    )]
+    row_cos = np.array(iop[0:3])  # direction of increasing column index
+    col_cos = np.array(iop[3:6])  # direction of increasing row index
+    normal = np.cross(row_cos, col_cos)
+    origin = [float(x) for x in (
+        getattr(ds, "ImagePositionPatient", None) or [0.0, 0.0, 0.0]
+    )]
+
+    directions = [
+        (row_cos * col_sp).tolist(),   # axis i (columns, fastest)
+        (col_cos * row_sp).tolist(),   # axis j (rows)
+        (normal * slice_sp).tolist(),  # axis k (slices)
+    ]
+    return _nrrdMaskBytes(mask, directions, origin), int(mask.sum())
+
+
+def _resolveInputDicomFile(values, folder, user):
+    """Find an input file we can read as DICOM.
+
+    Prefers the sourceRef the client bound to the input param, then falls back
+    to scanning the folder (skipping prior outputs). Returns (fileDoc, bytes).
+    """
+    import io as _io
+    import pydicom
+
+    candidates = []
+    resolved = _firstSourceRefFile(values, user)
+    if resolved is not None:
+        candidates.append(resolved)
+    for item in Folder().childItems(folder, user=user, limit=50):
+        f = next(iter(Item().childFiles(item, limit=1)), None)
+        if f is not None and not any(c["_id"] == f["_id"] for c in candidates):
+            candidates.append(f)
+
+    for fileDoc in candidates:
+        try:
+            chunks = File().download(fileDoc, headers=False)
+            raw = b"".join(chunks() if callable(chunks) else chunks)
+            pydicom.dcmread(_io.BytesIO(raw))  # validate it parses as DICOM
+            return fileDoc, raw
+        except Exception as exc:
+            logger.debug(
+                "Skipping non-DICOM input candidate %s: %s",
+                fileDoc.get("name"), exc,
+            )
+            continue
+    raise RestException("No readable DICOM input found for threshold task")
+
+
+def _uploadResultFile(folder, user, name, data, mimeType):
+    """Write `data` as a new single-file item named `name` in `folder`."""
     from girder.models.upload import Upload
 
-    baseName = inputFile["name"]
-    newName = targetName or baseName
-
     item = Item().createItem(
-        name=newName,
+        name=name,
         creator=user,
         folder=folder,
-        description=f"Demo-derived output of {baseName}",
+        description="VolView threshold segmentation",
         reuseExisting=True,
     )
-    # If we re-used an existing item, drop any existing files so we get a clean
+    # If we re-used an existing item, drop any existing files for a clean
     # one-file item.
     for existing in list(Item().childFiles(item)):
         File().remove(existing)
 
-    size = int(inputFile.get("size") or 0)
-    mimeType = inputFile.get("mimeType") or "application/octet-stream"
     upload = Upload().createUpload(
         user=user,
-        name=newName,
+        name=name,
         parentType="item",
         parent=item,
-        size=size,
+        size=len(data),
         mimeType=mimeType,
     )
-    chunks = File().download(inputFile, headers=False)
-    buf = b"".join(chunks() if callable(chunks) else chunks)
-    newFile = Upload().handleChunk(upload, buf, filter=True, user=user)
-    return newFile
+    return Upload().handleChunk(upload, data, filter=True, user=user)
 
 
-def _runDemoTask(folder, user, values):
-    """Create a Girder Job that synthesizes a new derived file and returns it.
-
-    The "filter" itself is a no-op — bytes are copied — but the *file* is a
-    genuinely new Girder file in the launch folder, so VolView's loader sees a
-    new dataset and the layer-attach path works without self-load errors.
-    """
+def _runThresholdTask(folder, user, values):
+    """Threshold the input image into a NRRD labelmap and return it as a
+    `segmentGroup` result. Runs synchronously (no Docker, no Celery)."""
     from girder_jobs.constants import JobStatus
     from girder_jobs.models.job import Job as JobModel
 
-    # Resolve the first sourceRef in values (if any) to find the input.
-    inputFile = None
-    for v in (values or {}).values():
-        if _looksLikeSourceRef(v, "file"):
-            try:
-                inputFile = resolveSourceRefToFile(v, user)
-                break
-            except Exception as exc:
-                logger.debug("Skipping unresolved demo sourceRef candidate: %s", exc)
-                continue
-    if inputFile is None:
-        items = list(Folder().childItems(folder, user=user, limit=1))
-        if items:
-            files = list(Item().childFiles(items[0], limit=1))
-            if files:
-                inputFile = files[0]
+    def _intVal(key, default):
+        try:
+            return int((values or {}).get(key, default))
+        except (TypeError, ValueError):
+            return default
 
-    radius = (values or {}).get("radius", 1)
-    outputRequest = values.get("outputVolume") if isinstance(values, dict) else None
-    targetName = (
-        outputRequest.get("name")
-        if isinstance(outputRequest, dict) and outputRequest.get("name")
-        else None
-    )
-    if not targetName and inputFile is not None:
-        # Fallback — should be rare since runTask auto-fills.
-        base, ext = _splitExt(inputFile.get("name") or "output")
-        targetName = _uniquifyItemName(folder, f"{base}.demo-median-r{radius}{ext}")
+    lower = _intVal("lowerThreshold", 50)
+    upper = _intVal("upperThreshold", 65535)
 
     job = JobModel().createJob(
-        title=f"Demo Median Filter (r={radius})",
-        type=_DEMO_JOB_TYPE,
+        title="Threshold Segmentation [%d, %d]" % (lower, upper),
+        type=_BUILTIN_JOB_TYPE,
         public=True,
         user=user,
     )
-    log_lines = [f"Demo task — synthesizing derived file ({targetName}).\n"]
 
-    results = []
-    if inputFile is not None and targetName is not None:
-        try:
-            newFile = _writeDerivedFile(inputFile, folder, user, targetName)
-            results.append({
-                "id": str(newFile["_id"]),
-                "name": newFile["name"],
-                "url": (
-                    f"/api/v1/file/{newFile['_id']}/proxiable/{newFile['name']}"
-                ),
-                "role": "layer",
-                "mimeType": newFile.get("mimeType"),
-                "size": newFile.get("size"),
-            })
-            log_lines.append(
-                f"Wrote {newFile['name']} ({newFile.get('size', 0)} bytes).\n",
-            )
-        except Exception as exc:  # pragma: no cover - best-effort demo
-            logger.exception("Demo task failed to synthesize output file")
-            log_lines.append(f"Output synthesis failed: {exc}\n")
+    log_lines = []
+    try:
+        inputFile, dicomBytes = _resolveInputDicomFile(values, folder, user)
+        log_lines.append("Input: %s\n" % inputFile.get("name"))
+
+        nrrdBytes, voxelCount = _thresholdDicomToNrrd(dicomBytes, lower, upper)
+        base, _ = _splitExt(inputFile.get("name") or "output")
+        outName = _uniquifyItemName(folder, "%s.threshold.seg.nrrd" % base)
+        newFile = _uploadResultFile(
+            folder, user, outName, nrrdBytes, "application/octet-stream"
+        )
+
+        results = [{
+            "id": str(newFile["_id"]),
+            "name": newFile["name"],
+            "url": "/api/v1/file/%s/proxiable/%s" % (
+                newFile["_id"], newFile["name"]
+            ),
+            "role": "segmentGroup",
+            "mimeType": newFile.get("mimeType"),
+            "size": newFile.get("size"),
+            "segments": [{
+                "value": 1,
+                "name": "Threshold %d–%d" % (lower, upper),
+                "color": [255, 0, 0, 255],
+            }],
+        }]
+        log_lines.append(
+            "Labeled %d voxels in [%d, %d] -> %s (%d bytes).\n"
+            % (voxelCount, lower, upper, outName, newFile.get("size", 0))
+        )
+    except Exception as exc:
+        logger.exception("Threshold task failed")
+        job["meta"] = job.get("meta", {})
+        job["meta"]["volviewResults"] = []
+        JobModel().updateJob(job, status=JobStatus.QUEUED)
+        JobModel().updateJob(job, status=JobStatus.RUNNING)
+        JobModel().updateJob(
+            job,
+            status=JobStatus.ERROR,
+            log="".join(log_lines) + "Error: %s\n" % exc,
+        )
+        JobModel().save(job)
+        return {"jobId": str(job["_id"])}
 
     job["meta"] = job.get("meta", {})
     job["meta"]["volviewResults"] = results
 
     JobModel().updateJob(job, status=JobStatus.QUEUED)
     JobModel().updateJob(job, status=JobStatus.RUNNING)
-    JobModel().updateJob(
-        job,
-        status=JobStatus.SUCCESS,
-        log="".join(log_lines),
-    )
+    JobModel().updateJob(job, status=JobStatus.SUCCESS, log="".join(log_lines))
     JobModel().save(job)
     return {"jobId": str(job["_id"])}
 
@@ -667,10 +768,10 @@ def listTasks(self, folder):
     user = self.getCurrentUser()
     tasks = [
         {
-            "id": "demo",
-            "title": "Demo Median Filter (fixture)",
-            "description": "Built-in demo (no docker run).",
-            "category": ["Demo"],
+            "id": _BUILTIN_TASK_ID,
+            "title": "Threshold Segmentation (built-in)",
+            "description": "Label voxels between two intensities. No Docker.",
+            "category": ["Segmentation"],
         }
     ]
     if user and _slicerCliAvailable():
@@ -692,7 +793,7 @@ def getTaskXml(self, folder, taskId):
     user = self.getCurrentUser()
     setResponseHeader("Content-Type", "application/xml")
     setRawResponse()
-    if taskId == "demo":
+    if taskId == _BUILTIN_TASK_ID:
         return _readSampleXml()
     if not _slicerCliAvailable():
         raise RestException("slicer_cli_web is not installed", code=404)
@@ -719,11 +820,9 @@ def runTask(self, folder, taskId, body):
     user = self.getCurrentUser()
     values = (body or {}).get("values", {}) if isinstance(body, dict) else {}
 
-    if taskId == "demo":
-        # Demo XML has output params too; fill them so the user form needs
-        # nothing for the demo.
-        values = _autofillOutputs(dict(values), _readSampleXml(), "demo", user, folder)
-        return _runDemoTask(folder, user, values)
+    if taskId == _BUILTIN_TASK_ID:
+        # Output name is generated inside the task; no autofill needed.
+        return _runThresholdTask(folder, user, values)
 
     if not _slicerCliAvailable():
         raise RestException("slicer_cli_web is not installed", code=500)
@@ -782,8 +881,8 @@ def getJobResults(self, folder, jobId):
     user = self.getCurrentUser()
     from girder_jobs.models.job import Job as JobModel
     job = JobModel().load(jobId, user=user, level=AccessType.READ, exc=True)
-    # Demo jobs store a hand-rolled result list in `meta.volviewResults`.
-    if job.get("type") == _DEMO_JOB_TYPE:
+    # Built-in jobs store a hand-rolled result list in `meta.volviewResults`.
+    if job.get("type") == _BUILTIN_JOB_TYPE:
         return job.get("meta", {}).get("volviewResults", [])
     return _collectJobResults(job, user)
 

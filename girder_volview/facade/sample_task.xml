@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <executable>
-  <category>Demo</category>
-  <title>Demo Median Filter</title>
-  <description>Demo task: apply a median filter to an input image.</description>
+  <category>Segmentation</category>
+  <title>Threshold Segmentation</title>
+  <description>Label voxels whose intensity falls between two thresholds.</description>
   <version>0.1.0</version>
   <license>Apache 2.0</license>
   <contributor>VolView</contributor>
@@ -13,48 +13,33 @@
       <name>inputVolume</name>
       <label>Input Volume</label>
       <channel>input</channel>
-      <description>Input volume (e.g. NIfTI)</description>
+      <description>Volume to threshold</description>
       <longflag>input</longflag>
     </image>
-    <image>
+    <image type="label">
       <name>outputVolume</name>
-      <label>Output Volume</label>
+      <label>Output Segmentation</label>
       <channel>output</channel>
-      <description>Filtered output volume</description>
+      <description>Binary labelmap of in-range voxels</description>
       <longflag>output</longflag>
     </image>
   </parameters>
   <parameters>
-    <label>Filter parameters</label>
-    <description>Tuning</description>
+    <label>Threshold</label>
+    <description>Intensity window to label.</description>
     <integer>
-      <name>radius</name>
-      <label>Radius</label>
-      <description>Median filter radius (voxels)</description>
-      <longflag>radius</longflag>
-      <default>1</default>
-      <constraints>
-        <minimum>1</minimum>
-        <maximum>10</maximum>
-        <step>1</step>
-      </constraints>
+      <name>lowerThreshold</name>
+      <label>Lower Threshold</label>
+      <description>Lowest intensity to include (inclusive)</description>
+      <longflag>lower</longflag>
+      <default>50</default>
     </integer>
-    <boolean>
-      <name>normalize</name>
-      <label>Normalize</label>
-      <description>Normalize output intensity</description>
-      <longflag>normalize</longflag>
-      <default>false</default>
-    </boolean>
-    <string-enumeration>
-      <name>kernelShape</name>
-      <label>Kernel Shape</label>
-      <description>Shape of the structuring element</description>
-      <longflag>kernel</longflag>
-      <default>box</default>
-      <element>box</element>
-      <element>ball</element>
-      <element>cross</element>
-    </string-enumeration>
+    <integer>
+      <name>upperThreshold</name>
+      <label>Upper Threshold</label>
+      <description>Highest intensity to include (inclusive)</description>
+      <longflag>upper</longflag>
+      <default>65535</default>
+    </integer>
   </parameters>
 </executable>
