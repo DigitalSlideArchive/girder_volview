@@ -361,8 +361,9 @@ Filter-linked sessions use `linkedResources.filter` (a metadata-key/value dict l
 
 Get this running https://github.com/DigitalSlideArchive/digital_slide_archive/tree/master/devops/with-dive-volview
 
-In the `docker-compose.override.yml` file, add some `volumes` pointing to this girder plugin and optionally
-a VolView repo checkout. Example:
+In the `docker-compose.override.yml` file, add volumes pointing to this Girder
+plugin. If you want to use a local VolView build, mount that build's `dist`
+directory over the packaged VolView `dist` directory. Example:
 
 ```yaml
 services:
@@ -370,7 +371,7 @@ services:
     volumes:
       - ../with-dive-volview/provision.divevolview.yaml:/opt/digital_slide_archive/devops/dsa/provision.yaml
       - ../../../girder_volview:/opt/girder_volview
-      - ../../../../VolView:/opt/volview-package
+      - ../../../../VolView/dist:/opt/girder_volview/girder_volview/web_client/node_modules/volview/dist:ro
 ```
 
 Comment out the pip install of this plugin here: https://github.com/DigitalSlideArchive/digital_slide_archive/blob/master/devops/with-dive-volview/provision.divevolview.yaml#L3
@@ -385,17 +386,11 @@ shell:
 
 ### Develop VolView client
 
-To develop with a local VolView build, change the directory the Webpack copy plugin pulls from in `girder_volview/web_client/webpack.helper.js`:
-
-```js
-new CopyWebpackPlugin([
-  {
-    from: "/opt/volview-package/dist", // Point to your mount of VolView
-    to: config.output.path,
-    toType: "dir",
-  },
-]);
-```
+To develop with a local VolView build, build VolView from source and mount or
+copy its `dist` directory over `girder_volview/web_client/node_modules/volview/dist`
+before rebuilding the Girder web client. The checked-in Webpack helper always
+copies from the packaged `node_modules/volview/dist` path, so local development
+does not require changing `webpack.helper.js`.
 
 Then build VolView from source with these env vars:
 
