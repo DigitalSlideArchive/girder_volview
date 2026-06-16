@@ -15,7 +15,7 @@ import copy
 import json
 
 from bson.objectid import ObjectId
-from girder import logger
+from girder import events, logger
 from girder.api import access
 from girder.api.describe import Description, autoDescribeRoute
 from girder.api.rest import boundHandler, setRawResponse, setResponseHeader
@@ -237,6 +237,10 @@ def _folderFileEntries(folder, user):
     """
     entries = []
     for item in Folder().childItems(folder, user=user, limit=0):
+        if (item.get("meta") or {}).get("volviewTransient"):
+            # An assembled volume staged for a job (item 3.3) is internal
+            # plumbing, deleted when its job finishes — never a user source.
+            continue
         files = list(Item().childFiles(item, limit=0))
         if not files:
             continue
@@ -522,14 +526,242 @@ def _readLabelsSidecar(fileDoc):
     return cleaned or None
 
 
+# ---------------------------------------------------------------------------
+# Volume staging at submit (D10 part 2, item 3.3) — b1: assemble to one file
+#
+# A multi-file DICOM series sourceRef (``series:<folderId>:<UID>``, item 3.2)
+# names a whole volume, but every CLI today declares an ``<image>``/``<file>``
+# input that wants ONE file. So at submit we resolve the series to its ordered
+# slice files, assemble them into a single geometry-correct NRRD with SimpleITK
+# (``ImageSeriesReader``, which reconstructs spacing/origin/direction from the
+# slices and so fixes the ``[1,1,1]`` regression — DICOM_SPACING_FIX_PLAN.md),
+# upload that as a transient file in the launch folder, and bind its file id.
+# Assembly runs synchronously in the Girder web process inside ``runTask``;
+# SimpleITK lives in the facade environment. The transient file is deleted when
+# its job reaches a terminal state (``_cleanupTransientOnJobDone``).
+#
+# Dispatch is on the CLI's *declared input type* (decisions.md D10): only the
+# ``<image>``/``<file>`` branch (b1) is live — every CLI declares one. The
+# ``<directory>`` branch (b2) is a deferred seam that raises until a CLI needs
+# it. A task may opt out of assembly via a per-CLI 2D/per-slice declaration
+# (escape hatch), binding a single slice instead of the whole volume.
+# ---------------------------------------------------------------------------
+
+# Slicer XML input tags that carry a single resource (a sourceRef value).
+_FILE_INPUT_TAGS = {"image", "file", "directory"}
+# Per-task dimensionality declarations that opt out of whole-volume assembly.
+_PER_SLICE_DIMENSIONALITY = {"2d", "slice", "single", "per-slice"}
+
+
+def _parseCliInputs(xmlText):
+    """Map each input param name to its Slicer XML tag (image/file/directory).
+
+    Mirrors ``_parseCliOutputs`` but for inputs (channel is absent or != output).
+    Used to dispatch volume staging on the declared input type at submit.
+    """
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(xmlText)
+    except ET.ParseError:
+        return {}
+    inputs = {}
+    for param in root.iter():
+        if param.tag not in _FILE_INPUT_TAGS:
+            continue
+        channelEl = param.find("channel")
+        channel = (channelEl.text or "").strip() if channelEl is not None else ""
+        if channel == "output":
+            continue
+        nameEl = param.find("name")
+        if nameEl is None or not nameEl.text:
+            continue
+        inputs[nameEl.text.strip()] = param.tag
+    return inputs
+
+
+def _taskBindsSingleFile(xmlText):
+    """Whether a CLI declares 2D/per-slice dimensionality (interim escape hatch).
+
+    Whole-volume assembly is the default. A task opts into per-slice binding by
+    declaring ``volview-dimensionality="2d"`` (or ``slice``/``single``) on its
+    root ``<executable>`` element — a minimal per-CLI flag pending full config
+    plumbing (post-MVP). No CLI declares it today, so every task assembles.
+    """
+    if not xmlText:
+        return False
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(xmlText)
+    except ET.ParseError:
+        return False
+    declared = (root.get("volview-dimensionality") or "").strip().lower()
+    return declared in _PER_SLICE_DIMENSIONALITY
+
+
+def _assembleDicomToFile(orderedPaths, outPath):
+    """Assemble ordered DICOM slice files into one volume written at ``outPath``.
+
+    ``ImageSeriesReader`` reconstructs spacing/origin/direction from the slices'
+    ``ImagePositionPatient`` tags — the multi-slice geometry the per-slice path
+    dropped to ``[1,1,1]``. A lone file is read straight through (passthrough).
+    The output format follows ``outPath``'s extension (NRRD).
+    """
+    import SimpleITK as sitk
+    paths = list(orderedPaths)
+    if len(paths) == 1:
+        image = sitk.ReadImage(paths[0])
+    else:
+        reader = sitk.ImageSeriesReader()
+        reader.SetFileNames(paths)
+        image = reader.Execute()
+    sitk.WriteImage(image, outPath)
+    return outPath
+
+
+def _assembledVolumeName(files):
+    """Deterministic name for the assembled transient volume."""
+    base = (files[0].get("name") if files else None) or "volume"
+    base, _ = _splitExt(base)
+    base = base.strip(". ") or "volume"
+    return f"{base}.assembled.nrrd"
+
+
+def _downloadFileTo(fileDoc, destPath):
+    """Stream a Girder file's bytes to a local path."""
+    chunks = File().download(fileDoc, headers=False)
+    data = chunks() if callable(chunks) else chunks
+    with open(destPath, "wb") as fh:
+        for chunk in data:
+            fh.write(chunk)
+    return destPath
+
+
+def _stageAssembledVolume(files, user, folder):
+    """Download a series' files, assemble to NRRD, upload as a transient file.
+
+    Returns ``(fileId, transientItemId)``. The transient item is flagged so the
+    source listing skips it (``_folderFileEntries``) and the job-done handler
+    deletes it (``_cleanupTransientOnJobDone``). Runs in the Girder web process.
+    """
+    import os
+    import shutil
+    import tempfile
+    from girder.models.upload import Upload
+
+    tmp = tempfile.mkdtemp(prefix="volview-assemble-")
+    try:
+        orderedPaths = []
+        for idx, f in enumerate(files):
+            # Content (not extension) drives the DICOM read; keep names unique
+            # and ordered so ImageSeriesReader honors the slice order.
+            local = os.path.join(tmp, f"{idx:05d}_{f.get('name') or 'slice'}")
+            _downloadFileTo(f, local)
+            orderedPaths.append(local)
+        outName = _assembledVolumeName(files)
+        outPath = os.path.join(tmp, outName)
+        _assembleDicomToFile(orderedPaths, outPath)
+        size = os.path.getsize(outPath)
+        with open(outPath, "rb") as stream:
+            fileDoc = Upload().uploadFromFile(
+                stream,
+                size=size,
+                name=outName,
+                parentType="folder",
+                parent=folder,
+                user=user,
+                mimeType="application/x-nrrd",
+            )
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    transientItemId = fileDoc.get("itemId")
+    if transientItemId:
+        item = Item().load(transientItemId, force=True)
+        if item:
+            Item().setMetadata(item, {"volviewTransient": True})
+    return str(fileDoc["_id"]), (str(transientItemId) if transientItemId else None)
+
+
+def _resolveSeriesValueToFileId(
+    value, paramTag, user, folder, perSlice, transientItemIds
+):
+    """Resolve a series volume ref to one file id, staging per CLI input type.
+
+    Dispatch on the param's declared input type (decisions.md D10): ``<image>``/
+    ``<file>`` assembles the whole volume (b1, live); ``<directory>`` is the
+    deferred b2 seam and raises. Appends any transient item created to
+    ``transientItemIds`` for cleanup.
+    """
+    if paramTag == "directory":
+        # b2 (decisions.md D10): stage the file set into a transient folder and
+        # bind a <directory> param. Deferred until a CLI declares <directory>.
+        raise RestException(
+            "Directory-input volume staging (b2) is not implemented yet", code=501
+        )
+    files = resolveSeriesSourceRefToFiles(value, user)
+    if perSlice:
+        # Escape hatch: a 2D/per-slice task binds one slice, not the volume.
+        return str(files[0]["_id"])
+    fileId, transientItemId = _stageAssembledVolume(files, user, folder)
+    if transientItemId:
+        transientItemIds.append(transientItemId)
+    return fileId
+
+
+def _markJobTransients(job_doc, transientItemIds):
+    """Record transient input items on the job so cleanup can delete them."""
+    from girder_jobs.models.job import Job as JobModel
+    try:
+        JobModel().updateJob(
+            job_doc, otherFields={"volviewTransient": list(transientItemIds)}
+        )
+    except Exception:
+        logger.exception(
+            "Failed to mark transient inputs on job %s", job_doc.get("_id")
+        )
+
+
+def _cleanupTransientOnJobDone(event):
+    """Delete a job's transient assembled inputs once it reaches a terminal state.
+
+    Bound to ``jobs.job.update.after``. Idempotent: a re-fired terminal update
+    finds the items already gone and no-ops.
+    """
+    from girder_jobs.constants import JobStatus
+    job = getattr(event, "info", None)
+    job = job.get("job") if isinstance(job, dict) else None
+    if not isinstance(job, dict):
+        return
+    transientItemIds = job.get("volviewTransient")
+    if not transientItemIds:
+        return
+    terminal = {JobStatus.SUCCESS, JobStatus.ERROR, JobStatus.CANCELED}
+    if job.get("status") not in terminal:
+        return
+    for itemId in transientItemIds:
+        try:
+            item = Item().load(itemId, force=True)
+            if item:
+                Item().remove(item)
+        except Exception:
+            logger.exception("Failed to remove transient volume item %s", itemId)
+
+
 def _translateValuesToSlicerParams(values, doc_xml, user, folder):
     """Translate VolView values payload to slicer_cli_web's form-encoded params.
 
+    - Series volume sourceRefs → assembled-to-one-file id (D10 b1, see above)
     - SourceRef inputs → fileId
     - ProcessingOutputRequest outputs → name + name_folder (output goes back
       to the launching folder by default)
     - Scalars → str(value)
+
+    Returns ``(params, transientItemIds)``; the caller stamps the transient item
+    ids on the job so they are cleaned up when it finishes.
     """
+    inputTypes = _parseCliInputs(doc_xml or "")
+    perSlice = _taskBindsSingleFile(doc_xml)
+    transientItemIds = []
     params = {}
     for paramName, value in (values or {}).items():
         if value is None:
@@ -539,7 +771,14 @@ def _translateValuesToSlicerParams(values, doc_xml, user, folder):
         elif isinstance(value, (int, float)):
             params[paramName] = str(value)
         elif isinstance(value, str):
-            # Could be a Girder file sourceRef or a plain string.
+            # A multi-file volume ref (item 3.2) is staged for the CLI's declared
+            # input type before binding; a plain file ref resolves directly.
+            if decodeSeriesSourceRef(value) is not None:
+                params[paramName] = _resolveSeriesValueToFileId(
+                    value, inputTypes.get(paramName), user, folder,
+                    perSlice, transientItemIds,
+                )
+                continue
             if _looksLikeSourceRef(value, "file"):
                 try:
                     f = resolveSourceRefToFile(value, user)
@@ -563,7 +802,7 @@ def _translateValuesToSlicerParams(values, doc_xml, user, folder):
             params[paramName] = ",".join(str(v) for v in value)
         else:
             params[paramName] = str(value)
-    return params
+    return params, transientItemIds
 
 
 def _projectJobStatus(job):
@@ -790,8 +1029,11 @@ def runTask(self, folder, taskId, body):
     # file + CLI name + parameter name + extension.
     values = _autofillOutputs(dict(values), cliItem.xml, cliItem.name, user, folder)
 
-    # Translate VolView values to slicer_cli_web params.
-    params = _translateValuesToSlicerParams(values, cliItem.xml, user, folder)
+    # Translate VolView values to slicer_cli_web params. A multi-file volume
+    # input is assembled here (D10 b1) and tracked as a transient for cleanup.
+    params, transientItemIds = _translateValuesToSlicerParams(
+        values, cliItem.xml, user, folder
+    )
     logger.info(
         "[volview_processing] runTask folder=%s task=%s params=%s",
         folder["_id"], taskId, params,
@@ -802,6 +1044,8 @@ def runTask(self, folder, taskId, body):
     # Take a copy so the handler can mutate freely.
     job_obj = handler.subHandler(cliItem, copy.deepcopy(params), user, token)
     job_doc = job_obj.job if hasattr(job_obj, "job") else job_obj
+    if transientItemIds:
+        _markJobTransients(job_doc, transientItemIds)
     return {"jobId": str(job_doc["_id"])}
 
 
@@ -840,6 +1084,13 @@ def getJobResults(self, folder, jobId):
 # ---------------------------------------------------------------------------
 
 def addProcessingRoutes(info):
+    # Delete transient assembled-volume inputs (D10 b1, item 3.3) when their job
+    # finishes. Bound once at plugin load.
+    events.bind(
+        "jobs.job.update.after",
+        "girder_volview.processing",
+        _cleanupTransientOnJobDone,
+    )
     info["apiRoot"].folder.route(
         "GET", (":folderId", "volview_processing"), getProviderConfig
     )

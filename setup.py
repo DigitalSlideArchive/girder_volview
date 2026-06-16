@@ -8,6 +8,8 @@ requirements = [
     "girder-large-image>=1.30.1",
     "pyyaml",
     "pydicom>=2",
+    # Multi-slice DICOM → single-volume assembly at submit (D10 b1, item 3.3).
+    "SimpleITK",
 ]
 
 setup(
