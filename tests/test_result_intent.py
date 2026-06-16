@@ -28,14 +28,7 @@ def test_non_image_file_maps_to_download():
     assert _intentForOutput(_out("file", False)) == "download"
 
 
-def test_intent_uses_only_the_v1_vocabulary():
-    vocabulary = {
-        "add-base-image",
-        "add-layer",
-        "attach-segment-group",
-        "restore-state",
-        "download",
-    }
-    for tag in ("image", "file"):
-        for isLabel in (True, False):
-            assert _intentForOutput(_out(tag, isLabel)) in vocabulary
+def test_labelmap_wins_over_non_image_tag():
+    # `isLabel` is checked before `tag`, so a labelmap file is still a
+    # segment group rather than a download.
+    assert _intentForOutput(_out("file", True)) == "attach-segment-group"
