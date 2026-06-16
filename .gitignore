@@ -48,5 +48,6 @@ coverage.xml
 
 # virtualenv
 .venv
+.venv-ralph/
 venv/
 ENV/
