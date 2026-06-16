@@ -207,6 +207,55 @@ def test_directory_input_series_ref_raises_b2_seam(monkeypatch):
     assert exc.value.code == 501
 
 
+def test_failure_after_staging_unwinds_orphaned_transients(monkeypatch):
+    # An <image> series ref stages a volume, then a later <directory> series ref
+    # raises the b2 501. No job exists yet to carry the staged id, so it must be
+    # removed here rather than leaked.
+    img_ref = _seriesRef(uid="1.1")
+    dir_ref = _seriesRef(uid="2.2")
+    staged_item = ObjectId()
+    monkeypatch.setattr(
+        processing, "resolveSeriesSourceRefToFiles",
+        lambda r, user: [{"_id": ObjectId(), "name": "s.dcm"}],
+    )
+    monkeypatch.setattr(
+        processing, "_stageAssembledVolume",
+        lambda *a, **k: (str(ObjectId()), str(staged_item)),
+    )
+    removed = []
+    monkeypatch.setattr(processing, "_removeTransientItems", removed.extend)
+
+    with pytest.raises(RestException) as exc:
+        processing._translateValuesToSlicerParams(
+            {"inputVolume": img_ref, "inputDir": dir_ref},
+            _CLI_XML, user=None, folder={"_id": ObjectId()},
+        )
+
+    assert exc.value.code == 501
+    assert removed == [str(staged_item)]
+
+
+def test_series_ref_on_undeclared_param_is_not_assembled(monkeypatch):
+    # A series ref under a param the CLI does not declare as a file input must
+    # not trigger a download/assemble/upload; it passes through as a string.
+    ref = _seriesRef()
+    monkeypatch.setattr(
+        processing, "resolveSeriesSourceRefToFiles",
+        lambda *a, **k: pytest.fail("undeclared param must not resolve a series"),
+    )
+    monkeypatch.setattr(
+        processing, "_stageAssembledVolume",
+        lambda *a, **k: pytest.fail("undeclared param must not assemble"),
+    )
+
+    params, transient = processing._translateValuesToSlicerParams(
+        {"notAnInput": ref}, _CLI_XML, user=None, folder={"_id": ObjectId()}
+    )
+
+    assert params == {"notAnInput": ref}
+    assert transient == []
+
+
 def test_per_slice_task_binds_single_file_without_assembly(monkeypatch):
     ref = _seriesRef()
     files = [{"_id": ObjectId(), "name": "s1.dcm"}, {"_id": ObjectId()}]
@@ -289,12 +338,38 @@ def _installItemModel(monkeypatch, itemIds):
     return model
 
 
+class _FakeJobModel:
+    def __init__(self, job):
+        self._job = job
+
+    def load(self, jobId, force=False):
+        # The handler reloads the job from the DB by id; the committed doc
+        # carries the marker/status regardless of the event's in-memory copy.
+        if self._job is not None and str(jobId) == str(self._job.get("_id")):
+            return self._job
+        return None
+
+
+def _installJobModel(monkeypatch, job):
+    import girder_jobs.models.job as job_module
+    monkeypatch.setattr(job_module, "Job", lambda: _FakeJobModel(job))
+
+
+def _jobEvent(job):
+    return _Event({"job": {"_id": job["_id"]}})
+
+
 def test_cleanup_removes_transients_on_terminal_job(monkeypatch):
     a, b = ObjectId(), ObjectId()
     model = _installItemModel(monkeypatch, [a, b])
-    job = {"status": JobStatus.SUCCESS, "volviewTransient": [str(a), str(b)]}
+    job = {
+        "_id": ObjectId(),
+        "status": JobStatus.SUCCESS,
+        "volviewTransient": [str(a), str(b)],
+    }
+    _installJobModel(monkeypatch, job)
 
-    processing._cleanupTransientOnJobDone(_Event({"job": job}))
+    processing._cleanupTransientOnJobDone(_jobEvent(job))
 
     assert sorted(model.removed) == sorted([str(a), str(b)])
 
@@ -302,27 +377,56 @@ def test_cleanup_removes_transients_on_terminal_job(monkeypatch):
 def test_cleanup_skips_non_terminal_job(monkeypatch):
     a = ObjectId()
     model = _installItemModel(monkeypatch, [a])
-    job = {"status": JobStatus.RUNNING, "volviewTransient": [str(a)]}
+    job = {
+        "_id": ObjectId(),
+        "status": JobStatus.RUNNING,
+        "volviewTransient": [str(a)],
+    }
+    _installJobModel(monkeypatch, job)
 
-    processing._cleanupTransientOnJobDone(_Event({"job": job}))
+    processing._cleanupTransientOnJobDone(_jobEvent(job))
 
     assert model.removed == []
 
 
 def test_cleanup_noop_without_marker(monkeypatch):
     model = _installItemModel(monkeypatch, [])
-    processing._cleanupTransientOnJobDone(
-        _Event({"job": {"status": JobStatus.SUCCESS}})
-    )
+    job = {"_id": ObjectId(), "status": JobStatus.SUCCESS}
+    _installJobModel(monkeypatch, job)
+
+    processing._cleanupTransientOnJobDone(_jobEvent(job))
+
     assert model.removed == []
+
+
+def test_cleanup_reloads_job_so_stale_event_marker_is_ignored(monkeypatch):
+    # The event carries an in-memory job dict WITHOUT the marker (the common
+    # cross-process case); the reloaded DB doc has it, so cleanup still fires.
+    a = ObjectId()
+    model = _installItemModel(monkeypatch, [a])
+    job = {
+        "_id": ObjectId(),
+        "status": JobStatus.SUCCESS,
+        "volviewTransient": [str(a)],
+    }
+    _installJobModel(monkeypatch, job)
+
+    processing._cleanupTransientOnJobDone(_Event({"job": {"_id": job["_id"]}}))
+
+    assert model.removed == [str(a)]
 
 
 def test_cleanup_idempotent_when_item_already_gone(monkeypatch):
     a = ObjectId()
-    model = _installItemModel(monkeypatch, [])  # load returns None
-    job = {"status": JobStatus.ERROR, "volviewTransient": [str(a)]}
+    model = _installItemModel(monkeypatch, [])  # item load returns None
+    job = {
+        "_id": ObjectId(),
+        "status": JobStatus.ERROR,
+        "volviewTransient": [str(a)],
+    }
+    _installJobModel(monkeypatch, job)
 
-    processing._cleanupTransientOnJobDone(_Event({"job": job}))
+    processing._cleanupTransientOnJobDone(_jobEvent(job))
 
     assert model.removed == []
 

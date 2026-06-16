@@ -682,15 +682,14 @@ def _stageAssembledVolume(files, user, folder):
     return str(fileDoc["_id"]), (str(transientItemId) if transientItemId else None)
 
 
-def _resolveSeriesValueToFileId(
-    value, paramTag, user, folder, perSlice, transientItemIds
-):
-    """Resolve a series volume ref to one file id, staging per CLI input type.
+def _resolveSeriesValueToFileId(value, paramTag, user, folder, perSlice):
+    """Resolve a series volume ref to ``(fileId, transientItemId)``, staging per
+    CLI input type.
 
     Dispatch on the param's declared input type (decisions.md D10): ``<image>``/
     ``<file>`` assembles the whole volume (b1, live); ``<directory>`` is the
-    deferred b2 seam and raises. Appends any transient item created to
-    ``transientItemIds`` for cleanup.
+    deferred b2 seam and raises. ``transientItemId`` is ``None`` unless a volume
+    was assembled (the caller tracks it for cleanup).
     """
     if paramTag == "directory":
         # b2 (decisions.md D10): stage the file set into a transient folder and
@@ -701,11 +700,8 @@ def _resolveSeriesValueToFileId(
     files = resolveSeriesSourceRefToFiles(value, user)
     if perSlice:
         # Escape hatch: a 2D/per-slice task binds one slice, not the volume.
-        return str(files[0]["_id"])
-    fileId, transientItemId = _stageAssembledVolume(files, user, folder)
-    if transientItemId:
-        transientItemIds.append(transientItemId)
-    return fileId
+        return str(files[0]["_id"]), None
+    return _stageAssembledVolume(files, user, folder)
 
 
 def _markJobTransients(job_doc, transientItemIds):
@@ -721,30 +717,49 @@ def _markJobTransients(job_doc, transientItemIds):
         )
 
 
-def _cleanupTransientOnJobDone(event):
-    """Delete a job's transient assembled inputs once it reaches a terminal state.
-
-    Bound to ``jobs.job.update.after``. Idempotent: a re-fired terminal update
-    finds the items already gone and no-ops.
-    """
-    from girder_jobs.constants import JobStatus
-    job = getattr(event, "info", None)
-    job = job.get("job") if isinstance(job, dict) else None
-    if not isinstance(job, dict):
-        return
-    transientItemIds = job.get("volviewTransient")
-    if not transientItemIds:
-        return
-    terminal = {JobStatus.SUCCESS, JobStatus.ERROR, JobStatus.CANCELED}
-    if job.get("status") not in terminal:
-        return
-    for itemId in transientItemIds:
+def _removeTransientItems(itemIds):
+    """Delete transient assembled-volume items by id (idempotent, best-effort)."""
+    for itemId in itemIds:
         try:
             item = Item().load(itemId, force=True)
             if item:
                 Item().remove(item)
         except Exception:
             logger.exception("Failed to remove transient volume item %s", itemId)
+
+
+def _cleanupTransientOnJobDone(event):
+    """Delete a job's transient assembled inputs once it reaches a terminal state.
+
+    Bound to ``jobs.job.update.after``. Idempotent: a re-fired terminal update
+    finds the items already gone and no-ops.
+
+    The job is reloaded from the database before reading the marker/status:
+    ``updateJob`` fires this event with the *in-memory* job dict the updater
+    passed, which only carries ``volviewTransient`` if that updater happened to
+    DB-load the job first. Reloading keeps cleanup self-contained — it works for
+    any terminal updater rather than relying on that external invariant.
+    """
+    from girder_jobs.constants import JobStatus
+    from girder_jobs.models.job import Job as JobModel
+    info = getattr(event, "info", None)
+    eventJob = info.get("job") if isinstance(info, dict) else None
+    if not isinstance(eventJob, dict):
+        return
+    # The marker only lives on the committed doc — the event carries the
+    # updater's in-memory dict, which has it only if that updater DB-loaded the
+    # job. Reload so cleanup is self-contained, then read status off the same
+    # committed doc.
+    job = JobModel().load(eventJob.get("_id"), force=True)
+    if not isinstance(job, dict):
+        return
+    transientItemIds = job.get("volviewTransient")
+    if not isinstance(transientItemIds, list) or not transientItemIds:
+        return
+    terminal = {JobStatus.SUCCESS, JobStatus.ERROR, JobStatus.CANCELED}
+    if job.get("status") not in terminal:
+        return
+    _removeTransientItems(transientItemIds)
 
 
 def _translateValuesToSlicerParams(values, doc_xml, user, folder):
@@ -763,6 +778,27 @@ def _translateValuesToSlicerParams(values, doc_xml, user, folder):
     perSlice = _taskBindsSingleFile(doc_xml)
     transientItemIds = []
     params = {}
+    try:
+        _populateSlicerParams(
+            values, inputTypes, perSlice, user, folder, params, transientItemIds
+        )
+    except Exception:
+        # A later param failing (e.g. the deferred <directory> 501) must not
+        # orphan volumes already staged this call: no job exists yet to carry
+        # their ids, so the job-done cleanup would never reach them.
+        _removeTransientItems(transientItemIds)
+        raise
+    return params, transientItemIds
+
+
+def _populateSlicerParams(
+    values, inputTypes, perSlice, user, folder, params, transientItemIds
+):
+    """Fill ``params``/``transientItemIds`` from a values payload (one param each).
+
+    Split out so ``_translateValuesToSlicerParams`` can unwind any volumes already
+    staged this call if a later param raises (the only caller).
+    """
     for paramName, value in (values or {}).items():
         if value is None:
             continue
@@ -773,11 +809,17 @@ def _translateValuesToSlicerParams(values, doc_xml, user, folder):
         elif isinstance(value, str):
             # A multi-file volume ref (item 3.2) is staged for the CLI's declared
             # input type before binding; a plain file ref resolves directly.
-            if decodeSeriesSourceRef(value) is not None:
-                params[paramName] = _resolveSeriesValueToFileId(
-                    value, inputTypes.get(paramName), user, folder,
-                    perSlice, transientItemIds,
+            # Only stage when the param is a declared file input — a series ref
+            # on a non-file param would otherwise assemble+upload a volume for a
+            # binding the CLI cannot consume.
+            paramTag = inputTypes.get(paramName)
+            if paramTag is not None and decodeSeriesSourceRef(value) is not None:
+                fileId, transientItemId = _resolveSeriesValueToFileId(
+                    value, paramTag, user, folder, perSlice,
                 )
+                params[paramName] = fileId
+                if transientItemId:
+                    transientItemIds.append(transientItemId)
                 continue
             if _looksLikeSourceRef(value, "file"):
                 try:
@@ -802,7 +844,6 @@ def _translateValuesToSlicerParams(values, doc_xml, user, folder):
             params[paramName] = ",".join(str(v) for v in value)
         else:
             params[paramName] = str(value)
-    return params, transientItemIds
 
 
 def _projectJobStatus(job):
