@@ -280,6 +280,22 @@ def _parseCliOutputs(xmlText):
     return outputs
 
 
+def _intentForOutput(out):
+    """Result intent name for an output (item 3.1).
+
+    Emitted additively alongside the legacy ``role`` using the same five-name
+    v1 vocabulary the client validates (VolView ``src/processing/intents.ts``):
+    a labelmap → ``attach-segment-group`` (mirrors ``role == "segmentGroup"``),
+    a plain image → ``add-base-image``, any other file → ``download``. No CLI
+    declares a state output yet, so ``restore-state`` has no producer here.
+    """
+    if out["isLabel"]:
+        return "attach-segment-group"
+    if out["tag"] == "image":
+        return "add-base-image"
+    return "download"
+
+
 def _readLabelsSidecar(fileDoc):
     """Read a small JSON sidecar listing per-label segment descriptors.
 
@@ -478,7 +494,10 @@ def _collectJobResults(job, user):
             "id": str(fileDoc["_id"]),
             "name": fileDoc["name"],
             "url": url,
+            # `intent` is additive: `role` stays unchanged for older clients,
+            # while intent-aware clients prefer this validated field (item 3.1).
             **({"role": role} if role else {}),
+            "intent": _intentForOutput(out),
             "mimeType": fileDoc.get("mimeType"),
             "size": fileDoc.get("size"),
         }
