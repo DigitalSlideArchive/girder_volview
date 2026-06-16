@@ -410,7 +410,7 @@ def _taskInScope(cliItem, allowed=None):
         category = _cliCategory(cliItem.xml)
     except Exception:
         return False
-    return bool(category) and category.lower() in allowed
+    return category is not None and category.lower() in allowed
 
 
 def _scopedCliItems(user):
