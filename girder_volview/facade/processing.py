@@ -1116,13 +1116,17 @@ def listTasks(self, folder):
 )
 def getTaskXml(self, folder, taskId):
     user = self.getCurrentUser()
-    setResponseHeader("Content-Type", "application/xml")
-    setRawResponse()
     if not _slicerCliAvailable():
         raise RestException("slicer_cli_web is not installed", code=404)
     cliItem = _findScopedCliItem(taskId, user)
     if not cliItem:
         raise RestException("Unknown taskId", code=404)
+    # Arm the raw XML response only AFTER the guards. setRawResponse() before a
+    # raised RestException makes cherrypy try to encode the error's str body as
+    # raw bytes (collapse_body: "expected a bytes-like object, str found"),
+    # turning an intended 404 (filtered-out / unknown task) into a 500.
+    setResponseHeader("Content-Type", "application/xml")
+    setRawResponse()
     return cliItem.xml
 
 
