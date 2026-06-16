@@ -29,8 +29,24 @@ from girder.models.item import Item
 # SourceRef — provider-owned opaque handle
 # ---------------------------------------------------------------------------
 
-def encodeSourceRef(fileId=None, itemId=None, folderId=None):
-    """Return the Girder id VolView should pass back as an opaque sourceRef."""
+_SERIES_REF_PREFIX = "series:"
+
+
+def encodeSourceRef(fileId=None, itemId=None, folderId=None, seriesInstanceUID=None):
+    """Return the opaque sourceRef VolView should pass back.
+
+    A multi-file DICOM series encodes as ``series:<folderId>:<SeriesInstanceUID>``
+    so its whole file set can be re-resolved at submit (item 3.3 — see
+    `resolveSeriesSourceRefToFiles`). A single-file volume keeps the historical
+    raw-id form (file id, then item, then folder). The ref stays opaque to the
+    client either way: VolView core never learns it is a Girder handle.
+    """
+    if seriesInstanceUID is not None:
+        if folderId is None:
+            raise RestException(
+                "Cannot create a series sourceRef without a folder id"
+            )
+        return f"{_SERIES_REF_PREFIX}{folderId}:{seriesInstanceUID}"
     if fileId is not None:
         return str(fileId)
     if itemId is not None:
@@ -38,6 +54,21 @@ def encodeSourceRef(fileId=None, itemId=None, folderId=None):
     if folderId is not None:
         return str(folderId)
     raise RestException("Cannot create sourceRef without a Girder id")
+
+
+def decodeSeriesSourceRef(ref):
+    """Parse ``series:<folderId>:<SeriesInstanceUID>`` → ``(folderId, uid)``.
+
+    Returns ``None`` for any ref that is not a series volume handle (e.g. a raw
+    file/item id), so callers can fall back to the single-file resolution path.
+    """
+    if not isinstance(ref, str) or not ref.startswith(_SERIES_REF_PREFIX):
+        return None
+    rest = ref[len(_SERIES_REF_PREFIX):]
+    folderId, sep, uid = rest.partition(":")
+    if not sep or not folderId or not uid:
+        return None
+    return folderId, uid
 
 
 def _stripTypedSourceRef(ref, expectedType):
@@ -77,21 +108,181 @@ def resolveSourceRefToFolder(ref, user, level=AccessType.WRITE):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _loadedSourcesForFolder(folder, user):
+# ---------------------------------------------------------------------------
+# Volume grouping (D10 part 1) — one advertised source per *volume*, not per item
+#
+# A 3D volume reaches Girder in no fixed layout: one file = one volume (L1), one
+# item = many files = one series (L2), or one folder = many single-file items =
+# one series (L3, the usual case). Emitting one source per *item* (the old shape)
+# fed a multi-slice series to a job as a single slice. We instead group the
+# folder's files by ``SeriesInstanceUID`` so each advertised source is a real
+# volume carrying its whole file set; non-DICOM / ungroupable files stay one
+# volume per file. Staging the pixels at submit is item 3.3, not here.
+# ---------------------------------------------------------------------------
+
+def _parseFileDicomTags(fileDoc):
+    """Per-file DICOM tag dict (or ``None`` for non-DICOM / unreadable files).
+
+    Used only for multi-file (L2) items, where the item's cached ``meta.dicom``
+    reflects just one representative child file and so cannot order or group the
+    rest. Thin wrapper over ``dicom._parseFile`` so tests can stub it.
+    """
+    try:
+        from girder_volview.dicom import _parseFile
+        return _parseFile(fileDoc)
+    except Exception:
+        logger.exception("Failed to parse per-file DICOM tags for volume grouping")
+        return None
+
+
+def _seriesUid(dicom):
+    """Return a non-empty ``SeriesInstanceUID`` string, or ``None``."""
+    if not isinstance(dicom, dict):
+        return None
+    uid = dicom.get("SeriesInstanceUID")
+    if uid is None:
+        return None
+    uid = str(uid).strip()
+    return uid or None
+
+
+def _sliceSortKey(dicom):
+    """Slice ordering key: ``InstanceNumber`` first, then ImagePositionPatient z.
+
+    Numbered slices sort ahead of unnumbered ones; ties (and unnumbered slices)
+    fall back to the patient-Z component. Geometry-exact reconstruction is the
+    assembler's job (item 3.3, SimpleITK); this only orders the advertised set.
+    """
+    dicom = dicom or {}
+    instance = dicom.get("InstanceNumber")
+    try:
+        instanceKey = (0, int(instance))
+    except (TypeError, ValueError):
+        instanceKey = (1, 0)
+    ipp = dicom.get("ImagePositionPatient")
+    posKey = 0.0
+    if isinstance(ipp, (list, tuple)) and len(ipp) >= 3:
+        try:
+            posKey = float(ipp[2])
+        except (TypeError, ValueError):
+            posKey = 0.0
+    return (instanceKey, posKey)
+
+
+def _seriesSource(orderedEntries, uid, folderId):
+    """Build one volume source from the ordered file entries of a DICOM series."""
+    fileIds = [e["fileId"] for e in orderedEntries]
+    if len(fileIds) == 1:
+        # A single-file series (e.g. a multi-frame DICOM, L1): the one file is
+        # already the whole volume, so keep the historical raw-file-id ref.
+        sourceRef = encodeSourceRef(fileId=fileIds[0])
+    else:
+        sourceRef = encodeSourceRef(seriesInstanceUID=uid, folderId=folderId)
+    descr = orderedEntries[0]["dicom"].get("SeriesDescription")
+    descr = str(descr).strip() if descr else ""
+    matchKey = {"kind": "series", "seriesInstanceUID": uid}
+    if descr:
+        matchKey["seriesDescription"] = descr
+    return {
+        "datasetId": orderedEntries[0]["itemId"],
+        "name": descr or orderedEntries[0]["name"],
+        "sourceRef": sourceRef,
+        "fileIds": fileIds,
+        "matchKey": matchKey,
+    }
+
+
+def _singleFileSource(entry):
+    """Build one volume source from a lone (non-DICOM / ungroupable) file."""
+    return {
+        "datasetId": entry["itemId"],
+        "name": entry["name"],
+        "sourceRef": encodeSourceRef(fileId=entry["fileId"]),
+        "fileIds": [entry["fileId"]],
+        "matchKey": {"kind": "name", "name": entry["name"]},
+    }
+
+
+def _groupEntriesIntoVolumes(entries, folderId):
+    """Pure: normalized file entries → one source per volume, in discovery order.
+
+    DICOM entries sharing a ``SeriesInstanceUID`` collapse into a single
+    slice-ordered volume; everything else stays one volume per file. The
+    sourceRef remains opaque and the match key is metadata the client already
+    holds, so VolView core never learns Girder.
+    """
+    groups = {}  # key -> {"uid": uid|None, "entries": [...]} (insertion-ordered)
+    for entry in entries:
+        uid = _seriesUid(entry["dicom"])
+        key = ("series", uid) if uid else ("file", entry["fileId"])
+        groups.setdefault(key, {"uid": uid, "entries": []})["entries"].append(entry)
+
     sources = []
-    for item in Folder().childItems(folder, user=user, limit=50):
-        files = list(Item().childFiles(item, limit=1))
+    for group in groups.values():
+        if group["uid"]:
+            ordered = sorted(group["entries"], key=lambda e: _sliceSortKey(e["dicom"]))
+            sources.append(_seriesSource(ordered, group["uid"], folderId))
+        else:
+            sources.append(_singleFileSource(group["entries"][0]))
+    return sources
+
+
+def _folderFileEntries(folder, user):
+    """Flatten a folder's items into per-file entries with DICOM tags.
+
+    Single-file items reuse the item's cached ``meta.dicom`` (the usual L3
+    one-slice-per-item layout, already computed by ``dicom.py``). Multi-file
+    items (L2: one item, many DICOM files) parse each child file because item
+    metadata reflects only one representative file.
+    """
+    entries = []
+    for item in Folder().childItems(folder, user=user, limit=0):
+        files = list(Item().childFiles(item, limit=0))
         if not files:
             continue
-        f = files[0]
-        sources.append({
-            "datasetId": str(item["_id"]),
-            "name": item["name"],
-            "sourceRef": encodeSourceRef(
-                fileId=f["_id"], itemId=item["_id"], folderId=folder["_id"]
-            ),
-        })
-    return sources
+        itemDicom = (item.get("meta") or {}).get("dicom")
+        multi = len(files) > 1
+        for f in files:
+            tags = _parseFileDicomTags(f) if multi else itemDicom
+            entries.append({
+                "fileId": str(f["_id"]),
+                "itemId": str(item["_id"]),
+                "name": (f.get("name") or item["name"]) if multi else item["name"],
+                "dicom": tags,
+            })
+    return entries
+
+
+def _loadedSourcesForFolder(folder, user):
+    return _groupEntriesIntoVolumes(
+        _folderFileEntries(folder, user), str(folder["_id"])
+    )
+
+
+def resolveSeriesSourceRefToFiles(ref, user):
+    """Resolve a ``series:<folderId>:<UID>`` ref to its ordered file documents.
+
+    Re-runs folder grouping under the user's READ permission so submit (item
+    3.3) reproduces the exact slice order the provider advertised. Each file is
+    loaded with ``AccessType.READ`` — the Girder permission check is the
+    security boundary. Raises if the ref is not a series ref or resolves to no
+    files (e.g. the series was deleted between launch and submit).
+    """
+    decoded = decodeSeriesSourceRef(ref)
+    if not decoded:
+        raise RestException("Not a series sourceRef")
+    folderId, uid = decoded
+    folder = Folder().load(folderId, user=user, level=AccessType.READ, exc=True)
+    matching = [
+        e for e in _folderFileEntries(folder, user) if _seriesUid(e["dicom"]) == uid
+    ]
+    if not matching:
+        raise RestException("Series sourceRef no longer resolves to any files")
+    ordered = sorted(matching, key=lambda e: _sliceSortKey(e["dicom"]))
+    return [
+        File().load(e["fileId"], user=user, level=AccessType.READ, exc=True)
+        for e in ordered
+    ]
 
 
 def _providerBaseUrl(folder):
