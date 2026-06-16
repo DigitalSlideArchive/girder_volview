@@ -347,6 +347,94 @@ def _cliItemToSummary(cliItem):
     }
 
 
+# ---------------------------------------------------------------------------
+# Task scoping (D11 part 2, item 3.5) — filter the CLI catalog by <category>
+#
+# ``listTasks`` would otherwise return EVERY registered slicer_cli_web CLI, so a
+# radiology VolView's dropdown also lists the HistomicsTK *pathology* CLIs
+# (NucleiDetection, ColorDeconvolution, …) and volview_dicomrt. We keep only
+# CLIs whose Slicer XML ``<category>`` is in an allowed set (default radiology).
+# The radiology CLIs ship ``<category>Radiology</category>`` and the pathology
+# CLIs declare pathology categories (``HistomicsTK``), so the filter is
+# self-describing and needs no per-image allow-list — new radiology CLIs are
+# included automatically (decisions.md D11).
+#
+# The *server* is the boundary: ``getTaskXml``/``runTask`` 404 a filtered-out
+# taskId exactly like an unknown id, so scoping can't be bypassed by guessing
+# an id. Fail-closed: a CLI with no/unknown ``<category>`` is excluded.
+# ---------------------------------------------------------------------------
+
+# Default radiology category set (matched case-insensitively). The three shipped
+# radiology CLIs all declare ``<category>Radiology</category>``; Segmentation /
+# Filtering cover radiology operations a future CLI might categorize under and
+# are disjoint from the pathology CLIs' ``HistomicsTK`` category.
+_DEFAULT_ALLOWED_CATEGORIES = ("Radiology", "Segmentation", "Filtering")
+# Comma-separated env override for other deployments. Empty/unset falls back to
+# the default set, never to "unfiltered" (scoping is a locked requirement, D11).
+_ALLOWED_CATEGORIES_ENV = "VOLVIEW_PROCESSING_ALLOWED_CATEGORIES"
+
+
+def _allowedCategories():
+    """Allowed CLI ``<category>`` names, lowercased, from env or the default set."""
+    import os
+    raw = os.environ.get(_ALLOWED_CATEGORIES_ENV) or ""
+    override = {c.strip().lower() for c in raw.split(",") if c.strip()}
+    return override or {c.lower() for c in _DEFAULT_ALLOWED_CATEGORIES}
+
+
+def _cliCategory(xmlText):
+    """Return a CLI's declared ``<category>`` (stripped) or None if absent/bad."""
+    if not xmlText:
+        return None
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(xmlText)
+    except ET.ParseError:
+        return None
+    el = root.find("category")
+    if el is None or not el.text:
+        return None
+    return el.text.strip() or None
+
+
+def _taskInScope(cliItem, allowed=None):
+    """Whether a CLI's ``<category>`` is in the allowed scope (fail-closed).
+
+    A CLI with no/unknown ``<category>`` is excluded so scoping can't be
+    bypassed. ``allowed`` (lowercased set) is passed in by ``_scopedCliItems``
+    to parse the env once per request; the single-task callers omit it.
+    """
+    if allowed is None:
+        allowed = _allowedCategories()
+    try:
+        category = _cliCategory(cliItem.xml)
+    except Exception:
+        return False
+    return bool(category) and category.lower() in allowed
+
+
+def _scopedCliItems(user):
+    """CLIItems whose declared ``<category>`` is in the allowed scope (D11).
+
+    The exact set ``listTasks`` advertises; the pathology CLIs never reach the
+    client.
+    """
+    allowed = _allowedCategories()
+    return [c for c in _listCliItems(user) if _taskInScope(c, allowed)]
+
+
+def _findScopedCliItem(taskId, user):
+    """Resolve a taskId to an in-scope CLIItem, or None for the caller to 404.
+
+    Out-of-scope tasks resolve to None exactly like unknown ids, so a filtered
+    pathology CLI can't be reached by guessing its id.
+    """
+    cliItem = _findCliItem(taskId, user)
+    if not cliItem or not _taskInScope(cliItem):
+        return None
+    return cliItem
+
+
 # Compound extensions we want to preserve as a single suffix.
 _COMPOUND_EXTENSIONS = (
     ".nii.gz", ".tar.gz", ".mgh.gz", ".hdr.gz", ".mnc.gz",
@@ -1013,7 +1101,7 @@ def listTasks(self, folder):
     tasks = []
     if user and _slicerCliAvailable():
         try:
-            tasks.extend([_cliItemToSummary(c) for c in _listCliItems(user)])
+            tasks.extend([_cliItemToSummary(c) for c in _scopedCliItems(user)])
         except Exception:
             logger.exception("Failed to list slicer_cli_web items")
     return tasks
@@ -1032,7 +1120,7 @@ def getTaskXml(self, folder, taskId):
     setRawResponse()
     if not _slicerCliAvailable():
         raise RestException("slicer_cli_web is not installed", code=404)
-    cliItem = _findCliItem(taskId, user)
+    cliItem = _findScopedCliItem(taskId, user)
     if not cliItem:
         raise RestException("Unknown taskId", code=404)
     return cliItem.xml
@@ -1058,7 +1146,7 @@ def runTask(self, folder, taskId, body):
     if not _slicerCliAvailable():
         raise RestException("slicer_cli_web is not installed", code=500)
 
-    cliItem = _findCliItem(taskId, user)
+    cliItem = _findScopedCliItem(taskId, user)
     if not cliItem:
         raise RestException("Unknown taskId", code=404)
 
