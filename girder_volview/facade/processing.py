@@ -13,7 +13,6 @@ SourceRef plumbing:
 
 import copy
 import json
-import os
 
 from bson.objectid import ObjectId
 from girder import logger
@@ -25,18 +24,6 @@ from girder.exceptions import RestException
 from girder.models.file import File
 from girder.models.folder import Folder
 from girder.models.item import Item
-
-# ---------------------------------------------------------------------------
-# Sample XML fixture (kept as a fallback only; real path consults slicer_cli_web).
-# ---------------------------------------------------------------------------
-
-_SAMPLE_TASK_XML_PATH = os.path.join(os.path.dirname(__file__), "sample_task.xml")
-
-
-def _readSampleXml():
-    with open(_SAMPLE_TASK_XML_PATH, "r", encoding="utf-8") as fh:
-        return fh.read()
-
 
 # ---------------------------------------------------------------------------
 # SourceRef — provider-owned opaque handle
@@ -509,239 +496,6 @@ def _collectJobResults(job, user):
 
 
 # ---------------------------------------------------------------------------
-# Built-in task — threshold segmentation. Runs in-process (no Docker, no extra
-# deps beyond pydicom + numpy) so the end-to-end "submit job -> load segment
-# group" path can be exercised against any DICOM folder. Reads the input image,
-# labels voxels whose intensity is within [lowerThreshold, upperThreshold], and
-# writes a NRRD labelmap in the input's physical space (LPS) so it overlays the
-# parent volume exactly.
-# ---------------------------------------------------------------------------
-
-_BUILTIN_JOB_TYPE = "volview_processing_builtin"
-_BUILTIN_TASK_ID = "threshold"
-
-
-def _nrrdMaskBytes(mask, directions, origin):
-    """Serialize a uint8 mask volume to a self-contained NRRD (raw, LPS).
-
-    `mask` is a C-contiguous array shaped (nk, nj, ni) (slices, rows, columns).
-    `directions` are the (i, j, k) space-direction vectors in LPS, already
-    scaled by spacing. `origin` is the LPS position of voxel (0, 0, 0).
-
-    NRRD stores the fastest-varying axis first, so `sizes` is `ni nj nk` and the
-    raw bytes are the C-order array (last axis = columns = i varies fastest).
-    """
-    import numpy as np
-
-    nk, nj, ni = mask.shape
-
-    def _vec(v):
-        return "(%s)" % ",".join("%.12g" % float(x) for x in v)
-
-    header = "\n".join([
-        "NRRD0004",
-        "type: unsigned char",
-        "dimension: 3",
-        "space: left-posterior-superior",
-        "sizes: %d %d %d" % (ni, nj, nk),
-        "space directions: %s %s %s" % (
-            _vec(directions[0]), _vec(directions[1]), _vec(directions[2]),
-        ),
-        "kinds: domain domain domain",
-        "endian: little",
-        "encoding: raw",
-        "space origin: %s" % _vec(origin),
-    ]) + "\n\n"
-    data = np.ascontiguousarray(mask, dtype=np.uint8).tobytes()
-    return header.encode("ascii") + data
-
-
-def _thresholdDicomToNrrd(dicomBytes, lower, upper):
-    """Read a DICOM file, threshold it, return (nrrdBytes, voxelCount).
-
-    Geometry (orientation/spacing/origin) is taken from the DICOM headers in
-    LPS, matching how itk-wasm reconstructs the same series in VolView, so the
-    resulting labelmap aligns with the parent volume.
-    """
-    import io as _io
-    import numpy as np
-    import pydicom
-
-    ds = pydicom.dcmread(_io.BytesIO(dicomBytes))
-    arr = ds.pixel_array
-    if arr.ndim == 2:
-        arr = arr[np.newaxis, ...]  # (nk=1, nj=rows, ni=columns)
-    elif arr.ndim != 3:
-        raise RestException("Unsupported pixel array shape for thresholding")
-
-    mask = ((arr >= lower) & (arr <= upper)).astype(np.uint8)
-
-    # DICOM PixelSpacing is [row spacing, column spacing]: row spacing is the
-    # distance along the column direction (axis j), column spacing along the
-    # row direction (axis i).
-    ps = [float(x) for x in (getattr(ds, "PixelSpacing", None) or [1.0, 1.0])]
-    row_sp, col_sp = ps[0], ps[1]
-    slice_sp = float(
-        getattr(ds, "SpacingBetweenSlices", None)
-        or getattr(ds, "SliceThickness", None)
-        or 1.0
-    )
-    iop = [float(x) for x in (
-        getattr(ds, "ImageOrientationPatient", None) or [1, 0, 0, 0, 1, 0]
-    )]
-    row_cos = np.array(iop[0:3])  # direction of increasing column index
-    col_cos = np.array(iop[3:6])  # direction of increasing row index
-    normal = np.cross(row_cos, col_cos)
-    origin = [float(x) for x in (
-        getattr(ds, "ImagePositionPatient", None) or [0.0, 0.0, 0.0]
-    )]
-
-    directions = [
-        (row_cos * col_sp).tolist(),   # axis i (columns, fastest)
-        (col_cos * row_sp).tolist(),   # axis j (rows)
-        (normal * slice_sp).tolist(),  # axis k (slices)
-    ]
-    return _nrrdMaskBytes(mask, directions, origin), int(mask.sum())
-
-
-def _resolveInputDicomFile(values, folder, user):
-    """Find an input file we can read as DICOM.
-
-    Prefers the sourceRef the client bound to the input param, then falls back
-    to scanning the folder (skipping prior outputs). Returns (fileDoc, bytes).
-    """
-    import io as _io
-    import pydicom
-
-    candidates = []
-    resolved = _firstSourceRefFile(values, user)
-    if resolved is not None:
-        candidates.append(resolved)
-    for item in Folder().childItems(folder, user=user, limit=50):
-        f = next(iter(Item().childFiles(item, limit=1)), None)
-        if f is not None and not any(c["_id"] == f["_id"] for c in candidates):
-            candidates.append(f)
-
-    for fileDoc in candidates:
-        try:
-            chunks = File().download(fileDoc, headers=False)
-            raw = b"".join(chunks() if callable(chunks) else chunks)
-            pydicom.dcmread(_io.BytesIO(raw))  # validate it parses as DICOM
-            return fileDoc, raw
-        except Exception as exc:
-            logger.debug(
-                "Skipping non-DICOM input candidate %s: %s",
-                fileDoc.get("name"), exc,
-            )
-            continue
-    raise RestException("No readable DICOM input found for threshold task")
-
-
-def _uploadResultFile(folder, user, name, data, mimeType):
-    """Write `data` as a new single-file item named `name` in `folder`."""
-    from girder.models.upload import Upload
-
-    item = Item().createItem(
-        name=name,
-        creator=user,
-        folder=folder,
-        description="VolView threshold segmentation",
-        reuseExisting=True,
-    )
-    # If we re-used an existing item, drop any existing files for a clean
-    # one-file item.
-    for existing in list(Item().childFiles(item)):
-        File().remove(existing)
-
-    upload = Upload().createUpload(
-        user=user,
-        name=name,
-        parentType="item",
-        parent=item,
-        size=len(data),
-        mimeType=mimeType,
-    )
-    return Upload().handleChunk(upload, data, filter=True, user=user)
-
-
-def _runThresholdTask(folder, user, values):
-    """Threshold the input image into a NRRD labelmap and return it as a
-    `segmentGroup` result. Runs synchronously (no Docker, no Celery)."""
-    from girder_jobs.constants import JobStatus
-    from girder_jobs.models.job import Job as JobModel
-
-    def _intVal(key, default):
-        try:
-            return int((values or {}).get(key, default))
-        except (TypeError, ValueError):
-            return default
-
-    lower = _intVal("lowerThreshold", 50)
-    upper = _intVal("upperThreshold", 65535)
-
-    job = JobModel().createJob(
-        title="Threshold Segmentation [%d, %d]" % (lower, upper),
-        type=_BUILTIN_JOB_TYPE,
-        public=True,
-        user=user,
-    )
-
-    log_lines = []
-    try:
-        inputFile, dicomBytes = _resolveInputDicomFile(values, folder, user)
-        log_lines.append("Input: %s\n" % inputFile.get("name"))
-
-        nrrdBytes, voxelCount = _thresholdDicomToNrrd(dicomBytes, lower, upper)
-        base, _ = _splitExt(inputFile.get("name") or "output")
-        outName = _uniquifyItemName(folder, "%s.threshold.seg.nrrd" % base)
-        newFile = _uploadResultFile(
-            folder, user, outName, nrrdBytes, "application/octet-stream"
-        )
-
-        results = [{
-            "id": str(newFile["_id"]),
-            "name": newFile["name"],
-            "url": "/api/v1/file/%s/proxiable/%s" % (
-                newFile["_id"], newFile["name"]
-            ),
-            "role": "segmentGroup",
-            "mimeType": newFile.get("mimeType"),
-            "size": newFile.get("size"),
-            "segments": [{
-                "value": 1,
-                "name": "Threshold %d–%d" % (lower, upper),
-                "color": [255, 0, 0, 255],
-            }],
-        }]
-        log_lines.append(
-            "Labeled %d voxels in [%d, %d] -> %s (%d bytes).\n"
-            % (voxelCount, lower, upper, outName, newFile.get("size", 0))
-        )
-    except Exception as exc:
-        logger.exception("Threshold task failed")
-        job["meta"] = job.get("meta", {})
-        job["meta"]["volviewResults"] = []
-        JobModel().updateJob(job, status=JobStatus.QUEUED)
-        JobModel().updateJob(job, status=JobStatus.RUNNING)
-        JobModel().updateJob(
-            job,
-            status=JobStatus.ERROR,
-            log="".join(log_lines) + "Error: %s\n" % exc,
-        )
-        JobModel().save(job)
-        return {"jobId": str(job["_id"])}
-
-    job["meta"] = job.get("meta", {})
-    job["meta"]["volviewResults"] = results
-
-    JobModel().updateJob(job, status=JobStatus.QUEUED)
-    JobModel().updateJob(job, status=JobStatus.RUNNING)
-    JobModel().updateJob(job, status=JobStatus.SUCCESS, log="".join(log_lines))
-    JobModel().save(job)
-    return {"jobId": str(job["_id"])}
-
-
-# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
@@ -766,14 +520,7 @@ def getProviderConfig(self, folder):
 )
 def listTasks(self, folder):
     user = self.getCurrentUser()
-    tasks = [
-        {
-            "id": _BUILTIN_TASK_ID,
-            "title": "Threshold Segmentation (built-in)",
-            "description": "Label voxels between two intensities. No Docker.",
-            "category": ["Segmentation"],
-        }
-    ]
+    tasks = []
     if user and _slicerCliAvailable():
         try:
             tasks.extend([_cliItemToSummary(c) for c in _listCliItems(user)])
@@ -793,8 +540,6 @@ def getTaskXml(self, folder, taskId):
     user = self.getCurrentUser()
     setResponseHeader("Content-Type", "application/xml")
     setRawResponse()
-    if taskId == _BUILTIN_TASK_ID:
-        return _readSampleXml()
     if not _slicerCliAvailable():
         raise RestException("slicer_cli_web is not installed", code=404)
     cliItem = _findCliItem(taskId, user)
@@ -819,10 +564,6 @@ def getTaskXml(self, folder, taskId):
 def runTask(self, folder, taskId, body):
     user = self.getCurrentUser()
     values = (body or {}).get("values", {}) if isinstance(body, dict) else {}
-
-    if taskId == _BUILTIN_TASK_ID:
-        # Output name is generated inside the task; no autofill needed.
-        return _runThresholdTask(folder, user, values)
 
     if not _slicerCliAvailable():
         raise RestException("slicer_cli_web is not installed", code=500)
@@ -881,9 +622,6 @@ def getJobResults(self, folder, jobId):
     user = self.getCurrentUser()
     from girder_jobs.models.job import Job as JobModel
     job = JobModel().load(jobId, user=user, level=AccessType.READ, exc=True)
-    # Built-in jobs store a hand-rolled result list in `meta.volviewResults`.
-    if job.get("type") == _BUILTIN_JOB_TYPE:
-        return job.get("meta", {}).get("volviewResults", [])
     return _collectJobResults(job, user)
 
 
