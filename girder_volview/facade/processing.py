@@ -146,27 +146,79 @@ def _seriesUid(dicom):
     return uid or None
 
 
-def _sliceSortKey(dicom):
-    """Slice ordering key: ``InstanceNumber`` first, then ImagePositionPatient z.
+def _floatVec(values, n):
+    """First ``n`` entries of a DICOM multi-value as floats, or ``None``.
 
-    Numbered slices sort ahead of unnumbered ones; ties (and unnumbered slices)
-    fall back to the patient-Z component. Geometry-exact reconstruction is the
-    assembler's job (item 3.3, SimpleITK); this only orders the advertised set.
+    Returns ``None`` when the value is missing, too short, or non-numeric so the
+    callers can fall back without crashing on partial metadata.
     """
-    dicom = dicom or {}
+    if not isinstance(values, (list, tuple)) or len(values) < n:
+        return None
+    try:
+        return [float(values[i]) for i in range(n)]
+    except (TypeError, ValueError):
+        return None
+
+
+def _sliceNormal(iop):
+    """Through-plane axis of a slice = row × column direction cosines, or ``None``.
+
+    ``ImageOrientationPatient`` is ``[Xx,Xy,Xz, Yx,Yy,Yz]`` — the in-plane row and
+    column unit vectors; their cross product is the slice normal. Returns ``None``
+    when the tag is absent/malformed or the two vectors are degenerate (zero
+    cross product), so the caller falls back to the patient-Z component.
+    """
+    vals = _floatVec(iop, 6)
+    if vals is None:
+        return None
+    r, c = vals[0:3], vals[3:6]
+    normal = (
+        r[1] * c[2] - r[2] * c[1],
+        r[2] * c[0] - r[0] * c[2],
+        r[0] * c[1] - r[1] * c[0],
+    )
+    if normal == (0.0, 0.0, 0.0):
+        return None
+    return normal
+
+
+def _slicePosition(dicom):
+    """Position of a slice along its own normal — monotonic for any orientation.
+
+    For an axial series the slice normal is ``(0,0,1)``, so this is just the
+    patient-Z component (the historical key — axial ordering is unchanged). For an
+    oblique/coronal series the through-plane axis is not Z, so projecting
+    ``ImagePositionPatient`` onto the slice normal orders slices monotonically
+    where raw Z would scramble them. Falls back to the Z component when the
+    orientation tag is absent, and to ``0.0`` when there is no position at all.
+    """
+    ipp = _floatVec(dicom.get("ImagePositionPatient"), 3)
+    if ipp is None:
+        return 0.0
+    normal = _sliceNormal(dicom.get("ImageOrientationPatient"))
+    if normal is None:
+        return ipp[2]
+    return ipp[0] * normal[0] + ipp[1] * normal[1] + ipp[2] * normal[2]
+
+
+def _sliceSortKey(entry):
+    """Deterministic slice ordering key for one file entry.
+
+    ``InstanceNumber`` first (numbered slices ahead of unnumbered), then the
+    slice's position along its normal (``_slicePosition`` — oblique-aware, axial
+    unchanged), then the file id as a final tiebreaker so the order is stable even
+    when a series carries neither tag. Without that tiebreaker the sort fell back
+    to unpinned Mongo natural order, which can differ between the launch and
+    submit queries. Geometry-exact reconstruction is the assembler's job (item
+    3.3, SimpleITK); this only orders the advertised set.
+    """
+    dicom = entry.get("dicom") or {}
     instance = dicom.get("InstanceNumber")
     try:
         instanceKey = (0, int(instance))
     except (TypeError, ValueError):
         instanceKey = (1, 0)
-    ipp = dicom.get("ImagePositionPatient")
-    posKey = 0.0
-    if isinstance(ipp, (list, tuple)) and len(ipp) >= 3:
-        try:
-            posKey = float(ipp[2])
-        except (TypeError, ValueError):
-            posKey = 0.0
-    return (instanceKey, posKey)
+    return (instanceKey, _slicePosition(dicom), str(entry.get("fileId") or ""))
 
 
 def _seriesSource(orderedEntries, uid, folderId):
@@ -220,7 +272,7 @@ def _groupEntriesIntoVolumes(entries, folderId):
     sources = []
     for group in groups.values():
         if group["uid"]:
-            ordered = sorted(group["entries"], key=lambda e: _sliceSortKey(e["dicom"]))
+            ordered = sorted(group["entries"], key=_sliceSortKey)
             sources.append(_seriesSource(ordered, group["uid"], folderId))
         else:
             sources.append(_singleFileSource(group["entries"][0]))
@@ -282,7 +334,7 @@ def resolveSeriesSourceRefToFiles(ref, user):
     ]
     if not matching:
         raise RestException("Series sourceRef no longer resolves to any files")
-    ordered = sorted(matching, key=lambda e: _sliceSortKey(e["dicom"]))
+    ordered = sorted(matching, key=_sliceSortKey)
     return [
         File().load(e["fileId"], user=user, level=AccessType.READ, exc=True)
         for e in ordered

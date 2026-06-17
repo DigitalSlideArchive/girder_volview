@@ -62,7 +62,7 @@ def _mkItem(name, files, metaDicom=None):
     return {"_id": ObjectId(), "name": name, "meta": meta, "_files": files}
 
 
-def _dcm(uid, instance=None, descr=None, ipp=None):
+def _dcm(uid, instance=None, descr=None, ipp=None, iop=None):
     tags = {"SeriesInstanceUID": uid}
     if instance is not None:
         tags["InstanceNumber"] = instance
@@ -70,6 +70,8 @@ def _dcm(uid, instance=None, descr=None, ipp=None):
         tags["SeriesDescription"] = descr
     if ipp is not None:
         tags["ImagePositionPatient"] = ipp
+    if iop is not None:
+        tags["ImageOrientationPatient"] = iop
     return tags
 
 
@@ -182,6 +184,60 @@ def test_non_dicom_files_are_one_source_each(monkeypatch):
     assert sources[0]["sourceRef"] == str(fn["_id"])
     assert sources[0]["fileIds"] == [str(fn["_id"])]
     assert sources[1]["matchKey"] == {"kind": "name", "name": "mask.nrrd"}
+
+
+# ---------------------------------------------------------------------------
+# Slice ordering (item 4.6) — stable tiebreaker + orientation-aware position
+# ---------------------------------------------------------------------------
+
+def test_series_without_instance_or_ipp_is_order_stable(monkeypatch):
+    # Neither InstanceNumber nor ImagePositionPatient: without a deterministic
+    # tiebreaker the sort fell back to unpinned Mongo natural order, so launch and
+    # submit (two separate queries) could advertise the slices in different
+    # orders. The file-id tiebreaker pins one stable order regardless of how the
+    # folder happens to enumerate its items.
+    uid = "no.tags"
+    fA, fB, fC = _mkFile("a.dcm"), _mkFile("b.dcm"), _mkFile("c.dcm")
+    expected = sorted([str(fA["_id"]), str(fB["_id"]), str(fC["_id"])])
+
+    def fileIdsForItemOrder(order):
+        items = [_mkItem(f["name"], [f], metaDicom=_dcm(uid)) for f in order]
+        _install(monkeypatch, items)
+        sources = processing._loadedSourcesForFolder({"_id": ObjectId()}, user=None)
+        assert len(sources) == 1
+        return sources[0]["fileIds"]
+
+    # Two different natural orders must yield the identical advertised order.
+    assert fileIdsForItemOrder([fA, fB, fC]) == expected
+    assert fileIdsForItemOrder([fC, fA, fB]) == expected
+
+
+def test_coronal_series_orders_by_slice_normal_not_raw_z(monkeypatch):
+    # A coronal series stacks along Y, not Z. IOP [1,0,0,0,0,-1] → slice normal
+    # (0,1,0), so the through-plane coordinate is the y component. Ordering by raw
+    # ImagePositionPatient z scrambles it; projecting onto the slice normal orders
+    # it correctly. Here z is anti-correlated with y so the raw-z path would give
+    # the reverse order — the exact bug this guards.
+    uid = "coronal.1"
+    coronal = [1, 0, 0, 0, 0, -1]
+    fFirst = _mkFile("first.dcm")  # y=0,  z=3
+    fMid = _mkFile("mid.dcm")      # y=10, z=2
+    fLast = _mkFile("last.dcm")    # y=20, z=1
+    itLast = _mkItem("last", [fLast], metaDicom=_dcm(uid, ipp=[0, 20, 1], iop=coronal))
+    itFirst = _mkItem("first", [fFirst], metaDicom=_dcm(uid, ipp=[0, 0, 3], iop=coronal))
+    itMid = _mkItem("mid", [fMid], metaDicom=_dcm(uid, ipp=[0, 10, 2], iop=coronal))
+    _install(monkeypatch, [itLast, itFirst, itMid])
+
+    sources = processing._loadedSourcesForFolder({"_id": ObjectId()}, user=None)
+
+    assert len(sources) == 1
+    # Ordered by normal-axis (y) projection 0 < 10 < 20. Raw-z order would be
+    # last(1) < mid(2) < first(3) — reversed.
+    assert sources[0]["fileIds"] == [
+        str(fFirst["_id"]),
+        str(fMid["_id"]),
+        str(fLast["_id"]),
+    ]
 
 
 # ---------------------------------------------------------------------------
