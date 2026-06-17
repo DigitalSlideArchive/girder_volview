@@ -1080,18 +1080,6 @@ def _collectJobResults(job, user):
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
 @boundHandler
 @autoDescribeRoute(
-    Description("Get the VolView processing provider config for a folder.")
-    .modelParam("folderId", model=Folder, level=AccessType.READ)
-    .produces(["application/json"])
-)
-def getProviderConfig(self, folder):
-    user = self.getCurrentUser()
-    return {"providers": [_providerConfigForFolder(folder, user)]}
-
-
-@access.public(cookie=True, scope=TokenScope.DATA_READ)
-@boundHandler
-@autoDescribeRoute(
     Description("List processing tasks available for a folder.")
     .modelParam("folderId", model=Folder, level=AccessType.READ)
     .produces(["application/json"])
@@ -1252,9 +1240,6 @@ def addProcessingRoutes(info):
         "jobs.job.update.after",
         "girder_volview.processing",
         _cleanupTransientOnJobDone,
-    )
-    info["apiRoot"].folder.route(
-        "GET", (":folderId", "volview_processing"), getProviderConfig
     )
     info["apiRoot"].folder.route(
         "GET", (":folderId", "volview_processing", "tasks"), listTasks
