@@ -311,6 +311,76 @@ def test_scalars_and_outputs_still_translate(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Job creation unwinds staged transients on failure (item 4.4)
+# ---------------------------------------------------------------------------
+
+def test_job_creation_failure_unwinds_staged_transients(monkeypatch):
+    # Translate already staged a volume, then job creation throws *after*
+    # translate returned (slicer_cli validation / docker down / token). No job
+    # exists yet to carry the staged id, so _createCliJob must remove it here
+    # rather than orphan a volviewTransient item hidden from the source list.
+    staged = str(ObjectId())
+
+    def boom(cliItem, params, user):
+        raise RestException("docker unavailable", code=500)
+
+    monkeypatch.setattr(processing, "_genDockerJob", boom)
+    removed = []
+    monkeypatch.setattr(processing, "_removeTransientItems", removed.extend)
+    marked = []
+    monkeypatch.setattr(
+        processing, "_markJobTransients", lambda job, ids: marked.append(ids)
+    )
+
+    with pytest.raises(RestException) as exc:
+        processing._createCliJob(
+            cliItem=None, params={}, transientItemIds=[staged], user=None
+        )
+
+    assert exc.value.code == 500
+    assert removed == [staged]  # staged volume reclaimed
+    assert marked == []  # no job exists to carry the marker
+
+
+def test_job_creation_happy_path_marks_transients(monkeypatch):
+    # Success: the job is returned and carries the transient ids; nothing is
+    # unwound (cleanup is the job's responsibility from here on).
+    staged = str(ObjectId())
+    job = {"_id": ObjectId()}
+    monkeypatch.setattr(processing, "_genDockerJob", lambda c, p, u: job)
+    removed = []
+    monkeypatch.setattr(processing, "_removeTransientItems", removed.extend)
+    marked = []
+    monkeypatch.setattr(
+        processing, "_markJobTransients", lambda j, ids: marked.append((j, ids))
+    )
+
+    out = processing._createCliJob(
+        cliItem=None, params={}, transientItemIds=[staged], user=None
+    )
+
+    assert out is job
+    assert removed == []
+    assert marked == [(job, [staged])]
+
+
+def test_job_creation_no_transients_marks_nothing(monkeypatch):
+    # A job with no staged volumes (plain file input) creates normally and
+    # marks nothing — the happy path is unchanged for the common case.
+    job = {"_id": ObjectId()}
+    monkeypatch.setattr(processing, "_genDockerJob", lambda c, p, u: job)
+    marked = []
+    monkeypatch.setattr(
+        processing, "_markJobTransients", lambda j, ids: marked.append(ids)
+    )
+
+    out = processing._createCliJob(None, {}, [], user=None)
+
+    assert out is job
+    assert marked == []
+
+
+# ---------------------------------------------------------------------------
 # Transient cleanup on job completion
 # ---------------------------------------------------------------------------
 

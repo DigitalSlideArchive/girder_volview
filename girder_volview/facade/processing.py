@@ -1130,6 +1130,44 @@ def getTaskXml(self, folder, taskId):
     return cliItem.xml
 
 
+def _genDockerJob(cliItem, params, user):
+    """Create the slicer_cli_web docker job for a CLI item and return its doc.
+
+    Isolated as the single live slicer_cli_web touch point so ``_createCliJob``
+    (and its tests) can drive the unwind without the optional dependency.
+    """
+    from girder.models.token import Token
+    from slicer_cli_web.rest_slicer_cli import genHandlerToRunDockerCLI
+    handler = genHandlerToRunDockerCLI(cliItem)
+    token = Token().createToken(user=user)
+    # Take a copy so the handler can mutate freely.
+    job_obj = handler.subHandler(cliItem, copy.deepcopy(params), user, token)
+    return job_obj.job if hasattr(job_obj, "job") else job_obj
+
+
+def _createCliJob(cliItem, params, transientItemIds, user):
+    """Create the docker job and record its transient inputs, unwinding on error.
+
+    Split out (like ``_populateSlicerParams``) so the job-creation block can
+    unwind volumes ``_translateValuesToSlicerParams`` already staged: if job
+    creation throws *after* translate returned (slicer_cli validation, docker
+    unavailable, token), no job exists to carry the transient ids, so the
+    job-done cleanup (``_cleanupTransientOnJobDone``) would never reach them and
+    the assembled NRRD — hidden from the source list as ``volviewTransient`` —
+    is orphaned. Mirror the translate-time unwind.
+    """
+    try:
+        job_doc = _genDockerJob(cliItem, params, user)
+    except Exception:
+        _removeTransientItems(transientItemIds)
+        raise
+    # The job now exists and carries the transient ids, so cleanup is its
+    # responsibility from here on.
+    if transientItemIds:
+        _markJobTransients(job_doc, transientItemIds)
+    return job_doc
+
+
 @access.public(cookie=True, scope=TokenScope.DATA_WRITE)
 @boundHandler
 @autoDescribeRoute(
@@ -1154,9 +1192,6 @@ def runTask(self, folder, taskId, body):
     if not cliItem:
         raise RestException("Unknown taskId", code=404)
 
-    from girder.models.token import Token
-    from slicer_cli_web.rest_slicer_cli import genHandlerToRunDockerCLI
-
     # Auto-generate (unique) output filenames so the user never has to. Any
     # output param missing from `values` gets a fresh name keyed off the input
     # file + CLI name + parameter name + extension.
@@ -1172,13 +1207,7 @@ def runTask(self, folder, taskId, body):
         folder["_id"], taskId, params,
     )
 
-    handler = genHandlerToRunDockerCLI(cliItem)
-    token = Token().createToken(user=user)
-    # Take a copy so the handler can mutate freely.
-    job_obj = handler.subHandler(cliItem, copy.deepcopy(params), user, token)
-    job_doc = job_obj.job if hasattr(job_obj, "job") else job_obj
-    if transientItemIds:
-        _markJobTransients(job_doc, transientItemIds)
+    job_doc = _createCliJob(cliItem, params, transientItemIds, user)
     return {"jobId": str(job_doc["_id"])}
 
 
