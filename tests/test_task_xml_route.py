@@ -45,6 +45,12 @@ def _mongo_reachable(timeout=0.5):
     Honors ``GIRDER_TEST_DB`` (``mongodb://host:port/db``) when set, else the
     pytest-girder default of ``localhost:27017``. A refused connection returns
     fast, so collection is not slowed when Mongo is down.
+
+    Caveat: pytest-girder's ``--mongo-uri`` option is a pytest CLI argument not
+    available when this module-level ``skipif`` is evaluated, so a non-default
+    Mongo selected only via ``--mongo-uri`` (without a matching
+    ``GIRDER_TEST_DB``) is not detected — the worst case is a false skip (lost
+    coverage), never a false pass. Export ``GIRDER_TEST_DB`` to run there.
     """
     host, port = "localhost", 27017
     uri = os.environ.get("GIRDER_TEST_DB", "")
