@@ -18,12 +18,23 @@ export function addButton($el, parentSelector) {
 
 const volViewPath = `static/built/plugins/volview/index.html`;
 
+// Deliver the folder's VolView config (which the facade augments with the
+// processing-provider block) over the trusted `config=` channel. VolView only
+// registers processing providers from a config loaded this way — the `urls=`
+// manifest path is deliberately untrusted — so without this the Analysis tab
+// never appears. Folder-scoped because the config/processing routes are.
+function configParam(folderId) {
+    return `&config=/${getApiRoot()}/folder/${folderId}/volview_config/config.json`;
+}
+
 export function openItemURL(item) {
     const itemRoute = `/${getApiRoot()}/item/${item.id}`;
     const saveParam = `&save=${itemRoute}/volview`;
     const manifestUrl = `${itemRoute}/volview`;
     const downloadParams = `&names=[manifest.json]&urls=${manifestUrl}`;
-    const newTabUrl = `${volViewPath}?${saveParam}${downloadParams}`;
+    const newTabUrl = `${volViewPath}?${saveParam}${downloadParams}${configParam(
+        item.get("folderId")
+    )}`;
     return newTabUrl;
 }
 
@@ -50,7 +61,9 @@ export function openResourcesURL(folder, resources) {
         JSON.stringify(metaData)
     )}`;
     const downloadParams = resourcesToDownloadParams(folder.id, resources);
-    const newTabUrl = `${volViewPath}?${saveParam}${downloadParams}`;
+    const newTabUrl = `${volViewPath}?${saveParam}${downloadParams}${configParam(
+        folder.id
+    )}`;
     return newTabUrl;
 }
 
@@ -79,7 +92,7 @@ function volViewURLWithFilter(folderId, filterPayload) {
         JSON.stringify(filterPayload)
     )}`;
     const downloadParams = `&names=[manifest.json]&urls=${encodeURIComponent(manifestUrl)}`;
-    return `${volViewPath}?${saveParam}${downloadParams}`;
+    return `${volViewPath}?${saveParam}${downloadParams}${configParam(folderId)}`;
 }
 
 export function openGroupedItemURL(item, folder) {
