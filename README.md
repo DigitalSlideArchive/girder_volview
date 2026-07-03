@@ -392,11 +392,18 @@ before rebuilding the Girder web client. The checked-in Webpack helper always
 copies from the packaged `node_modules/volview/dist` path, so local development
 does not require changing `webpack.helper.js`.
 
-Then build VolView from source with these env vars:
+Then build VolView from source:
 
 ```sh
-VITE_ENABLE_REMOTE_SAVE=true npm run build
+npm run build
 ```
+
+Processing (the Analysis/Jobs tab) and remote session save ship in every build
+and no longer need build-time env flags — `VITE_ENABLE_PROCESSING`,
+`VITE_ENABLE_REMOTE_SAVE`, and `VITE_PROCESSING_ALLOWED_ORIGINS` were removed.
+What the deployed client is allowed to contact is decided at runtime by the
+origin allow-list; a same-origin deployment (such as DSA) needs no configuration.
+See [Processing provider & remote-save origin allow-list](docs/processing_origin_allow_list.md).
 
 ### Updating the VolView Client Version
 
