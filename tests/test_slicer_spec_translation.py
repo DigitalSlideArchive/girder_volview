@@ -136,6 +136,70 @@ def test_input_image_label_type_accepts_labelmap():
 
 
 # ---------------------------------------------------------------------------
+# b3 injection params are dropped (Chunk 10 / D10). A CLI that fetches its own
+# inputs declares ``girderApiUrl``/``girderToken`` as ``<string>`` params so
+# ``slicer_cli_web`` can inject them at run time; these are server plumbing and
+# must never surface as client task params. The real radiology CLI XMLs now
+# carry them (the conformance cases above already prove they translate to the
+# token-free golden fixtures); this locks the behavior directly and checks that
+# skipping them does not perturb the remaining params' order numbers.
+# ---------------------------------------------------------------------------
+
+_GIRDER_TOKEN_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<executable>
+  <title>Token Params</title>
+  <description>d</description>
+  <parameters>
+    <label>IO</label>
+    <image>
+      <name>inputVolume</name>
+      <label>Input</label>
+      <channel>input</channel>
+      <index>0</index>
+    </image>
+    <integer>
+      <name>radius</name>
+      <label>Radius</label>
+      <longflag>radius</longflag>
+      <default>1</default>
+    </integer>
+  </parameters>
+  <parameters advanced="true">
+    <label>Girder API</label>
+    <string>
+      <name>girderApiUrl</name>
+      <longflag>girderApiUrl</longflag>
+      <label>Girder API URL</label>
+      <default></default>
+    </string>
+    <string>
+      <name>girderToken</name>
+      <longflag>girderToken</longflag>
+      <label>Girder Token</label>
+      <default></default>
+    </string>
+  </parameters>
+</executable>
+"""
+
+
+def test_girder_injection_params_are_dropped_from_spec():
+    spec = translate_slicer_xml(_GIRDER_TOKEN_XML, "TokenParams")
+    ids = [p["id"] for p in spec["parameters"]]
+    assert ids == ["inputVolume", "radius"]  # token params skipped
+    assert "girderApiUrl" not in ids and "girderToken" not in ids
+
+
+def test_dropping_token_params_preserves_order_numbers():
+    spec = translate_slicer_xml(_GIRDER_TOKEN_XML, "TokenParams")
+    by_id = {p["id"]: p for p in spec["parameters"]}
+    # radius keeps order 1 even though two skipped params sit between IO and it;
+    # the skip must not consume order numbers.
+    assert by_id["inputVolume"]["order"] == 0
+    assert by_id["radius"]["order"] == 1
+
+
+# ---------------------------------------------------------------------------
 # Fail closed: an <image> type that is neither absent/scalar nor label, and any
 # unmapped element tag, are emitted as an *unknown field kind* (never coerced
 # into sourceRef, never dropped) so the client's schema validation rejects the

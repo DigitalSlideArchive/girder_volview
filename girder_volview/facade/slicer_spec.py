@@ -219,6 +219,16 @@ def _parse_executable(xml_text):
 
 _SPEC_VERSION = 1
 
+# Below-the-line b3 injection params (D10): a CLI that fetches its own inputs via
+# girder_client declares ``girderApiUrl``/``girderToken`` as ``<string>`` params
+# so ``slicer_cli_web`` can inject them at run time (the HistomicsTK
+# ``example-girder-requests`` convention). They are server-plumbing, never task
+# parameters, so the translator drops them: they must not reach the client spec/
+# form, and the golden task-spec fixtures carry none. Reconciles Chunk 10's b3
+# token injection against the frozen Chunk-5 keystone (WORKORDER Chunk 10 pin;
+# the submit-time reserved-param deny-list is a separate defense, Chunk 21).
+_RESERVED_INPUT_PARAMS = frozenset(("girderApiUrl", "girderToken"))
+
 # slicerType (element tag) -> scalar spec kind. Recovers the int/float split the
 # ported widget table collapses to a single "number".
 _SCALAR_KIND = {
@@ -402,6 +412,11 @@ def translate_slicer_xml(xml_text, task_id):
             # not v1 spec fields (the ported parser dropped them too).
             if parsed["tag"] in ("image", "file"):
                 outputs.append(_translate_output(parsed))
+            continue
+        if parsed["id"] in _RESERVED_INPUT_PARAMS:
+            # b3 injection plumbing (girderApiUrl/girderToken) -- below the line,
+            # never a client-facing param. Skip before ``order`` advances so the
+            # remaining params keep their fixture-pinned order numbers.
             continue
         parameters.append(_translate_param(parsed, order))
         order += 1
