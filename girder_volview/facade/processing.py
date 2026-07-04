@@ -39,7 +39,7 @@ from girder.utility import RequestBodyStream
 from girder.utility.server import getApiRoot
 
 from ..csrf import csrfProtect
-from ..utils import makeFileDownloadUrl
+from ..utils import JOB_OUTPUT_META_KEY, makeFileDownloadUrl, _toIso
 from .slicer_spec import translate_slicer_xml
 
 # ---------------------------------------------------------------------------
@@ -224,6 +224,48 @@ def _markJobTransients(job_doc, transientItemIds):
     except Exception:
         logger.exception(
             "Failed to mark transient inputs on job %s", job_doc.get("_id")
+        )
+
+
+def _collectInputUris(values):
+    """The verbatim input opaque URIs across a submission's bound inputs (Chunk 19).
+
+    A bound input arrives as ``{type, format?, uris}``; its ``uris`` are the
+    client-minted proxiable URLs (Seam 1 provenance) — the exact strings the
+    reloaded client re-derives from the same launch manifest, so tier-2 can match
+    a re-discovered job's inputs against the reloaded scene byte-for-byte. Order
+    is preserved and duplicates dropped; type-agnostic (never branches on
+    ``type``), so image and labelmap inputs both contribute.
+    """
+    uris = []
+    for value in (values or {}).values():
+        if not (isinstance(value, dict) and isinstance(value.get("uris"), list)):
+            continue
+        for uri in value["uris"]:
+            if isinstance(uri, str) and uri not in uris:
+                uris.append(uri)
+    return uris
+
+
+def _stampJobContext(job_doc, folder, taskId, inputUris):
+    """Stamp the launch context + handle inputs on the job at submit (Chunk 19, D5).
+
+    Records the launch folder (the ``listRecentJobs`` scope key — Girder jobs are
+    user-owned, not folder-linked), the task id, and the job's input opaque URIs,
+    all as plain otherFields (queryable, not a schema change). This is what lets a
+    reloaded client re-discover *this study's* jobs and re-associate their results
+    to the reloaded scene by provenance.
+    """
+    from girder_jobs.models.job import Job as JobModel
+    try:
+        JobModel().updateJob(job_doc, otherFields={
+            _LAUNCH_FOLDER_FIELD: str(folder["_id"]),
+            _TASK_ID_FIELD: str(taskId),
+            _INPUT_URIS_FIELD: list(inputUris),
+        })
+    except Exception:
+        logger.exception(
+            "Failed to stamp launch context on job %s", job_doc.get("_id")
         )
 
 
@@ -771,6 +813,45 @@ def _projectJobStatus(job):
     return out
 
 
+def _projectFinishedAt(job):
+    """The neutral terminal instant of a job (server clock), or ``""``.
+
+    Projected from Girder's job status-transition timestamps (``_updateStatus``
+    pushes ``{status, time}`` on every transition): the ``time`` of the most
+    recent transition into a terminal state. A still-running / never-terminal job
+    has no such entry and yields ``""`` — the client applies results only for a
+    terminal-succeeded job anyway (result reads gate on terminal success), and
+    the empty instant sorts before any real watermark. ISO-8601 UTC so the client
+    compares it to ``sessionSavedAt`` as UTC instants (D5).
+    """
+    from girder_jobs.constants import JobStatus
+    terminal = {JobStatus.SUCCESS, JobStatus.ERROR, JobStatus.CANCELED}
+    timestamps = job.get("timestamps") or []
+    for ts in reversed(timestamps):
+        if isinstance(ts, dict) and ts.get("status") in terminal:
+            return _toIso(ts.get("time")) or ""
+    return ""
+
+
+def _projectJobHandle(job):
+    """Project a facade job into a neutral ``NeutralJobHandle`` (Chunk 19, D5).
+
+    ``{jobId, taskId, inputUris, finishedAt}`` — the SAME neutral shape the
+    ``processing-contract`` golden fixture pins (the client never sees the Girder
+    route, the ``JobStatus`` enum, or a file id). ``taskId`` + ``inputUris`` are
+    read straight off the launch-context stamp; ``finishedAt`` is projected from
+    the job's terminal timestamp. The ``inputUris`` re-associate results to the
+    reloaded scene by matching the client's OWN provenance (Seam 1).
+    """
+    inputUris = job.get(_INPUT_URIS_FIELD)
+    return {
+        "jobId": str(job["_id"]),
+        "taskId": str(job.get(_TASK_ID_FIELD) or ""),
+        "inputUris": list(inputUris) if isinstance(inputUris, list) else [],
+        "finishedAt": _projectFinishedAt(job),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Reference-bound job outputs (D5) — outputs bind to the job by reference, never
 # by filename
@@ -801,6 +882,17 @@ def _projectJobStatus(job):
 _OUTPUTS_FIELD = "volviewOutputs"          # {identifier: str(fileId)}
 _OUTPUT_SPECS_FIELD = "volviewOutputSpecs"  # [{name, tag, isLabel, fileExtensions}]
 _JOB_TOKEN_FIELD = "volviewJobToken"       # str(token _id) — data.process key
+
+# Launch-context stamp (Chunk 19, D5). Girder jobs are user-owned, not
+# folder-linked, and the Chunk-17 output-reference binding adds no job->folder
+# link — so `listRecentJobs` can only scope to *this study's* jobs if the launch
+# context is recorded ON the job at submit. Plain otherFields (queryable Mongo
+# keys, like `_JOB_TOKEN_FIELD`), not a schema change. The task id + the job's
+# input opaque URIs ride along so `listRecentJobs` can project a `NeutralJobHandle`
+# (jobId + taskId + inputUris + finishedAt) without re-deriving them.
+_LAUNCH_FOLDER_FIELD = "volviewLaunchFolderId"  # str(folder _id) — scope key
+_TASK_ID_FIELD = "volviewTaskId"                # str — NeutralJobHandle.taskId
+_INPUT_URIS_FIELD = "volviewInputUris"          # [str] — NeutralJobHandle.inputUris
 
 
 def _parseOutputReference(raw):
@@ -857,6 +949,26 @@ def _jobForOutputUpload(ref, info):
     return None
 
 
+def _tagJobOutputItem(fileDoc):
+    """Mark a job-output file's parent item so the launch manifest excludes it.
+
+    Best-effort, idempotent (a re-fired upload just re-sets the marker). Loaded
+    ``force=True`` because this runs in the ``data.process`` daemon context; the
+    marker is item metadata (``volviewJobOutput``), mirroring the ``volviewTransient``
+    tag pattern. Failures are logged, never raised — an untaggable output must not
+    disrupt the upload daemon (the file is still recorded on the job).
+    """
+    itemId = fileDoc.get("itemId") if isinstance(fileDoc, dict) else None
+    if not itemId:
+        return
+    try:
+        item = Item().load(itemId, force=True, exc=False)
+        if item:
+            Item().setMetadata(item, {JOB_OUTPUT_META_KEY: True})
+    except Exception:
+        logger.exception("Failed to tag job-output item %s", itemId)
+
+
 def _recordJobOutput(event):
     """``data.process`` handler: record an uploaded output file id onto its job (D5).
 
@@ -892,6 +1004,11 @@ def _recordJobOutput(event):
             "Failed to record output %s on job %s",
             ref.get("identifier"), job.get("_id"),
         )
+    # Mark the output file's item so the launch manifest excludes it (Chunk 19,
+    # D5): job results take the JOB path only. The file stays durable in the
+    # folder (re-fetched via the job) but VolView's native loadSegmentations
+    # never also grabs it (which would double-apply with no shared dedup key).
+    _tagJobOutputItem(fileDoc)
 
 
 def _bindJobOutputs(job, token, cli_xml):
@@ -1090,6 +1207,43 @@ def listTasks(self, folder):
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
 @boundHandler
 @autoDescribeRoute(
+    Description("List this launch context's recent processing jobs (tier-2).")
+    .notes(
+        "Tier-2 cold-reload re-discovery (Chunk 19, D5): a reloaded client "
+        "re-finds jobs from a previous page life and re-attaches via the same "
+        "poll/results path. Unbounded + context-scoped -- every facade job "
+        "stamped with THIS launch folder, no time window (an old in-context job "
+        "is still listed); `since`/paging stay transport details. Returns "
+        "NeutralJobHandle[] -- the client never sees the route, the JobStatus "
+        "enum, or a file id."
+    )
+    .modelParam("folderId", model=Folder, level=AccessType.READ)
+    .produces(["application/json"])
+)
+def listRecentJobs(self, folder):
+    # Scoped by the submitting user (auth) AND the launch-folder stamp: Girder
+    # jobs are user-owned, not folder-linked, so the launch context recorded on
+    # the job at submit (`_stampJobContext`) is the only handle on "this study's
+    # jobs". Unbounded (limit=0, no since cutoff -- D5).
+    user = self.getCurrentUser()
+    if not user:
+        return []
+    from girder.constants import SortDir
+    from girder_jobs.models.job import Job as JobModel
+    cursor = JobModel().findWithPermissions(
+        query={_LAUNCH_FOLDER_FIELD: str(folder["_id"])},
+        user=user,
+        jobUser=user,
+        level=AccessType.READ,
+        limit=0,
+        sort=[("created", SortDir.DESCENDING)],
+    )
+    return [_projectJobHandle(job) for job in cursor]
+
+
+@access.public(cookie=True, scope=TokenScope.DATA_READ)
+@boundHandler
+@autoDescribeRoute(
     Description("Get the VolView task spec for a task.")
     .modelParam("folderId", model=Folder, level=AccessType.READ)
     .param("taskId", "The task identifier.", paramType="path")
@@ -1170,6 +1324,12 @@ def runTask(self, folder, taskId, body):
     )
 
     job_doc = _genDockerJob(cliItem, params, user)
+    # Stamp the launch context + the handle's inputs so a reloaded client can
+    # re-discover this job (listRecentJobs) and re-associate its results by
+    # provenance (Chunk 19, D5). The URIs are the bound inputs' verbatim opaque
+    # URIs, read off the submitted values (before autofill only added output
+    # filename strings, which carry no `uris`).
+    _stampJobContext(job_doc, folder, taskId, _collectInputUris(values))
     if transientItemIds:
         _markJobTransients(job_doc, transientItemIds)
     return {"jobId": str(job_doc["_id"])}
@@ -1331,6 +1491,12 @@ def addProcessingRoutes(info):
     JobModel().exposeFields(level=AccessType.READ, fields={_OUTPUTS_FIELD})
     info["apiRoot"].folder.route(
         "GET", (":folderId", "volview_processing", "tasks"), listTasks
+    )
+    # Tier-2 cold-reload re-discovery (Chunk 19, D5): context-scoped like
+    # listTasks/runTask/stage (it takes a launch folder), NOT job-addressed like
+    # status/results/cancel. A reloaded client GETs this to re-find its jobs.
+    info["apiRoot"].folder.route(
+        "GET", (":folderId", "volview_processing", "jobs"), listRecentJobs
     )
     info["apiRoot"].folder.route(
         "POST", (":folderId", "volview_processing", "stage"), stageInput

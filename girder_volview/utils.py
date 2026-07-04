@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from girder import logger
 from girder.utility.server import getApiRoot
 from girder.constants import AccessType
@@ -8,6 +8,14 @@ from girder.models.item import Item
 SESSION_ZIP_EXTENSION = ".volview.zip"
 SESSION_JSON_EXTENSION = ".volview.json"
 SESSION_EXTENSIONS = (SESSION_ZIP_EXTENSION, SESSION_JSON_EXTENSION)
+
+# Item-metadata marker stamped on a job-output file's item at upload (Chunk 19,
+# D5). Job results take the JOB path only: a marked file stays durable in the
+# folder (re-fetched via the job) but is filtered OUT of the launch manifest, so
+# VolView's native `loadSegmentations` convention never also grabs it (that
+# carries no `source` tag, so tier-2 could not dedup against a double-apply).
+# Same exclusion site as session zips (`isLoadableImage`).
+JOB_OUTPUT_META_KEY = "volviewJobOutput"
 
 SAFE_NAME_MAX = 80
 SESSION_NAME_MAX = SAFE_NAME_MAX * 3
@@ -177,8 +185,30 @@ def isLoadableFile(file, user=None):
     return file.get("mimeType") in LOADABLE_MIMES
 
 
+def isJobOutputItem(item):
+    """Whether an item holds a job-output file (marked at upload — Chunk 19)."""
+    return bool((item or {}).get("meta", {}).get(JOB_OUTPUT_META_KEY))
+
+
+def isJobOutputFile(file, user=None):
+    """Whether ``file``'s parent item is a marked job output (Chunk 19, D5).
+
+    Job outputs are excluded from the launch manifest (results take the job path
+    only) while staying durable in the folder. Best-effort: an absent/unreadable
+    parent item is treated as not-a-job-output (fail toward showing the file —
+    the scene-tag idempotency still guards against a double-apply).
+    """
+    itemId = file.get("itemId")
+    if not itemId:
+        return False
+    item = Item().load(itemId, user=user, level=AccessType.READ, exc=False)
+    return isJobOutputItem(item)
+
+
 def isLoadableImage(file, user=None):
     if isSessionFile(file):
+        return False
+    if isJobOutputFile(file, user):
         return False
     return isLoadableFile(file, user)
 
@@ -204,6 +234,40 @@ def makeFileDownloadUrl(fileModel):
     return fileUrl
 
 
+def _toIso(value):
+    """Serialize a datetime to an ISO-8601 UTC string, or ``None``.
+
+    The facade's neutral instants (the session watermark, a job's ``finishedAt``)
+    travel the wire as ISO-8601 UTC strings so the client compares them as UTC
+    instants — no client clock, no timezone ambiguity (D5). Girder stores naive
+    UTC datetimes, so a naive value is tagged UTC.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat()
+    return str(value)
+
+
+def sessionSavedAtFromFiles(files):
+    """The server-side save instant of a session zip among ``files``, or ``None``.
+
+    ``singleVolViewZipOrImageFiles`` selects EITHER one session zip OR the loose
+    loadable images (never both), so a session file in the manifest's file set
+    means this launch restores that session; its file-record ``created`` is the
+    session's server-side save instant — the D5 watermark comparand
+    (``finishedAt > sessionSavedAt``). Absent (no session) → ``None`` and the
+    field is omitted, so the client attaches every re-discovered result (MVP
+    parity). Server clock only; nothing new is stored (no state-file change).
+    """
+    for fileEntry in files:
+        if isSessionFile(fileEntry[1]):
+            return _toIso(fileEntry[1].get("created"))
+    return None
+
+
 def filesToManifest(files, folderId):
     fileUrls = [
         {"url": makeFileDownloadUrl(fileEntry[1]), "name": fileEntry[1]["name"]}
@@ -221,6 +285,11 @@ def filesToManifest(files, folderId):
     )
     fileUrls.append({"url": configUrl, "name": "config.json"})
     fileManifest = {"resources": fileUrls}
+    # Surface the restored session's save instant as the tier-2 watermark
+    # (Chunk 19, D5). Present iff a session zip is selected; nothing new stored.
+    savedAt = sessionSavedAtFromFiles(files)
+    if savedAt is not None:
+        fileManifest["sessionSavedAt"] = savedAt
     return fileManifest
 
 
