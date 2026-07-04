@@ -10,6 +10,7 @@ import contract_loader
 def test_task_spec_fixtures_load():
     specs = contract_loader.load_fixture_dir("task-spec")
     assert set(specs) == {
+        "masked-median-filter",
         "median-filter",
         "otsu-segmentation",
         "threshold-segmentation",

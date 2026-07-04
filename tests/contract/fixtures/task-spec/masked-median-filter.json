@@ -1,0 +1,49 @@
+{
+  "specVersion": 1,
+  "id": "MaskedMedianFilter",
+  "title": "Masked Median Filter",
+  "description": "Apply an N-D median filter to a volume, but only inside a painted mask; voxels outside the mask keep their original values. Backed by ITK.",
+  "parameters": [
+    {
+      "kind": "sourceRef",
+      "id": "inputVolume",
+      "title": "Input Volume",
+      "help": "Background volume to filter (DICOM, NIfTI, NRRD, MHA, etc.)",
+      "section": "IO",
+      "order": 0,
+      "required": true,
+      "accepts": ["image"]
+    },
+    {
+      "kind": "sourceRef",
+      "id": "inputLabelmap",
+      "title": "Mask Labelmap",
+      "help": "Labelmap selecting where to apply the filter (any nonzero label).",
+      "section": "IO",
+      "order": 1,
+      "required": true,
+      "accepts": ["labelmap"]
+    },
+    {
+      "kind": "int",
+      "id": "radius",
+      "title": "Radius",
+      "help": "Median filter radius (voxels).",
+      "section": "Filter parameters",
+      "order": 2,
+      "min": 1,
+      "max": 10,
+      "step": 1,
+      "default": 1
+    }
+  ],
+  "outputs": [
+    {
+      "id": "outputVolume",
+      "title": "Output Volume",
+      "help": "Masked-filtered output volume.",
+      "type": "image",
+      "format": ".nii.gz"
+    }
+  ]
+}

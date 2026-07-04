@@ -64,6 +64,11 @@ _CONFORMANCE_CASES = [
         "threshold-segmentation",
     ),
     (
+        _CLI_XML_DIR / "masked-median-filter.xml",
+        "MaskedMedianFilter",
+        "masked-median-filter",
+    ),
+    (
         _CONTRACT_XML_DIR / "synthetic-bounds-enum.xml",
         "SyntheticRegionEnum",
         "synthetic-bounds-enum",
