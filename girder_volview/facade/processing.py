@@ -20,21 +20,26 @@ Input resolution (Seam 1, client-processing-contract.md):
 """
 
 import copy
+import datetime
 import json
 
+import cherrypy
 from bson.objectid import ObjectId
-from girder import logger
+from girder import events, logger
 from girder.api import access
 from girder.api.describe import Description, autoDescribeRoute
 from girder.api.rest import boundHandler
 from girder.constants import AccessType, TokenScope
-from girder.exceptions import RestException
+from girder.exceptions import GirderException, RestException
 from girder.models.file import File
 from girder.models.folder import Folder
 from girder.models.item import Item
+from girder.models.upload import Upload
+from girder.utility import RequestBodyStream
 from girder.utility.server import getApiRoot
 
 from ..csrf import csrfProtect
+from ..utils import makeFileDownloadUrl
 from .slicer_spec import translate_slicer_xml
 
 # ---------------------------------------------------------------------------
@@ -130,6 +135,211 @@ def resolveInputUrisToFileIds(uris, user):
         # submitting user cannot read raises AccessException (403).
         File().load(fileId, user=user, level=AccessType.READ, exc=True)
     return fileIds
+
+
+# ---------------------------------------------------------------------------
+# Transient staging lifecycle (Seam 1 — D10 "Client-created segmentation inputs")
+#
+# Client-held bytes (a painted labelmap, and — deferred item 10 — any future
+# consented upload) earn provenance through the type-agnostic staging endpoint
+# (``stageInput`` below): the bytes land in a fresh item tagged transient and the
+# facade mints its own proxiable download URI for them. From that point a staged
+# input is indistinguishable from any other minted input and resolves through the
+# exact same own-scheme path (``resolveInputUrisToFileIds``) — the facade never
+# branches on ``type``.
+#
+# "Transient" is two cleanup obligations, both rebuilt here (the original b1
+# cluster was deleted in Chunk 9):
+#   1. Submit-side: a resolved input whose item is transient is recorded on its
+#      job; ``_cleanupTransientOnJobDone`` (bound to ``jobs.job.update.after``)
+#      deletes it once the job reaches a terminal state.
+#   2. Orphan sweep: an item uploaded but never submitted has no job to clean it
+#      up, so each staging call ages out transient items older than the TTL,
+#      keyed off ``item['created']`` (the marker carries no timestamp).
+# ---------------------------------------------------------------------------
+
+# Item metadata key marking a staged, non-durable input (invisible to session
+# history + source listings; gone at job end or TTL). Nothing labelmap-specific
+# rides this tag — it is the whole staging vocabulary.
+_TRANSIENT_META_KEY = "volviewTransient"
+
+# Age after which an uploaded-but-never-submitted transient item is swept on the
+# next staging call. Upload->submit is normally seconds; a day absorbs an
+# interrupted session without cluttering folders across days (Chunk 14 in-flight
+# decision — the WORKORDER recommendation, made a module constant).
+_TRANSIENT_ORPHAN_TTL = datetime.timedelta(hours=24)
+
+
+def _isTransientItem(item):
+    """Whether an item carries the staging marker."""
+    return bool((item or {}).get("meta", {}).get(_TRANSIENT_META_KEY))
+
+
+def _transientItemIdForFile(fileId, user):
+    """The parent item id of ``fileId`` if that item is transient, else ``None``.
+
+    Loaded under the submitting user's READ permission (the file already passed
+    the same check in ``resolveInputUrisToFileIds``); a non-transient input, or an
+    item that no longer loads, yields ``None`` so only genuinely staged inputs are
+    ever recorded for cleanup.
+    """
+    fileDoc = File().load(fileId, user=user, level=AccessType.READ, exc=False)
+    if not fileDoc:
+        return None
+    itemId = fileDoc.get("itemId")
+    if not itemId:
+        return None
+    item = Item().load(itemId, user=user, level=AccessType.READ, exc=False)
+    if item and _isTransientItem(item):
+        return str(item["_id"])
+    return None
+
+
+def _collectTransientInputItemIds(values, user):
+    """Transient input item ids among a submission's bound inputs (deduped).
+
+    A bound input arrives as ``{type, format?, uris}``; its URIs resolve to file
+    ids through the same own-scheme path the CLI params use, and any whose parent
+    item is transient (i.e. was staged) is collected so the job can delete it at
+    terminal state. Type-agnostic: it never branches on ``type``.
+    """
+    itemIds = []
+    for value in (values or {}).values():
+        if not (isinstance(value, dict) and "uris" in value):
+            continue
+        for fileId in resolveInputUrisToFileIds(value.get("uris"), user):
+            transientItemId = _transientItemIdForFile(fileId, user)
+            if transientItemId and transientItemId not in itemIds:
+                itemIds.append(transientItemId)
+    return itemIds
+
+
+def _markJobTransients(job_doc, transientItemIds):
+    """Record transient input items on the job so cleanup can delete them."""
+    from girder_jobs.models.job import Job as JobModel
+    try:
+        JobModel().updateJob(
+            job_doc, otherFields={_TRANSIENT_META_KEY: list(transientItemIds)}
+        )
+    except Exception:
+        logger.exception(
+            "Failed to mark transient inputs on job %s", job_doc.get("_id")
+        )
+
+
+def _removeTransientItems(itemIds):
+    """Delete transient input items by id (idempotent, best-effort)."""
+    for itemId in itemIds:
+        try:
+            item = Item().load(itemId, force=True)
+            if item:
+                Item().remove(item)
+        except Exception:
+            logger.exception("Failed to remove transient item %s", itemId)
+
+
+def _cleanupTransientOnJobDone(event):
+    """Delete a job's transient staged inputs once it reaches a terminal state.
+
+    Bound to ``jobs.job.update.after``. Idempotent: a re-fired terminal update
+    finds the items already gone and no-ops. The job is reloaded from the database
+    before reading the marker/status -- ``updateJob`` fires this event with the
+    updater's *in-memory* job dict, which carries the marker only if that updater
+    happened to DB-load the job first. Reloading keeps cleanup self-contained: it
+    works for any terminal updater (girder_worker, a manual cancel, ...), not just
+    this facade's own ``updateJob`` call.
+    """
+    from girder_jobs.constants import JobStatus
+    from girder_jobs.models.job import Job as JobModel
+    info = getattr(event, "info", None)
+    eventJob = info.get("job") if isinstance(info, dict) else None
+    if not isinstance(eventJob, dict):
+        return
+    job = JobModel().load(eventJob.get("_id"), force=True)
+    if not isinstance(job, dict):
+        return
+    transientItemIds = job.get(_TRANSIENT_META_KEY)
+    if not isinstance(transientItemIds, list) or not transientItemIds:
+        return
+    terminal = {JobStatus.SUCCESS, JobStatus.ERROR, JobStatus.CANCELED}
+    if job.get("status") not in terminal:
+        return
+    _removeTransientItems(transientItemIds)
+
+
+def _sweepOrphanTransients(folder, now=None):
+    """Age out transient items in ``folder`` never bound to a job (best-effort).
+
+    Piggybacked on staging calls (an upload precedes its job, so job-end cleanup
+    never sees an orphan). Keyed off ``item['created']`` because the marker carries
+    no timestamp; only items strictly older than :data:`_TRANSIENT_ORPHAN_TTL` are
+    swept, so the item this same call is about to create is never a candidate.
+    """
+    now = now or datetime.datetime.utcnow()
+    cutoff = now - _TRANSIENT_ORPHAN_TTL
+    query = {
+        "folderId": folder["_id"],
+        "meta.%s" % _TRANSIENT_META_KEY: True,
+        "created": {"$lt": cutoff},
+    }
+    try:
+        stale = list(Item().find(query))
+    except Exception:
+        logger.exception("Failed to query orphan transient items")
+        return
+    for item in stale:
+        try:
+            Item().remove(item)
+        except Exception:
+            logger.exception(
+                "Failed to sweep orphan transient item %s", item.get("_id")
+            )
+
+
+def _streamBodyIntoItem(folder, user, size, name):
+    """Stream the raw request body into a new item in ``folder``.
+
+    Mirrors ``__init__.uploadSession``'s streaming dance -- ``createUpload`` + a
+    raw ``RequestBodyStream`` chunk + ``handleChunk``/``finalizeUpload`` -- but
+    stays format-blind: a caller-supplied ``name`` and an
+    ``application/octet-stream`` mime, nothing session- or labelmap-specific.
+    Returns the finalized, filtered file document.
+    """
+    parent = Folder().load(
+        id=folder["_id"], user=user, level=AccessType.WRITE, exc=True
+    )
+    chunk = None
+    ct = cherrypy.request.body.content_type.value
+    if (
+        ct not in cherrypy.request.body.processors
+        and ct.split("/", 1)[0] not in cherrypy.request.body.processors
+    ):
+        chunk = RequestBodyStream(cherrypy.request.body)
+    if chunk is not None and chunk.getSize() <= 0:
+        chunk = None
+    upload = Upload().createUpload(
+        user=user,
+        name=name,
+        parentType="folder",
+        parent=parent,
+        size=size,
+        mimeType="application/octet-stream",
+        reference=None,
+    )
+    if chunk:
+        return Upload().handleChunk(upload, chunk, filter=True, user=user)
+    return File().filter(Upload().finalizeUpload(upload), user)
+
+
+def _tagItemTransient(fileDoc, user):
+    """Tag a freshly-uploaded file's parent item transient; return the item."""
+    itemId = fileDoc.get("itemId")
+    if not itemId:
+        return None
+    item = Item().load(itemId, force=True)
+    if item:
+        Item().setMetadata(item, {_TRANSIENT_META_KEY: True})
+    return item
 
 
 # ---------------------------------------------------------------------------
@@ -767,12 +977,17 @@ def runTask(self, folder, taskId, body):
     # Resolve each bound input's client-minted URIs back to file ids (own-scheme
     # validation + per-user ACL re-check) and forward the ids to the CLI (b3).
     params = _translateValuesToSlicerParams(values, user, folder)
+    # A bound input that was staged (its item tagged transient) is recorded on the
+    # job so _cleanupTransientOnJobDone deletes it at terminal state (Chunk 14).
+    transientItemIds = _collectTransientInputItemIds(values, user)
     logger.info(
         "[volview_processing] runTask folder=%s task=%s params=%s",
         folder["_id"], taskId, params,
     )
 
     job_doc = _genDockerJob(cliItem, params, user)
+    if transientItemIds:
+        _markJobTransients(job_doc, transientItemIds)
     return {"jobId": str(job_doc["_id"])}
 
 
@@ -806,13 +1021,59 @@ def getJobResults(self, folder, jobId):
     return _collectJobResults(job, user)
 
 
+@access.public(cookie=True, scope=TokenScope.DATA_WRITE)
+@csrfProtect
+@boundHandler
+@autoDescribeRoute(
+    Description("Stage client-held bytes as a transient processing input.")
+    .notes(
+        "Type-agnostic: accepts arbitrary bytes in the request body and returns a "
+        "facade-minted download URI for them (the same helper the launch manifest "
+        "uses). The created item is tagged transient -- invisible to session "
+        "history and source listings, deleted when a job that binds it reaches a "
+        "terminal state, or swept if never submitted. Launch-context scoped to the "
+        "folder; each call also sweeps this folder's expired orphans."
+    )
+    .modelParam("folderId", model=Folder, level=AccessType.WRITE)
+    .param("name", "File name to record for the staged bytes.", required=False)
+    .errorResponse()
+)
+def stageInput(self, folder, name):
+    user = self.getCurrentUser()
+    # Age out any never-submitted orphans in this folder before adding another
+    # (job-end cleanup never sees an upload that was never submitted).
+    _sweepOrphanTransients(folder)
+    size = int(cherrypy.request.headers.get("Content-Length") or 0)
+    if size <= 0:
+        raise GirderException(
+            "Expected non-zero Content-Length header",
+            "girder.api.v1.folder.volview_stage",
+        )
+    fileDoc = _streamBodyIntoItem(folder, user, size, name or "staged")
+    _tagItemTransient(fileDoc, user)
+    # The facade mints the URI; the client constructs none. Type-agnostic shape:
+    # the semantic `type` tag is the client's to add at submit, not ours.
+    return {"uris": [makeFileDownloadUrl(fileDoc)]}
+
+
 # ---------------------------------------------------------------------------
 # Route registration
 # ---------------------------------------------------------------------------
 
 def addProcessingRoutes(info):
+    # Delete a job's transient staged inputs once it reaches a terminal state
+    # (Chunk 14). Bound once at plugin load; fires for every job update but no-ops
+    # cheaply unless the job carries the transient marker.
+    events.bind(
+        "jobs.job.update.after",
+        "girder_volview.processing",
+        _cleanupTransientOnJobDone,
+    )
     info["apiRoot"].folder.route(
         "GET", (":folderId", "volview_processing", "tasks"), listTasks
+    )
+    info["apiRoot"].folder.route(
+        "POST", (":folderId", "volview_processing", "stage"), stageInput
     )
     info["apiRoot"].folder.route(
         "GET",

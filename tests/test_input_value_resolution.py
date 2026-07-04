@@ -260,13 +260,14 @@ def test_first_input_base_name_derives_from_input_uri():
     "_parseCliInputs",
     "_taskBindsSingleFile",
     "_resolveSeriesValueToFileId",
-    "_cleanupTransientOnJobDone",
-    "_markJobTransients",
-    "_removeTransientItems",
     "_createCliJob",
     "_firstSourceRefFile",
 ])
 def test_grouping_and_assembly_symbols_removed(symbol):
+    # NB: _cleanupTransientOnJobDone / _markJobTransients / _removeTransientItems
+    # were deleted in Chunk 9 alongside the grouping machinery, but Chunk 14
+    # REBUILDS that transient-cleanup cluster for staged inputs, so they are
+    # intentionally present again and no longer belong on this removed list.
     assert not hasattr(processing, symbol), symbol
 
 

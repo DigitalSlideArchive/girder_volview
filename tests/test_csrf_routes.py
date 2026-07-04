@@ -189,10 +189,10 @@ def _pluginWriteRoutes():
 def test_all_plugin_write_routes_are_csrf_protected(server):
     found = _pluginWriteRoutes()
 
-    # Guard against a vacuous pass: the three known write routes must be present,
-    # so a broken introspection (empty result) fails rather than passes.
+    # Guard against a vacuous pass: the known write routes must be present, so a
+    # broken introspection (empty result) fails rather than passes.
     names = sorted(handler.__name__ for _, _, handler in found)
-    assert names == ["runTask", "saveToFolder", "saveToItem"], names
+    assert names == ["runTask", "saveToFolder", "saveToItem", "stageInput"], names
 
     unguarded = [
         (method, route, handler.__name__)
