@@ -25,6 +25,8 @@ from girder.models.file import File
 from girder.models.folder import Folder
 from girder.models.item import Item
 
+from ..csrf import csrfProtect
+
 # ---------------------------------------------------------------------------
 # SourceRef — provider-owned opaque handle
 # ---------------------------------------------------------------------------
@@ -1209,6 +1211,7 @@ def _createCliJob(cliItem, params, transientItemIds, user):
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_WRITE)
+@csrfProtect
 @boundHandler
 @autoDescribeRoute(
     Description("Submit a processing task.")

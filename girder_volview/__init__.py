@@ -31,6 +31,7 @@ from girder.models.group import Group
 from girder.utility import config
 
 from .dicom import setupEventHandlers
+from .csrf import csrfProtect
 from .facade import addProcessingRoutes
 from .facade.processing import buildProcessingConfigBlock
 from .utils import (
@@ -216,6 +217,7 @@ def uploadSession(model, parentId, user, size, metadata=None):
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_WRITE)
+@csrfProtect
 @boundHandler
 @autoDescribeRoute(
     Description("Save VolView session in an item")
@@ -233,6 +235,7 @@ def saveToItem(self, itemId):
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_WRITE)
+@csrfProtect
 @boundHandler
 @autoDescribeRoute(
     Description("Save VolView session in an folder")
