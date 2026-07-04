@@ -250,3 +250,57 @@ def test_runtask_unreadable_file_returns_403(
     resp = _run(server, strangerFolder, stranger, {"inputVolume": value})
     assert resp.output_status.startswith(b"403")
     assert "params" not in stubCli
+
+
+# ---------------------------------------------------------------------------
+# Chunk 21 item (b): submit-boundary reserved-param deny-list (fail closed, 400)
+#
+# A separate defense from the spec-side drop (the translator never emits these to
+# the client form; test_slicer_spec_translation asserts that half). Here a crafted
+# submit that feeds a reserved/undeclared param back in is rejected before any job
+# is created -- and the facade's own derived {param}_folder plumbing still works.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.plugin("volview")
+@pytest.mark.parametrize("reservedKey", ["girderApiUrl", "girderToken"])
+def test_runtask_rejects_reserved_credential_param(
+    server, owner, ownerFolder, stubCli, reservedKey
+):
+    # slicer_cli_web injects girderApiUrl/girderToken below the line; a client
+    # value would try to redirect the CLI's girder client or swap its token.
+    resp = _run(server, ownerFolder, owner, {reservedKey: "https://evil.example"})
+    assert resp.output_status.startswith(b"400")
+    assert "params" not in stubCli  # never reached job creation
+
+
+@pytest.mark.plugin("volview")
+def test_runtask_rejects_undeclared_output_folder_param(
+    server, owner, ownerFolder, stubCli
+):
+    # The facade synthesizes {param}_folder server-side; a client-submitted
+    # *_folder is undeclared and rejected (it would otherwise redirect where an
+    # output is written or collide with the facade's own output plumbing).
+    resp = _run(
+        server, ownerFolder, owner,
+        {"outputVolume_folder": str(ownerFolder["_id"])},
+    )
+    assert resp.output_status.startswith(b"400")
+    assert "params" not in stubCli
+
+
+@pytest.mark.plugin("volview")
+def test_runtask_denylist_leaves_facade_output_folder_plumbing_intact(
+    server, owner, ownerFolder, stubCli
+):
+    # The deny-list screens the RAW submission, so a legitimate output request
+    # (key does not end in _folder) still yields the facade's derived
+    # {param}_folder param pointing at the launch folder.
+    f1 = _upload(owner, ownerFolder, "scan.nrrd")
+    values = {
+        "inputVolume": {"type": "image", "uris": [makeFileDownloadUrl(f1)]},
+        "outputVolume": {"name": "result.nrrd"},
+    }
+    resp = _run(server, ownerFolder, owner, values)
+    assert resp.output_status.startswith(b"200")
+    assert stubCli["params"]["outputVolume"] == "result.nrrd"
+    assert stubCli["params"]["outputVolume_folder"] == str(ownerFolder["_id"])

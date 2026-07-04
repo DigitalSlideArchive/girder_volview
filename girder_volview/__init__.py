@@ -341,8 +341,16 @@ def downloadProxiableFile(self, file, name):
         offset = 0
         endByte = None
 
-    # to get s3_assetstore_adapter to proxy s3, we set headers to False,
-    # but to have a correct partial response, fill in headers and status code
+    # to get s3_assetstore_adapter to proxy s3, we set headers to False, but that
+    # also suppresses Girder's default download headers. Set safe ones explicitly
+    # so a proxied file always downloads (attachment) with an inert content type
+    # and can never render inline in a browser. Transparent to the engine's fetch,
+    # which reads the response body regardless of these headers.
+    if proxyRequest:
+        setResponseHeader("Content-Type", "application/octet-stream")
+        setContentDisposition(file["name"])
+
+    # to have a correct partial response, fill in headers and status code
     if proxyRequest and (
         offset > 0 or (endByte is not None and endByte < file["size"])
     ):

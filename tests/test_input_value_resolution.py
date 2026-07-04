@@ -278,3 +278,34 @@ def test_provider_config_no_longer_advertises_loaded_sources():
     serialized = json.dumps(cfg)
     assert "loadedSources" not in serialized
     assert "activeSourceRef" not in serialized
+
+
+# ---------------------------------------------------------------------------
+# Chunk 21 item (b): submit-boundary reserved-param deny-list (offline half).
+# The end-to-end 400 lives in test_input_resolution_routes; here the pure screen.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("reservedKey", ["girderApiUrl", "girderToken"])
+def test_reject_reserved_credential_param(reservedKey):
+    with pytest.raises(RestException) as exc:
+        processing._rejectReservedSubmitParams({reservedKey: "x"})
+    assert exc.value.code == 400
+
+
+@pytest.mark.parametrize("folderKey", ["outputVolume_folder", "_folder", "x_folder"])
+def test_reject_undeclared_output_folder_param(folderKey):
+    with pytest.raises(RestException) as exc:
+        processing._rejectReservedSubmitParams({folderKey: "someid"})
+    assert exc.value.code == 400
+
+
+@pytest.mark.parametrize("values", [
+    None,
+    {},
+    {"inputVolume": {"type": "image", "uris": ["/api/v1/file/x/proxiable/y"]}},
+    {"outputVolume": {"name": "result.nrrd"}},  # output request key does not end _folder
+    {"threshold": 5, "smoothing": True, "label": "foo"},
+])
+def test_accepts_well_formed_submissions(values):
+    # A compliant submission (the shapes the client actually sends) is untouched.
+    assert processing._rejectReservedSubmitParams(values) is None

@@ -40,7 +40,7 @@ from girder.utility.server import getApiRoot
 
 from ..csrf import csrfProtect
 from ..utils import JOB_OUTPUT_META_KEY, makeFileDownloadUrl, _toIso
-from .slicer_spec import translate_slicer_xml
+from .slicer_spec import translate_slicer_xml, _RESERVED_INPUT_PARAMS
 
 # ---------------------------------------------------------------------------
 # Output-folder ref — provider-owned opaque handle
@@ -744,6 +744,35 @@ def _readLabelsSidecar(fileDoc):
 # token, never a URL, and the facade never touches pixels.
 # ---------------------------------------------------------------------------
 
+def _rejectReservedSubmitParams(values):
+    """Fail closed on a submission that smuggles reserved/undeclared params.
+
+    A separate submit-time defense from the spec-side drop
+    (``slicer_spec._RESERVED_INPUT_PARAMS``): the translator never *emits* these
+    to the client form, and this rejects a hand-crafted submit that tries to feed
+    them back in (Chunk 21, D9 addendum). Screens the RAW client-submitted keys —
+    before the facade derives any ``{param}_folder`` output-destination param — so
+    it never trips over the facade's own output plumbing. Rejects, never strips.
+
+    - ``girderApiUrl`` / ``girderToken``: ``slicer_cli_web``'s injected b3
+      credentials; a client value would try to redirect the CLI's girder client
+      or swap out its token.
+    - ``*_folder``: the facade synthesizes ``{param}_folder`` server-side
+      (``_translateValuesToSlicerParams``); the client never declares one, so any
+      ``*_folder`` in the raw submission is undeclared and rejected.
+    """
+    offending = sorted(
+        key
+        for key in (values or {})
+        if key in _RESERVED_INPUT_PARAMS or key.endswith("_folder")
+    )
+    if offending:
+        raise RestException(
+            "Reserved parameter(s) may not be submitted: %s" % ", ".join(offending),
+            code=400,
+        )
+
+
 def _translateValuesToSlicerParams(values, user, folder):
     """Translate a VolView values payload to slicer_cli_web's form-encoded params.
 
@@ -1270,7 +1299,13 @@ def _genDockerJob(cliItem, params, user):
     from girder.models.token import Token
     from slicer_cli_web.rest_slicer_cli import genHandlerToRunDockerCLI
     handler = genHandlerToRunDockerCLI(cliItem)
-    token = Token().createToken(user=user)
+    # Scope-limit the container token to the data plane the CLI actually needs:
+    # read its inputs, write its outputs (Chunk 21, D9 addendum). Narrower than
+    # the ecosystem norm (slicer_cli_web mints full-auth tokens) without weakening
+    # Girder ACLs — the submitter's own read/write reach still bounds it.
+    token = Token().createToken(
+        user=user, scope=[TokenScope.DATA_READ, TokenScope.DATA_WRITE]
+    )
     # Take a copy so the handler can mutate freely.
     job_obj = handler.subHandler(cliItem, copy.deepcopy(params), user, token)
     job = job_obj.job if hasattr(job_obj, "job") else job_obj
@@ -1298,6 +1333,11 @@ def _genDockerJob(cliItem, params, user):
 def runTask(self, folder, taskId, body):
     user = self.getCurrentUser()
     values = (body or {}).get("values", {}) if isinstance(body, dict) else {}
+
+    # Submit-boundary input validation: reject a crafted payload that carries
+    # reserved credentials or an undeclared output-folder param (Chunk 21). Runs
+    # before any task lookup or work, and composes with the @csrfProtect guard.
+    _rejectReservedSubmitParams(values)
 
     if not _slicerCliAvailable():
         raise RestException("slicer_cli_web is not installed", code=500)
