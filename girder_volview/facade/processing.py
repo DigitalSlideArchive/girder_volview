@@ -533,19 +533,6 @@ def _candidateOutputName(inputBase, cliName, paramName, ext):
     return f"{base}.{cli}.{paramName}{ext}"
 
 
-def _uniquifyItemName(folder, candidate):
-    """Append ` (N)` to the base until the name doesn't collide in the folder."""
-    base, ext = _splitExt(candidate)
-    name = candidate
-    suffix = 2
-    while Item().findOne({"folderId": folder["_id"], "name": name}) is not None:
-        name = f"{base} ({suffix}){ext}"
-        suffix += 1
-        if suffix > 999:  # safety
-            break
-    return name
-
-
 def _firstInputBaseName(values):
     """Base name (no extension) of the first client-minted input, for naming.
 
@@ -572,11 +559,17 @@ def _firstInputBaseName(values):
     return "output"
 
 
-def _autofillOutputs(values, cli_xml, cli_name, folder):
-    """Auto-generate unique names for any output params the client didn't fill in.
+def _autofillOutputs(values, cli_xml, cli_name):
+    """Auto-generate a deterministic name for output params the client didn't fill.
 
     Mutates and returns `values`. Output param values become
-    `ProcessingOutputRequest`-style dicts: `{"name": "<unique>", ...}`.
+    `ProcessingOutputRequest`-style dicts: `{"name": "<candidate>", ...}`.
+
+    The name is deterministic (`<input>.<cli>.<param><ext>`) and NOT uniquified:
+    the old check-then-use `while findOne(name)` folder scan was itself racy (two
+    concurrent submits both saw a name free and both took it) and is now needless —
+    outputs bind to the job by reference (`_recordJobOutput`), never by filename, so
+    two jobs writing the same name into one folder no longer cross results (D5).
     """
     outputs = _parseCliOutputs(cli_xml or "")
     if not outputs:
@@ -590,8 +583,7 @@ def _autofillOutputs(values, cli_xml, cli_name, folder):
             continue
         ext = _outputExtension(out)
         candidate = _candidateOutputName(inputBase, cli_name, out["name"], ext)
-        unique = _uniquifyItemName(folder, candidate)
-        new_value = {"name": unique}
+        new_value = {"name": candidate}
         if isinstance(existing, dict):
             new_value.update({k: v for k, v in existing.items() if k != "name"})
         values[out["name"]] = new_value
@@ -603,7 +595,8 @@ def _parseCliOutputs(xmlText):
 
     Returns a list of dicts:
         [{name, tag, isLabel, fileExtensions}]
-    Used to pick result files out of Job._original_params after success.
+    Recorded on the job at submit (`_bindJobOutputs`) as the declared output
+    descriptors result collection projects each reference-bound file through.
     """
     import xml.etree.ElementTree as ET
     try:
@@ -778,61 +771,211 @@ def _projectJobStatus(job):
     return out
 
 
+# ---------------------------------------------------------------------------
+# Reference-bound job outputs (D5) — outputs bind to the job by reference, never
+# by filename
+#
+# The old collector name-scanned the launch folder for an item matching the
+# output filename recorded in ``Job._original_params`` — so two concurrent jobs
+# writing the same output name into the same folder could cross results, and two
+# simultaneous "unique name" picks could collide. This replaces name-matching
+# with the ecosystem's reference→job binding (slicer_cli_web ``girder_plugin.py``
+# ``_onUpload`` prior art, generalized to N outputs):
+#
+#   * At submit, ``_bindJobOutputs`` records on the job (plain ``otherFields`` — no
+#     schema change) the declared output specs and the job's own token.
+#   * Each output file ``girder_worker`` uploads carries slicer_cli_web's per-run
+#     reference (``prepare_task.py`` stamps the output ``identifier`` + a per-run
+#     ``uuid`` on every ``GirderUploadVolumePathToFolder`` hook). The ``data.process``
+#     handler ``_recordJobOutput`` correlates that upload back to THIS job — by the
+#     job's token, which ``girder_worker`` uploads under — and records the file id
+#     keyed by ``identifier`` (dotted ``$set`` key → each output binds under its own
+#     key, so N outputs never overwrite, unlike slicer_cli_web's single
+#     ``slicerCLIBindings.outputs.parameters``).
+#   * ``_collectJobResults`` reads those ids OFF the job. No name is ever matched,
+#     so the race is gone.
+# ---------------------------------------------------------------------------
+
+# Facade-owned job fields (otherFields, not a schema change — D5). The id map is
+# READ-exposed (``addProcessingRoutes``); the job's own ACL is the gate.
+_OUTPUTS_FIELD = "volviewOutputs"          # {identifier: str(fileId)}
+_OUTPUT_SPECS_FIELD = "volviewOutputSpecs"  # [{name, tag, isLabel, fileExtensions}]
+_JOB_TOKEN_FIELD = "volviewJobToken"       # str(token _id) — data.process key
+
+
+def _parseOutputReference(raw):
+    """Decode a ``data.process`` upload reference to a dict, or ``None``.
+
+    ``girder_worker`` stamps each output upload with slicer_cli_web's JSON
+    reference (``prepare_task.py`` — carries the output ``identifier``). A
+    non-JSON / non-dict / identifier-less reference (a foreign upload, or the
+    facade's own reference-less staging upload) yields ``None`` so the handler
+    skips it (fail closed). An identifier carrying ``.`` or ``$`` is rejected too,
+    so it can never be used to build an unintended nested / operator ``$set`` key.
+    """
+    if raw is None:
+        return None
+    try:
+        ref = raw if isinstance(raw, dict) else json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(ref, dict):
+        return None
+    identifier = ref.get("identifier")
+    if not isinstance(identifier, str) or not identifier:
+        return None
+    if "." in identifier or "$" in identifier:
+        return None
+    return ref
+
+
+def _jobForOutputUpload(ref, info):
+    """Find the job an output upload belongs to — reference-bound, never by name.
+
+    Primary correlation is the job's own token: ``_bindJobOutputs`` records
+    ``token._id`` on the job at submit, and ``girder_worker`` uploads each output
+    under that same job token, so the ``data.process`` event's ``currentToken``
+    identifies exactly one job (per-job token → no cross-job collision). A
+    facade-minted reference may also carry the job id directly; it is honored when
+    present. Returns the job doc, or ``None`` (fail closed — an uncorrelated upload
+    is never recorded onto some other job).
+    """
+    from girder_jobs.models.job import Job as JobModel
+    jobId = ref.get("jobId")
+    if jobId:
+        # A malformed id must never escape and disrupt the data.process daemon.
+        try:
+            job = JobModel().load(jobId, force=True, exc=False)
+        except Exception:
+            job = None
+        if isinstance(job, dict):
+            return job
+    token = info.get("currentToken")
+    tokenId = token.get("_id") if isinstance(token, dict) else None
+    if tokenId:
+        return JobModel().findOne({_JOB_TOKEN_FIELD: str(tokenId)})
+    return None
+
+
+def _recordJobOutput(event):
+    """``data.process`` handler: record an uploaded output file id onto its job (D5).
+
+    Each output file ``girder_worker`` uploads for a facade job carries
+    slicer_cli_web's reference (the output ``identifier``); this handler correlates
+    the upload back to the originating job (``_jobForOutputUpload``) and records the
+    file id under that identifier (``otherFields`` dotted key → Mongo ``$set`` nests
+    per identifier, so N outputs each bind without overwriting). Fail closed: a
+    foreign or uncorrelated upload is ignored. ``_collectJobResults`` later reads
+    these ids OFF the job, so no output is ever resolved by folder-name match.
+    """
+    info = getattr(event, "info", None)
+    if not isinstance(info, dict):
+        return
+    ref = _parseOutputReference(info.get("reference"))
+    if ref is None:
+        return
+    fileDoc = info.get("file")
+    fileId = fileDoc.get("_id") if isinstance(fileDoc, dict) else None
+    if not fileId:
+        return
+    job = _jobForOutputUpload(ref, info)
+    if not isinstance(job, dict):
+        return
+    from girder_jobs.models.job import Job as JobModel
+    try:
+        JobModel().updateJob(
+            job,
+            otherFields={"%s.%s" % (_OUTPUTS_FIELD, ref["identifier"]): str(fileId)},
+        )
+    except Exception:
+        logger.exception(
+            "Failed to record output %s on job %s",
+            ref.get("identifier"), job.get("_id"),
+        )
+
+
+def _bindJobOutputs(job, token, cli_xml):
+    """Record on the job everything reference-bound collection needs (D5).
+
+    The declared output specs (so collection needs no CLIItem lookup and no
+    ``_original_params``), the job's own token (the ``data.process`` correlation
+    key), and an empty id map the handler fills in. Split out from ``_genDockerJob``
+    so it is unit-testable without slicer_cli_web: a pure ``updateJob`` write, the
+    same otherFields-on-job pattern ``_markJobTransients`` uses. Not a schema change.
+    """
+    from girder_jobs.models.job import Job as JobModel
+    specs = _parseCliOutputs(cli_xml or "")
+    try:
+        JobModel().updateJob(job, otherFields={
+            _OUTPUT_SPECS_FIELD: specs,
+            _JOB_TOKEN_FIELD: str(token["_id"]),
+            _OUTPUTS_FIELD: {},
+        })
+    except Exception:
+        logger.exception("Failed to bind outputs on job %s", job.get("_id"))
+
+
+def _recordedJobOutputs(job):
+    """The ``{identifier: fileId}`` map the ``data.process`` handler recorded (or {})."""
+    outputs = (job or {}).get(_OUTPUTS_FIELD)
+    return dict(outputs) if isinstance(outputs, dict) else {}
+
+
+def _recordedOutputSpecs(job):
+    """The declared output specs recorded at submit (or [])."""
+    specs = (job or {}).get(_OUTPUT_SPECS_FIELD)
+    return list(specs) if isinstance(specs, list) else []
+
+
+def _loadOutputFile(fileId, user):
+    """Load a recorded output file under the user's READ permission, or ``None``.
+
+    Fail closed: a deleted file (gone) or one the user cannot read both yield
+    ``None`` so collection counts them as ``missing`` rather than crashing or
+    leaking. The submitting user owns the launch folder outputs land in, so a
+    genuine READ denial is not expected; it is handled defensively.
+    """
+    from girder.exceptions import AccessException
+    try:
+        return File().load(fileId, user=user, level=AccessType.READ, exc=False)
+    except AccessException:
+        return None
+
+
 def _collectJobResults(job, user):
-    """Find result files based on Job._original_params + CLI XML."""
-    from slicer_cli_web.models import CLIItem
-    results = []
-    original_params = job.get("_original_params") or {}
-    if not original_params:
-        return results
+    """Resolve a job's outputs to declarative result intents — reference-bound (D5).
 
-    # Look up the CLI XML from job metadata if possible.
-    cli_xml = None
-    cli_id = job.get("_original_path")
-    # _original_path is a folder restBasePath (e.g. ".../<image>"). Easier:
-    # look up CLIItem by name + path.
-    name = job.get("_original_name")
-    if name:
-        from girder_jobs.models.job import Job as JobModel  # noqa: F401
-        # Try to find the matching CLIItem by name.
-        try:
-            for c in CLIItem.findAllItems(user):
-                if c.name == name:
-                    cli_xml = c.xml
-                    break
-        except Exception:
-            logger.exception("Failed to look up CLIItem for job results")
+    Reads the ``{identifier: fileId}`` map ``_recordJobOutput`` recorded ON the job
+    (never a folder-name scan, never ``_original_params``), loads each file under
+    the submitting user's READ permission, and projects it into its result intent
+    (contract Seam 2) with a ``makeFileDownloadUrl`` download url (origin-relative
+    and filename-encoded — retiring the hand-built ``/api/v1/file/…`` f-string that
+    broke non-default API mounts). Returns ``(results, missing)`` where ``missing``
+    counts recorded outputs whose file is gone/unreadable — a deleted output is a
+    countable loss, never a silently shorter list. Two concurrent same-name jobs
+    can never cross results: each reads only the ids bound to itself.
+    """
+    recorded = _recordedJobOutputs(job)
+    if not recorded:
+        return [], 0
+    specByName = {
+        s["name"]: s
+        for s in _recordedOutputSpecs(job)
+        if isinstance(s, dict) and s.get("name")
+    }
 
-    outputs = _parseCliOutputs(cli_xml) if cli_xml else []
-    if not outputs:
-        return results
-
-    # Pass 1: resolve each declared output to its uploaded file document.
+    # Pass 1: resolve each recorded output id to its file document (ACL re-check).
     resolved = []
-    for out in outputs:
-        outName = out["name"]
-        if outName not in original_params:
+    missing = 0
+    for identifier, fileId in recorded.items():
+        out = specByName.get(identifier)
+        if out is None:
+            # An identifier with no declared image/file spec (e.g. slicer's
+            # returnparameterfile) is not a projectable output; skip, not missing.
             continue
-        fileName = original_params[outName]
-        folderId = original_params.get(f"{outName}_folder")
-        if not fileName or not folderId:
-            continue
-        try:
-            folder = Folder().load(
-                folderId, user=user, level=AccessType.READ, exc=False
-            )
-            if not folder:
-                continue
-            item = Item().findOne({
-                "folderId": folder["_id"], "name": fileName,
-            })
-            if not item:
-                continue
-            fileDoc = next(iter(Item().childFiles(item, limit=1)), None)
-            if not fileDoc:
-                continue
-        except Exception:
-            logger.exception("Failed to resolve job output file")
+        fileDoc = _loadOutputFile(fileId, user)
+        if fileDoc is None:
+            missing += 1
             continue
         resolved.append({"out": out, "fileDoc": fileDoc})
 
@@ -860,13 +1003,11 @@ def _collectJobResults(job, user):
     # url, name, segments?, source?}` — plus the `id`/`mimeType`/`size` file
     # metadata the client's JobList reads. No `role`: the client applies the
     # intent directly and never switches on a role (D3/D4).
+    results = []
     for entry in resolved:
         out = entry["out"]
         fileDoc = entry["fileDoc"]
-        url = (
-            f"/api/v1/file/{fileDoc['_id']}/proxiable/"
-            f"{fileDoc['name']}"
-        )
+        url = makeFileDownloadUrl(fileDoc)
         # Fold the labels sidecar into the labelmap intent's `segments` payload
         # so the client never learns the sidecar convention.
         segments = None
@@ -884,6 +1025,43 @@ def _collectJobResults(job, user):
             "size": fileDoc.get("size"),
         }
         results.append(result)
+    return results, missing
+
+
+def _jobResultsPayload(job, user):
+    """Apply honest result-read semantics (D5) and return the wire result list.
+
+    - A non-succeeded job (failed / running / pending / cancelled) is an EXPLICIT
+      error, never an empty list — the client (Chunk 12) gates reads on terminal
+      success and treats this error as an error, not empty results.
+    - A succeeded job whose recorded outputs ALL fail to resolve (every output file
+      deleted) is likewise an error carrying the ``missing`` count, so "succeeded,
+      outputs deleted" is distinguishable from "succeeded, no outputs".
+    - Otherwise the resolved intents are returned as a bare list (wire-unchanged,
+      client-transparent); a partial loss returns what resolved and logs the rest.
+
+    ``400`` (not ``404``/``401``) so the client classifies it as a permanent error
+    that surfaces loudly without dropping the job or expiring the session.
+    """
+    state = _projectJobStatus(job).get("state")
+    if state != "success":
+        raise RestException(
+            "Job %s has not succeeded (state=%s); results are unavailable"
+            % (job.get("_id"), state),
+            code=400,
+        )
+    results, missing = _collectJobResults(job, user)
+    if missing:
+        logger.info(
+            "[volview_processing] job %s: %d recorded output(s) unresolved",
+            job.get("_id"), missing,
+        )
+    if missing and not results:
+        raise RestException(
+            "Job %s succeeded but none of its %d recorded output(s) could be "
+            "resolved (deleted?)" % (job.get("_id"), missing),
+            code=400,
+        )
     return results
 
 
@@ -941,7 +1119,12 @@ def _genDockerJob(cliItem, params, user):
     token = Token().createToken(user=user)
     # Take a copy so the handler can mutate freely.
     job_obj = handler.subHandler(cliItem, copy.deepcopy(params), user, token)
-    return job_obj.job if hasattr(job_obj, "job") else job_obj
+    job = job_obj.job if hasattr(job_obj, "job") else job_obj
+    # Reference-bound outputs (D5): record the declared output specs + this job's
+    # token so the data.process handler can correlate each uploaded output back to
+    # THIS job (by token) and record its file id keyed by output identifier.
+    _bindJobOutputs(job, token, cliItem.xml)
+    return job
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_WRITE)
@@ -969,10 +1152,11 @@ def runTask(self, folder, taskId, body):
     if not cliItem:
         raise RestException("Unknown taskId", code=404)
 
-    # Auto-generate (unique) output filenames so the user never has to. Any
-    # output param missing from `values` gets a fresh name keyed off the input
-    # file + CLI name + parameter name + extension.
-    values = _autofillOutputs(dict(values), cliItem.xml, cliItem.name, folder)
+    # Auto-generate a deterministic output filename for any output param the user
+    # didn't fill (input file + CLI name + parameter name + extension). No longer
+    # uniquified via a folder scan: outputs bind to the job by reference, not name
+    # (D5), so a duplicate filename in the folder can no longer cross results.
+    values = _autofillOutputs(dict(values), cliItem.xml, cliItem.name)
 
     # Resolve each bound input's client-minted URIs back to file ids (own-scheme
     # validation + per-user ACL re-check) and forward the ids to the CLI (b3).
@@ -1018,7 +1202,7 @@ def getJobResults(self, folder, jobId):
     user = self.getCurrentUser()
     from girder_jobs.models.job import Job as JobModel
     job = JobModel().load(jobId, user=user, level=AccessType.READ, exc=True)
-    return _collectJobResults(job, user)
+    return _jobResultsPayload(job, user)
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_WRITE)
@@ -1069,6 +1253,20 @@ def addProcessingRoutes(info):
         "girder_volview.processing",
         _cleanupTransientOnJobDone,
     )
+    # Reference-bound job outputs (D5): record each uploaded output file's id onto
+    # its originating job, keyed by output identifier, so result collection reads
+    # ids OFF the job instead of scanning the launch folder by name. Fires for
+    # every upload but returns early unless the upload carries an output reference
+    # correlated to a facade job (fail closed).
+    events.bind(
+        "data.process",
+        "girder_volview.processing.outputs",
+        _recordJobOutput,
+    )
+    # The recorded id map is READ-exposed; the job's own ACL is the gate (D5 —
+    # otherFields + exposeFields, mirroring slicer_cli_web's slicerCLIBindings).
+    from girder_jobs.models.job import Job as JobModel
+    JobModel().exposeFields(level=AccessType.READ, fields={_OUTPUTS_FIELD})
     info["apiRoot"].folder.route(
         "GET", (":folderId", "volview_processing", "tasks"), listTasks
     )
