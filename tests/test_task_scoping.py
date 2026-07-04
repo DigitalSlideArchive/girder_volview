@@ -7,11 +7,11 @@ facade keeps only CLIs whose Slicer XML ``<category>`` is in an allowed set
 can't be bypassed by guessing an id. Fail-closed: an unknown/absent category is
 excluded.
 
-The decorated REST handlers (``listTasks``/``getTaskXml``/``runTask``) need a
+The decorated REST handlers (``listTasks``/``getTaskSpec``/``runTask``) need a
 live request context, so — like ``test_volume_staging`` — these drive the
 underlying helpers the handlers call (``_scopedCliItems`` is the exact set
 ``listTasks`` advertises; ``_findScopedCliItem`` returning ``None`` is what makes
-``getTaskXml``/``runTask`` raise 404). No live Girder.
+``getTaskSpec``/``runTask`` raise 404). No live Girder.
 """
 
 import types
@@ -67,7 +67,7 @@ def test_scoped_cli_items_keeps_only_radiology(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# getTaskXml / runTask resolution — filtered-out taskId resolves to None (404)
+# getTaskSpec / runTask resolution — filtered-out taskId resolves to None (404)
 # ---------------------------------------------------------------------------
 
 def test_find_scoped_cli_item_resolves_only_in_scope(monkeypatch):
@@ -79,7 +79,7 @@ def test_find_scoped_cli_item_resolves_only_in_scope(monkeypatch):
     monkeypatch.setattr(
         processing, "_findCliItem", lambda taskId, user: catalog.get(taskId)
     )
-    # In-scope id resolves; getTaskXml/runTask proceed.
+    # In-scope id resolves; getTaskSpec/runTask proceed.
     assert processing._findScopedCliItem("rad", "u").name == "MedianFilter"
     # Out-of-scope (pathology) and fail-closed (no category) ids resolve to None,
     # so the handlers raise the same 404 as a genuinely unknown id — no leak.

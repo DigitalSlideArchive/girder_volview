@@ -18,9 +18,9 @@ through the real cherrypy pipeline:
    guard, enumerated from the live routing table so a new write route added
    without ``@csrfProtect`` fails this test.
 
-Like ``test_task_xml_route`` / ``test_load`` this needs a live pytest-girder
-server + Mongo; the module self-skips when the test Mongo is unreachable so the
-offline gate stays green, and runs (and must pass) wherever Mongo is present.
+Like ``test_load`` this needs a live pytest-girder server + Mongo; the module
+self-skips when the test Mongo is unreachable so the offline gate stays green,
+and runs (and must pass) wherever Mongo is present.
 """
 
 import os
@@ -42,7 +42,7 @@ RUN_PATH = "/folder/notanid/volview_processing/tasks/sometask/run"
 
 
 # ---------------------------------------------------------------------------
-# Self-skip when no live test Mongo is reachable (mirrors test_task_xml_route)
+# Self-skip when no live test Mongo is reachable (mirrors test_load)
 # ---------------------------------------------------------------------------
 
 def _mongo_reachable(timeout=0.5):
@@ -64,7 +64,7 @@ def _mongo_reachable(timeout=0.5):
 
 pytestmark = pytest.mark.skipif(
     not _mongo_reachable(),
-    reason="needs a live pytest-girder Mongo (like test_task_xml_route); unavailable offline",
+    reason="needs a live pytest-girder Mongo (like test_load); unavailable offline",
 )
 
 

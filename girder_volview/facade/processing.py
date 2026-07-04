@@ -26,7 +26,7 @@ from bson.objectid import ObjectId
 from girder import logger
 from girder.api import access
 from girder.api.describe import Description, autoDescribeRoute
-from girder.api.rest import boundHandler, setRawResponse, setResponseHeader
+from girder.api.rest import boundHandler
 from girder.constants import AccessType, TokenScope
 from girder.exceptions import RestException
 from girder.models.file import File
@@ -204,7 +204,7 @@ def _cliItemToSummary(cliItem):
 # self-describing and needs no per-image allow-list — new radiology CLIs are
 # included automatically (decisions.md D11).
 #
-# The *server* is the boundary: ``getTaskXml``/``runTask`` 404 a filtered-out
+# The *server* is the boundary: ``getTaskSpec``/``runTask`` 404 a filtered-out
 # taskId exactly like an unknown id, so scoping can't be bypassed by guessing
 # an id. Fail-closed: a CLI with no/unknown ``<category>`` is excluded.
 # ---------------------------------------------------------------------------
@@ -702,39 +702,14 @@ def listTasks(self, folder):
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
 @boundHandler
 @autoDescribeRoute(
-    Description("Get the Slicer CLI XML for a task.")
-    .modelParam("folderId", model=Folder, level=AccessType.READ)
-    .param("taskId", "The task identifier.", paramType="path")
-)
-def getTaskXml(self, folder, taskId):
-    user = self.getCurrentUser()
-    if not _slicerCliAvailable():
-        raise RestException("slicer_cli_web is not installed", code=404)
-    cliItem = _findScopedCliItem(taskId, user)
-    if not cliItem:
-        raise RestException("Unknown taskId", code=404)
-    # Arm the raw XML response only AFTER the guards. setRawResponse() before a
-    # raised RestException makes cherrypy try to encode the error's str body as
-    # raw bytes (collapse_body: "expected a bytes-like object, str found"),
-    # turning an intended 404 (filtered-out / unknown task) into a 500.
-    setResponseHeader("Content-Type", "application/xml")
-    setRawResponse()
-    return cliItem.xml
-
-
-@access.public(cookie=True, scope=TokenScope.DATA_READ)
-@boundHandler
-@autoDescribeRoute(
     Description("Get the VolView task spec for a task.")
     .modelParam("folderId", model=Folder, level=AccessType.READ)
     .param("taskId", "The task identifier.", paramType="path")
 )
 def getTaskSpec(self, folder, taskId):
     # Seam 2 (Chunk 6): the facade translates the Slicer XML into VolView's own
-    # task spec server-side (D2), so the client never parses backend XML. Runs
-    # alongside getTaskXml until the client switches (getTaskXml is removed in
-    # Chunk 13). Same scope guards as getTaskXml: an out-of-scope / unknown /
-    # slicer_cli_web-missing taskId 404s identically.
+    # task spec server-side (D2), so the client never parses backend XML. Scope
+    # guards: an out-of-scope / unknown / slicer_cli_web-missing taskId 404s.
     user = self.getCurrentUser()
     if not _slicerCliAvailable():
         raise RestException("slicer_cli_web is not installed", code=404)
@@ -838,11 +813,6 @@ def getJobResults(self, folder, jobId):
 def addProcessingRoutes(info):
     info["apiRoot"].folder.route(
         "GET", (":folderId", "volview_processing", "tasks"), listTasks
-    )
-    info["apiRoot"].folder.route(
-        "GET",
-        (":folderId", "volview_processing", "tasks", ":taskId", "xml"),
-        getTaskXml,
     )
     info["apiRoot"].folder.route(
         "GET",

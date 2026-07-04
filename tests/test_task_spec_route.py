@@ -1,16 +1,13 @@
 """Server-fixture coverage for the ``tasks/{id}/spec`` route (Chunk 6, WI4).
 
 The route translates a task's Slicer XML into VolView's own task spec
-server-side (Seam 2 / D2) and returns it as JSON. It runs alongside the
-surviving ``tasks/{id}/xml`` route (removed only in Chunk 13). It reuses
-``getTaskXml``'s scope guards, so an out-of-scope (pathology) / unknown /
-slicer_cli_web-missing taskId must 404 identically -- the server is the
-boundary.
+server-side (Seam 2 / D2) and returns it as JSON. Its scope guards make an
+out-of-scope (pathology) / unknown / slicer_cli_web-missing taskId 404
+identically -- the server is the boundary.
 
-Like ``test_task_xml_route`` / ``test_load`` this needs a live pytest-girder
-server + Mongo; the module self-skips when the test Mongo is unreachable so the
-offline gate stays green while the wire contract still runs where a Mongo is
-present.
+Like ``test_load`` this needs a live pytest-girder server + Mongo; the module
+self-skips when the test Mongo is unreachable so the offline gate stays green
+while the wire contract still runs where a Mongo is present.
 """
 
 import os
@@ -23,7 +20,7 @@ import pytest
 from girder_volview.facade import processing
 
 # ---------------------------------------------------------------------------
-# Self-skip when no live test Mongo is reachable (mirrors test_task_xml_route).
+# Self-skip when no live test Mongo is reachable (mirrors test_load).
 # ---------------------------------------------------------------------------
 
 
@@ -133,7 +130,7 @@ def test_radiology_task_spec_returns_200_translated_spec(
 
 
 # ---------------------------------------------------------------------------
-# Scope guard: a pathology / unknown id must 404 (same boundary as getTaskXml).
+# Scope guard: a pathology / unknown id must 404 (the server is the boundary).
 # ---------------------------------------------------------------------------
 
 
