@@ -3,19 +3,27 @@
 Translates VolView-native processing requests into `slicer_cli_web` calls and
 projects Girder jobs back into the VolView provider contract.
 
-SourceRef plumbing:
-- Refs are provider-owned opaque strings. For this Girder provider they are
-  raw Girder model ids.
-- On every resolution the facade re-loads the document with the *user's*
-  permissions (`AccessType.READ` for inputs, `AccessType.WRITE` for output
-  folders). The Girder permission check is the security boundary.
+Input resolution (Seam 1, client-processing-contract.md):
+- The client mints nothing backend-specific. Per bound input it round-trips the
+  provenance URIs the launch manifest handed it, as ``{type, format?, uris}``
+  (``type`` is an open vocabulary; the facade reads no content).
+- The facade *minted* those URIs (``utils.makeFileDownloadUrl`` — origin-relative
+  ``/<apiRoot>/file/<id>/proxiable/<name>``), so resolving them back to file ids
+  is just the facade reading **its own** URL scheme: strict own-scheme validation
+  (a URI that does not match the mint is rejected, never dereferenced) plus an
+  ACL re-check of each recovered id under the submitting user (the id is
+  recoverable from the path by design, so possession is not a capability).
+- v1 feeding = b3 (D10): the resolved file ids are forwarded to the CLI as a
+  ``<string>`` param; ``slicer_cli_web`` injects ``girderApiUrl``/``girderToken``
+  and the CLI fetches + assembles. Grouping/assembly is the client's and the
+  CLI's job — the facade stays a pure courier (no DICOM analysis, no SimpleITK).
 """
 
 import copy
 import json
 
 from bson.objectid import ObjectId
-from girder import events, logger
+from girder import logger
 from girder.api import access
 from girder.api.describe import Description, autoDescribeRoute
 from girder.api.rest import boundHandler, setRawResponse, setResponseHeader
@@ -24,55 +32,20 @@ from girder.exceptions import RestException
 from girder.models.file import File
 from girder.models.folder import Folder
 from girder.models.item import Item
+from girder.utility.server import getApiRoot
 
 from ..csrf import csrfProtect
 from .slicer_spec import translate_slicer_xml
 
 # ---------------------------------------------------------------------------
-# SourceRef — provider-owned opaque handle
+# Output-folder ref — provider-owned opaque handle
+#
+# Job *output* still names its destination folder by a provider-owned ref (a raw
+# Girder id, optionally ``girder:folder:<id>``). Every resolution re-loads the
+# document with the *user's* WRITE permission — the Girder access check is the
+# security boundary. Job *input* resolution no longer uses refs at all; the
+# client mints ``{type, uris}`` and the facade reads its own URI scheme below.
 # ---------------------------------------------------------------------------
-
-_SERIES_REF_PREFIX = "series:"
-
-
-def encodeSourceRef(fileId=None, itemId=None, folderId=None, seriesInstanceUID=None):
-    """Return the opaque sourceRef VolView should pass back.
-
-    A multi-file DICOM series encodes as ``series:<folderId>:<SeriesInstanceUID>``
-    so its whole file set can be re-resolved at submit (item 3.3 — see
-    `resolveSeriesSourceRefToFiles`). A single-file volume keeps the historical
-    raw-id form (file id, then item, then folder). The ref stays opaque to the
-    client either way: VolView core never learns it is a Girder handle.
-    """
-    if seriesInstanceUID is not None:
-        if folderId is None:
-            raise RestException(
-                "Cannot create a series sourceRef without a folder id"
-            )
-        return f"{_SERIES_REF_PREFIX}{folderId}:{seriesInstanceUID}"
-    if fileId is not None:
-        return str(fileId)
-    if itemId is not None:
-        return str(itemId)
-    if folderId is not None:
-        return str(folderId)
-    raise RestException("Cannot create sourceRef without a Girder id")
-
-
-def decodeSeriesSourceRef(ref):
-    """Parse ``series:<folderId>:<SeriesInstanceUID>`` → ``(folderId, uid)``.
-
-    Returns ``None`` for any ref that is not a series volume handle (e.g. a raw
-    file/item id), so callers can fall back to the single-file resolution path.
-    """
-    if not isinstance(ref, str) or not ref.startswith(_SERIES_REF_PREFIX):
-        return None
-    rest = ref[len(_SERIES_REF_PREFIX):]
-    folderId, sep, uid = rest.partition(":")
-    if not sep or not folderId or not uid:
-        return None
-    return folderId, uid
-
 
 def _stripTypedSourceRef(ref, expectedType):
     """Accept raw ids and optional `girder:<type>:<id>` refs."""
@@ -84,23 +57,6 @@ def _stripTypedSourceRef(ref, expectedType):
     return ref
 
 
-def _looksLikeSourceRef(value, expectedType):
-    if not isinstance(value, str):
-        return False
-    try:
-        candidate = _stripTypedSourceRef(value, expectedType)
-    except RestException:
-        return False
-    return ObjectId.is_valid(candidate)
-
-
-def resolveSourceRefToFile(ref, user):
-    """Load the referenced file with the user's READ permission."""
-    fileId = _stripTypedSourceRef(ref, "file")
-    f = File().load(fileId, user=user, level=AccessType.READ, exc=True)
-    return f
-
-
 def resolveSourceRefToFolder(ref, user, level=AccessType.WRITE):
     folderId = _stripTypedSourceRef(ref, "folder")
     folder = Folder().load(folderId, user=user, level=level, exc=True)
@@ -108,259 +64,93 @@ def resolveSourceRefToFolder(ref, user, level=AccessType.WRITE):
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# Volume grouping (D10 part 1) — one advertised source per *volume*, not per item
+# Input URIs → file ids (Seam 1 — the facade reading its own mint)
 #
-# A 3D volume reaches Girder in no fixed layout: one file = one volume (L1), one
-# item = many files = one series (L2), or one folder = many single-file items =
-# one series (L3, the usual case). Emitting one source per *item* (the old shape)
-# fed a multi-slice series to a job as a single slice. We instead group the
-# folder's files by ``SeriesInstanceUID`` so each advertised source is a real
-# volume carrying its whole file set; non-DICOM / ungroupable files stay one
-# volume per file. Staging the pixels at submit is item 3.3, not here.
+# The client submits each bound input as ``{type, format?, uris}`` where every
+# uri is a facade-minted, origin-relative ``/<apiRoot>/file/<id>/proxiable/<name>``
+# (``utils.makeFileDownloadUrl``). Resolution recovers the file id from that exact
+# shape and nothing else, then re-checks READ access under the submitting user.
+# It is type-agnostic: an image, a labelmap (Chunk 15), or any future input all
+# resolve through this one path — the facade never branches on ``type``.
 # ---------------------------------------------------------------------------
 
-def _parseFileDicomTags(fileDoc):
-    """Per-file DICOM tag dict (or ``None`` for non-DICOM / unreadable files).
+_PROXIABLE_MARKER = "proxiable/"
 
-    Used only for multi-file (L2) items, where the item's cached ``meta.dicom``
-    reflects just one representative child file and so cannot order or group the
-    rest. Thin wrapper over ``dicom._parseFile`` so tests can stub it.
+
+def _fileIdFromMintedUri(uri):
+    """Recover the Girder file id from a facade-minted proxiable uri, or ``None``.
+
+    Mirrors ``utils.makeFileDownloadUrl``: origin-relative
+    ``/<apiRoot>/file/<id>/proxiable/<name>``. Parsing keys off ``getApiRoot()``
+    (the same root the minter used) rather than a literal ``/api/v1`` prefix, so a
+    non-default API mount still resolves. Returns ``None`` for anything that is
+    not exactly that shape — a trailing ``proxiable/<non-empty-name>`` with no
+    embedded ``/``, ``?`` or ``#`` — so a foreign or malformed string is rejected
+    by the caller and never dereferenced.
     """
-    try:
-        from girder_volview.dicom import _parseFile
-        return _parseFile(fileDoc)
-    except Exception:
-        logger.exception("Failed to parse per-file DICOM tags for volume grouping")
+    if not isinstance(uri, str):
         return None
-
-
-def _seriesUid(dicom):
-    """Return a non-empty ``SeriesInstanceUID`` string, or ``None``."""
-    if not isinstance(dicom, dict):
+    prefix = "/" + getApiRoot() + "/file/"
+    if not uri.startswith(prefix):
         return None
-    uid = dicom.get("SeriesInstanceUID")
-    if uid is None:
+    fileId, sep, tail = uri[len(prefix):].partition("/")
+    if not sep or not ObjectId.is_valid(fileId):
         return None
-    uid = str(uid).strip()
-    return uid or None
-
-
-def _floatVec(values, n):
-    """First ``n`` entries of a DICOM multi-value as floats, or ``None``.
-
-    Returns ``None`` when the value is missing, too short, or non-numeric so the
-    callers can fall back without crashing on partial metadata.
-    """
-    if not isinstance(values, (list, tuple)) or len(values) < n:
+    if not tail.startswith(_PROXIABLE_MARKER):
         return None
-    try:
-        return [float(values[i]) for i in range(n)]
-    except (TypeError, ValueError):
+    name = tail[len(_PROXIABLE_MARKER):]
+    if not name or "/" in name or "?" in name or "#" in name:
         return None
+    return fileId
 
 
-def _sliceNormal(iop):
-    """Through-plane axis of a slice = row × column direction cosines, or ``None``.
+def resolveInputUrisToFileIds(uris, user):
+    """Resolve a client-minted uri list to Girder file ids (fail closed).
 
-    ``ImageOrientationPatient`` is ``[Xx,Xy,Xz, Yx,Yy,Yz]`` — the in-plane row and
-    column unit vectors; their cross product is the slice normal. Returns ``None``
-    when the tag is absent/malformed or the two vectors are degenerate (zero
-    cross product), so the caller falls back to the patient-Z component.
+    Two obligations (contract Seam 1): (1) **strict own-scheme validation** — a
+    uri that does not match the facade's mint is rejected 400 and never fetched;
+    and (2) an **ACL re-check** — every recovered id is loaded with the submitting
+    user's READ permission, so possession of a (by-design recoverable) id is not
+    itself a capability. Validation runs over every uri first, then authorization,
+    so a malformed uri fails 400 ahead of an unreadable id's 403.
     """
-    vals = _floatVec(iop, 6)
-    if vals is None:
-        return None
-    r, c = vals[0:3], vals[3:6]
-    normal = (
-        r[1] * c[2] - r[2] * c[1],
-        r[2] * c[0] - r[0] * c[2],
-        r[0] * c[1] - r[1] * c[0],
-    )
-    if normal == (0.0, 0.0, 0.0):
-        return None
-    return normal
+    if not isinstance(uris, list) or not uris:
+        raise RestException("Processing input value carries no uris", code=400)
+    fileIds = []
+    for uri in uris:
+        fileId = _fileIdFromMintedUri(uri)
+        if fileId is None:
+            raise RestException(
+                "Processing input uri does not match this server's file scheme",
+                code=400,
+            )
+        fileIds.append(fileId)
+    for fileId in fileIds:
+        # The Girder READ permission check is the security boundary; a file the
+        # submitting user cannot read raises AccessException (403).
+        File().load(fileId, user=user, level=AccessType.READ, exc=True)
+    return fileIds
 
 
-def _slicePosition(dicom):
-    """Position of a slice along its own normal — monotonic for any orientation.
-
-    For an axial series the slice normal is ``(0,0,1)``, so this is just the
-    patient-Z component (the historical key — axial ordering is unchanged). For an
-    oblique/coronal series the through-plane axis is not Z, so projecting
-    ``ImagePositionPatient`` onto the slice normal orders slices monotonically
-    where raw Z would scramble them. Falls back to the Z component when the
-    orientation tag is absent, and to ``0.0`` when there is no position at all.
-    """
-    ipp = _floatVec(dicom.get("ImagePositionPatient"), 3)
-    if ipp is None:
-        return 0.0
-    normal = _sliceNormal(dicom.get("ImageOrientationPatient"))
-    if normal is None:
-        return ipp[2]
-    return ipp[0] * normal[0] + ipp[1] * normal[1] + ipp[2] * normal[2]
-
-
-def _sliceSortKey(entry):
-    """Deterministic slice ordering key for one file entry.
-
-    ``InstanceNumber`` first (numbered slices ahead of unnumbered), then the
-    slice's position along its normal (``_slicePosition`` — oblique-aware, axial
-    unchanged), then the file id as a final tiebreaker so the order is stable even
-    when a series carries neither tag. Without that tiebreaker the sort fell back
-    to unpinned Mongo natural order, which can differ between the launch and
-    submit queries. Geometry-exact reconstruction is the assembler's job (item
-    3.3, SimpleITK); this only orders the advertised set.
-    """
-    dicom = entry.get("dicom") or {}
-    instance = dicom.get("InstanceNumber")
-    try:
-        instanceKey = (0, int(instance))
-    except (TypeError, ValueError):
-        instanceKey = (1, 0)
-    return (instanceKey, _slicePosition(dicom), str(entry.get("fileId") or ""))
-
-
-def _seriesSource(orderedEntries, uid, folderId):
-    """Build one volume source from the ordered file entries of a DICOM series."""
-    fileIds = [e["fileId"] for e in orderedEntries]
-    if len(fileIds) == 1:
-        # A single-file series (e.g. a multi-frame DICOM, L1): the one file is
-        # already the whole volume, so keep the historical raw-file-id ref.
-        sourceRef = encodeSourceRef(fileId=fileIds[0])
-    else:
-        sourceRef = encodeSourceRef(seriesInstanceUID=uid, folderId=folderId)
-    descr = orderedEntries[0]["dicom"].get("SeriesDescription")
-    descr = str(descr).strip() if descr else ""
-    matchKey = {"kind": "series", "seriesInstanceUID": uid}
-    if descr:
-        matchKey["seriesDescription"] = descr
-    return {
-        "datasetId": orderedEntries[0]["itemId"],
-        "name": descr or orderedEntries[0]["name"],
-        "sourceRef": sourceRef,
-        "fileIds": fileIds,
-        "matchKey": matchKey,
-    }
-
-
-def _singleFileSource(entry):
-    """Build one volume source from a lone (non-DICOM / ungroupable) file."""
-    return {
-        "datasetId": entry["itemId"],
-        "name": entry["name"],
-        "sourceRef": encodeSourceRef(fileId=entry["fileId"]),
-        "fileIds": [entry["fileId"]],
-        "matchKey": {"kind": "name", "name": entry["name"]},
-    }
-
-
-def _groupEntriesIntoVolumes(entries, folderId):
-    """Pure: normalized file entries → one source per volume, in discovery order.
-
-    DICOM entries sharing a ``SeriesInstanceUID`` collapse into a single
-    slice-ordered volume; everything else stays one volume per file. The
-    sourceRef remains opaque and the match key is metadata the client already
-    holds, so VolView core never learns Girder.
-    """
-    groups = {}  # key -> {"uid": uid|None, "entries": [...]} (insertion-ordered)
-    for entry in entries:
-        uid = _seriesUid(entry["dicom"])
-        key = ("series", uid) if uid else ("file", entry["fileId"])
-        groups.setdefault(key, {"uid": uid, "entries": []})["entries"].append(entry)
-
-    sources = []
-    for group in groups.values():
-        if group["uid"]:
-            ordered = sorted(group["entries"], key=_sliceSortKey)
-            sources.append(_seriesSource(ordered, group["uid"], folderId))
-        else:
-            sources.append(_singleFileSource(group["entries"][0]))
-    return sources
-
-
-def _folderFileEntries(folder, user):
-    """Flatten a folder's items into per-file entries with DICOM tags.
-
-    Single-file items reuse the item's cached ``meta.dicom`` (the usual L3
-    one-slice-per-item layout, already computed by ``dicom.py``). Multi-file
-    items (L2: one item, many DICOM files) parse each child file because item
-    metadata reflects only one representative file.
-    """
-    entries = []
-    for item in Folder().childItems(folder, user=user, limit=0):
-        if (item.get("meta") or {}).get("volviewTransient"):
-            # An assembled volume staged for a job (item 3.3) is internal
-            # plumbing, deleted when its job finishes — never a user source.
-            continue
-        files = list(Item().childFiles(item, limit=0))
-        if not files:
-            continue
-        itemDicom = (item.get("meta") or {}).get("dicom")
-        multi = len(files) > 1
-        for f in files:
-            tags = _parseFileDicomTags(f) if multi else itemDicom
-            entries.append({
-                "fileId": str(f["_id"]),
-                "itemId": str(item["_id"]),
-                "name": (f.get("name") or item["name"]) if multi else item["name"],
-                "dicom": tags,
-            })
-    return entries
-
-
-def _loadedSourcesForFolder(folder, user):
-    return _groupEntriesIntoVolumes(
-        _folderFileEntries(folder, user), str(folder["_id"])
-    )
-
-
-def resolveSeriesSourceRefToFiles(ref, user):
-    """Resolve a ``series:<folderId>:<UID>`` ref to its ordered file documents.
-
-    Re-runs folder grouping under the user's READ permission so submit (item
-    3.3) reproduces the exact slice order the provider advertised. Each file is
-    loaded with ``AccessType.READ`` — the Girder permission check is the
-    security boundary. Raises if the ref is not a series ref or resolves to no
-    files (e.g. the series was deleted between launch and submit).
-    """
-    decoded = decodeSeriesSourceRef(ref)
-    if not decoded:
-        raise RestException("Not a series sourceRef")
-    folderId, uid = decoded
-    folder = Folder().load(folderId, user=user, level=AccessType.READ, exc=True)
-    matching = [
-        e for e in _folderFileEntries(folder, user) if _seriesUid(e["dicom"]) == uid
-    ]
-    if not matching:
-        raise RestException("Series sourceRef no longer resolves to any files")
-    ordered = sorted(matching, key=_sliceSortKey)
-    return [
-        File().load(e["fileId"], user=user, level=AccessType.READ, exc=True)
-        for e in ordered
-    ]
-
+# ---------------------------------------------------------------------------
+# Provider config (per-launch payload)
+# ---------------------------------------------------------------------------
 
 def _providerBaseUrl(folder):
     return f"/api/v1/folder/{folder['_id']}/volview_processing"
 
 
 def _providerConfigForFolder(folder, user):
-    loadedSources = _loadedSourcesForFolder(folder, user)
-    activeSourceRef = loadedSources[0]["sourceRef"] if loadedSources else None
+    # No advertised sources: the client mints its own input refs from the
+    # on-screen volume's provenance (D10 — grouping moved to the client), so the
+    # facade advertises only where to reach the provider, not what is loaded.
     return {
         "id": "girder-slicer-cli",
         "label": "Analysis",
         "protocol": "slicer-cli",
         "baseUrl": _providerBaseUrl(folder),
         "auth": "same-origin",
-        "context": {
-            "activeSourceRef": activeSourceRef,
-            "loadedSources": loadedSources,
-        },
+        "context": {},
     }
 
 
@@ -546,19 +336,33 @@ def _uniquifyItemName(folder, candidate):
     return name
 
 
-def _firstSourceRefFile(values, user):
-    """Resolve the first SourceRef-looking value to a file doc, if any."""
-    for v in (values or {}).values():
-        if _looksLikeSourceRef(v, "file"):
-            try:
-                return resolveSourceRefToFile(v, user)
-            except Exception as exc:
-                logger.debug("Skipping unresolved sourceRef candidate: %s", exc)
-                continue
-    return None
+def _firstInputBaseName(values):
+    """Base name (no extension) of the first client-minted input, for naming.
+
+    Pure string parse of the input value's first uri (the minted
+    ``…/proxiable/<name>`` — its last path segment is the original filename), so
+    an auto-generated output reads ``<inputname>.<cli>.<param><ext>``. No file
+    load, no ACL — this only seeds a name; the real resolution/validation happens
+    in ``_translateValuesToSlicerParams``. Falls back to ``"output"`` when there
+    is no usable input uri.
+    """
+    for value in (values or {}).values():
+        if not isinstance(value, dict):
+            continue
+        uris = value.get("uris")
+        if not isinstance(uris, list) or not uris:
+            continue
+        first = uris[0]
+        if not isinstance(first, str) or not first:
+            continue
+        base, _ = _splitExt(first.rsplit("/", 1)[-1])
+        base = base.strip(". ")
+        if base:
+            return base
+    return "output"
 
 
-def _autofillOutputs(values, cli_xml, cli_name, user, folder):
+def _autofillOutputs(values, cli_xml, cli_name, folder):
     """Auto-generate unique names for any output params the client didn't fill in.
 
     Mutates and returns `values`. Output param values become
@@ -568,10 +372,7 @@ def _autofillOutputs(values, cli_xml, cli_name, user, folder):
     if not outputs:
         return values
 
-    inputFile = _firstSourceRefFile(values, user)
-    inputBase, _ = _splitExt((inputFile or {}).get("name") or "")
-    if not inputBase:
-        inputBase = "output"
+    inputBase = _firstInputBaseName(values)
 
     for out in outputs:
         existing = values.get(out["name"])
@@ -670,278 +471,27 @@ def _readLabelsSidecar(fileDoc):
 
 
 # ---------------------------------------------------------------------------
-# Volume staging at submit (D10 part 2, item 3.3) — b1: assemble to one file
+# Values → slicer_cli_web params (D10 v1 = b3)
 #
-# A multi-file DICOM series sourceRef (``series:<folderId>:<UID>``, item 3.2)
-# names a whole volume, but every CLI today declares an ``<image>``/``<file>``
-# input that wants ONE file. So at submit we resolve the series to its ordered
-# slice files, assemble them into a single geometry-correct NRRD with SimpleITK
-# (``ImageSeriesReader``, which reconstructs spacing/origin/direction from the
-# slices and so fixes the ``[1,1,1]`` regression — DICOM_SPACING_FIX_PLAN.md),
-# upload that as a transient file in the launch folder, and bind its file id.
-# Assembly runs synchronously in the Girder web process inside ``runTask``;
-# SimpleITK lives in the facade environment. The transient file is deleted when
-# its job reaches a terminal state (``_cleanupTransientOnJobDone``).
-#
-# Dispatch is on the CLI's *declared input type* (decisions.md D10): only the
-# ``<image>``/``<file>`` branch (b1) is live — every CLI declares one. The
-# ``<directory>`` branch (b2) is a deferred seam that raises until a CLI needs
-# it. A task may opt out of assembly via a per-CLI 2D/per-slice declaration
-# (escape hatch), binding a single slice instead of the whole volume.
+# A bound input arrives as the client-minted ``{type, format?, uris}`` value; the
+# facade resolves the URIs back to Girder file ids (own-scheme validation +
+# per-user ACL re-check) and forwards them to the CLI as a ``<string>`` param —
+# comma-joined for a multi-file volume (a DICOM series = N ids). ``slicer_cli_web``
+# injects ``girderApiUrl``/``girderToken`` (``prepare_task.py``/``cli_utils.py`` —
+# zero upstream change) and the CLI fetches + assembles: the CLI sees ids + a
+# token, never a URL, and the facade never touches pixels.
 # ---------------------------------------------------------------------------
 
-# Slicer XML input tags that carry a single resource (a sourceRef value).
-_FILE_INPUT_TAGS = {"image", "file", "directory"}
-# Per-task dimensionality declarations that opt out of whole-volume assembly.
-_PER_SLICE_DIMENSIONALITY = {"2d", "slice", "single", "per-slice"}
+def _translateValuesToSlicerParams(values, user, folder):
+    """Translate a VolView values payload to slicer_cli_web's form-encoded params.
 
-
-def _parseCliInputs(xmlText):
-    """Map each input param name to its Slicer XML tag (image/file/directory).
-
-    Mirrors ``_parseCliOutputs`` but for inputs (channel is absent or != output).
-    Used to dispatch volume staging on the declared input type at submit.
+    - Client-minted input values ``{type, format?, uris}`` → resolved Girder file
+      ids, forwarded as a ``<string>`` param (comma-joined for N files; b3).
+    - ``ProcessingOutputRequest`` outputs → name + name_folder (output goes back
+      to the launching folder by default).
+    - Scalars / plain strings / lists → their string form.
     """
-    import xml.etree.ElementTree as ET
-    try:
-        root = ET.fromstring(xmlText)
-    except ET.ParseError:
-        return {}
-    inputs = {}
-    for param in root.iter():
-        if param.tag not in _FILE_INPUT_TAGS:
-            continue
-        channelEl = param.find("channel")
-        channel = (channelEl.text or "").strip() if channelEl is not None else ""
-        if channel == "output":
-            continue
-        nameEl = param.find("name")
-        if nameEl is None or not nameEl.text:
-            continue
-        inputs[nameEl.text.strip()] = param.tag
-    return inputs
-
-
-def _taskBindsSingleFile(xmlText):
-    """Whether a CLI declares 2D/per-slice dimensionality (interim escape hatch).
-
-    Whole-volume assembly is the default. A task opts into per-slice binding by
-    declaring ``volview-dimensionality="2d"`` (or ``slice``/``single``) on its
-    root ``<executable>`` element — a minimal per-CLI flag pending full config
-    plumbing (post-MVP). No CLI declares it today, so every task assembles.
-    """
-    if not xmlText:
-        return False
-    import xml.etree.ElementTree as ET
-    try:
-        root = ET.fromstring(xmlText)
-    except ET.ParseError:
-        return False
-    declared = (root.get("volview-dimensionality") or "").strip().lower()
-    return declared in _PER_SLICE_DIMENSIONALITY
-
-
-def _assembleDicomToFile(orderedPaths, outPath):
-    """Assemble ordered DICOM slice files into one volume written at ``outPath``.
-
-    ``ImageSeriesReader`` reconstructs spacing/origin/direction from the slices'
-    ``ImagePositionPatient`` tags — the multi-slice geometry the per-slice path
-    dropped to ``[1,1,1]``. A lone file is read straight through (passthrough).
-    The output format follows ``outPath``'s extension (NRRD).
-    """
-    import SimpleITK as sitk
-    paths = list(orderedPaths)
-    if len(paths) == 1:
-        image = sitk.ReadImage(paths[0])
-    else:
-        reader = sitk.ImageSeriesReader()
-        reader.SetFileNames(paths)
-        image = reader.Execute()
-    sitk.WriteImage(image, outPath)
-    return outPath
-
-
-def _assembledVolumeName(files):
-    """Deterministic name for the assembled transient volume."""
-    base = (files[0].get("name") if files else None) or "volume"
-    base, _ = _splitExt(base)
-    base = base.strip(". ") or "volume"
-    return f"{base}.assembled.nrrd"
-
-
-def _downloadFileTo(fileDoc, destPath):
-    """Stream a Girder file's bytes to a local path."""
-    chunks = File().download(fileDoc, headers=False)
-    data = chunks() if callable(chunks) else chunks
-    with open(destPath, "wb") as fh:
-        for chunk in data:
-            fh.write(chunk)
-    return destPath
-
-
-def _stageAssembledVolume(files, user, folder):
-    """Download a series' files, assemble to NRRD, upload as a transient file.
-
-    Returns ``(fileId, transientItemId)``. The transient item is flagged so the
-    source listing skips it (``_folderFileEntries``) and the job-done handler
-    deletes it (``_cleanupTransientOnJobDone``). Runs in the Girder web process.
-    """
-    import os
-    import shutil
-    import tempfile
-    from girder.models.upload import Upload
-
-    tmp = tempfile.mkdtemp(prefix="volview-assemble-")
-    try:
-        orderedPaths = []
-        for idx, f in enumerate(files):
-            # Content (not extension) drives the DICOM read; keep names unique
-            # and ordered so ImageSeriesReader honors the slice order.
-            local = os.path.join(tmp, f"{idx:05d}_{f.get('name') or 'slice'}")
-            _downloadFileTo(f, local)
-            orderedPaths.append(local)
-        outName = _assembledVolumeName(files)
-        outPath = os.path.join(tmp, outName)
-        _assembleDicomToFile(orderedPaths, outPath)
-        size = os.path.getsize(outPath)
-        with open(outPath, "rb") as stream:
-            fileDoc = Upload().uploadFromFile(
-                stream,
-                size=size,
-                name=outName,
-                parentType="folder",
-                parent=folder,
-                user=user,
-                mimeType="application/x-nrrd",
-            )
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-
-    transientItemId = fileDoc.get("itemId")
-    if transientItemId:
-        item = Item().load(transientItemId, force=True)
-        if item:
-            Item().setMetadata(item, {"volviewTransient": True})
-    return str(fileDoc["_id"]), (str(transientItemId) if transientItemId else None)
-
-
-def _resolveSeriesValueToFileId(value, paramTag, user, folder, perSlice):
-    """Resolve a series volume ref to ``(fileId, transientItemId)``, staging per
-    CLI input type.
-
-    Dispatch on the param's declared input type (decisions.md D10): ``<image>``/
-    ``<file>`` assembles the whole volume (b1, live); ``<directory>`` is the
-    deferred b2 seam and raises. ``transientItemId`` is ``None`` unless a volume
-    was assembled (the caller tracks it for cleanup).
-    """
-    if paramTag == "directory":
-        # b2 (decisions.md D10): stage the file set into a transient folder and
-        # bind a <directory> param. Deferred until a CLI declares <directory>.
-        raise RestException(
-            "Directory-input volume staging (b2) is not implemented yet", code=501
-        )
-    files = resolveSeriesSourceRefToFiles(value, user)
-    if perSlice:
-        # Escape hatch: a 2D/per-slice task binds one slice, not the volume.
-        return str(files[0]["_id"]), None
-    return _stageAssembledVolume(files, user, folder)
-
-
-def _markJobTransients(job_doc, transientItemIds):
-    """Record transient input items on the job so cleanup can delete them."""
-    from girder_jobs.models.job import Job as JobModel
-    try:
-        JobModel().updateJob(
-            job_doc, otherFields={"volviewTransient": list(transientItemIds)}
-        )
-    except Exception:
-        logger.exception(
-            "Failed to mark transient inputs on job %s", job_doc.get("_id")
-        )
-
-
-def _removeTransientItems(itemIds):
-    """Delete transient assembled-volume items by id (idempotent, best-effort)."""
-    for itemId in itemIds:
-        try:
-            item = Item().load(itemId, force=True)
-            if item:
-                Item().remove(item)
-        except Exception:
-            logger.exception("Failed to remove transient volume item %s", itemId)
-
-
-def _cleanupTransientOnJobDone(event):
-    """Delete a job's transient assembled inputs once it reaches a terminal state.
-
-    Bound to ``jobs.job.update.after``. Idempotent: a re-fired terminal update
-    finds the items already gone and no-ops.
-
-    The job is reloaded from the database before reading the marker/status:
-    ``updateJob`` fires this event with the *in-memory* job dict the updater
-    passed, which only carries ``volviewTransient`` if that updater happened to
-    DB-load the job first. Reloading keeps cleanup self-contained — it works for
-    any terminal updater rather than relying on that external invariant.
-    """
-    from girder_jobs.constants import JobStatus
-    from girder_jobs.models.job import Job as JobModel
-    info = getattr(event, "info", None)
-    eventJob = info.get("job") if isinstance(info, dict) else None
-    if not isinstance(eventJob, dict):
-        return
-    # The marker only lives on the committed doc — the event carries the
-    # updater's in-memory dict, which has it only if that updater DB-loaded the
-    # job. Reload so cleanup is self-contained, then read status off the same
-    # committed doc.
-    job = JobModel().load(eventJob.get("_id"), force=True)
-    if not isinstance(job, dict):
-        return
-    transientItemIds = job.get("volviewTransient")
-    if not isinstance(transientItemIds, list) or not transientItemIds:
-        return
-    terminal = {JobStatus.SUCCESS, JobStatus.ERROR, JobStatus.CANCELED}
-    if job.get("status") not in terminal:
-        return
-    _removeTransientItems(transientItemIds)
-
-
-def _translateValuesToSlicerParams(values, doc_xml, user, folder):
-    """Translate VolView values payload to slicer_cli_web's form-encoded params.
-
-    - Series volume sourceRefs → assembled-to-one-file id (D10 b1, see above)
-    - SourceRef inputs → fileId
-    - ProcessingOutputRequest outputs → name + name_folder (output goes back
-      to the launching folder by default)
-    - Scalars → str(value)
-
-    Returns ``(params, transientItemIds)``; the caller stamps the transient item
-    ids on the job so they are cleaned up when it finishes.
-    """
-    inputTypes = _parseCliInputs(doc_xml or "")
-    perSlice = _taskBindsSingleFile(doc_xml)
-    transientItemIds = []
     params = {}
-    try:
-        _populateSlicerParams(
-            values, inputTypes, perSlice, user, folder, params, transientItemIds
-        )
-    except Exception:
-        # A later param failing (e.g. the deferred <directory> 501) must not
-        # orphan volumes already staged this call: no job exists yet to carry
-        # their ids, so the job-done cleanup would never reach them.
-        _removeTransientItems(transientItemIds)
-        raise
-    return params, transientItemIds
-
-
-def _populateSlicerParams(
-    values, inputTypes, perSlice, user, folder, params, transientItemIds
-):
-    """Fill ``params``/``transientItemIds`` from a values payload (one param each).
-
-    Split out so ``_translateValuesToSlicerParams`` can unwind any volumes already
-    staged this call if a later param raises (the only caller).
-    """
     for paramName, value in (values or {}).items():
         if value is None:
             continue
@@ -949,31 +499,11 @@ def _populateSlicerParams(
             params[paramName] = "true" if value else "false"
         elif isinstance(value, (int, float)):
             params[paramName] = str(value)
-        elif isinstance(value, str):
-            # A multi-file volume ref (item 3.2) is staged for the CLI's declared
-            # input type before binding; a plain file ref resolves directly.
-            # Only stage when the param is a declared file input — a series ref
-            # on a non-file param would otherwise assemble+upload a volume for a
-            # binding the CLI cannot consume.
-            paramTag = inputTypes.get(paramName)
-            if paramTag is not None and decodeSeriesSourceRef(value) is not None:
-                fileId, transientItemId = _resolveSeriesValueToFileId(
-                    value, paramTag, user, folder, perSlice,
-                )
-                params[paramName] = fileId
-                if transientItemId:
-                    transientItemIds.append(transientItemId)
-                continue
-            if _looksLikeSourceRef(value, "file"):
-                try:
-                    f = resolveSourceRefToFile(value, user)
-                    params[paramName] = str(f["_id"])
-                    continue
-                except Exception as exc:
-                    logger.debug(
-                        "Leaving unresolved sourceRef-like value as string: %s", exc
-                    )
-            params[paramName] = value
+        elif isinstance(value, dict) and "uris" in value:
+            # A bound input: resolve the facade's own URIs back to file ids
+            # (strict validation + ACL re-check) and forward the ids (b3).
+            fileIds = resolveInputUrisToFileIds(value.get("uris"), user)
+            params[paramName] = ",".join(fileIds)
         elif isinstance(value, dict) and "name" in value:
             # ProcessingOutputRequest
             params[paramName] = value["name"]
@@ -983,10 +513,13 @@ def _populateSlicerParams(
             else:
                 outFolder = folder
             params[f"{paramName}_folder"] = str(outFolder["_id"])
+        elif isinstance(value, str):
+            params[paramName] = value
         elif isinstance(value, list):
             params[paramName] = ",".join(str(v) for v in value)
         else:
             params[paramName] = str(value)
+    return params
 
 
 def _projectJobStatus(job):
@@ -1198,8 +731,8 @@ def getTaskSpec(self, folder, taskId):
 def _genDockerJob(cliItem, params, user):
     """Create the slicer_cli_web docker job for a CLI item and return its doc.
 
-    Isolated as the single live slicer_cli_web touch point so ``_createCliJob``
-    (and its tests) can drive the unwind without the optional dependency.
+    Isolated as the single live slicer_cli_web touch point so ``runTask`` (and
+    its tests) can drive job creation without the optional dependency.
     """
     from girder.models.token import Token
     from slicer_cli_web.rest_slicer_cli import genHandlerToRunDockerCLI
@@ -1208,29 +741,6 @@ def _genDockerJob(cliItem, params, user):
     # Take a copy so the handler can mutate freely.
     job_obj = handler.subHandler(cliItem, copy.deepcopy(params), user, token)
     return job_obj.job if hasattr(job_obj, "job") else job_obj
-
-
-def _createCliJob(cliItem, params, transientItemIds, user):
-    """Create the docker job and record its transient inputs, unwinding on error.
-
-    Split out (like ``_populateSlicerParams``) so the job-creation block can
-    unwind volumes ``_translateValuesToSlicerParams`` already staged: if job
-    creation throws *after* translate returned (slicer_cli validation, docker
-    unavailable, token), no job exists to carry the transient ids, so the
-    job-done cleanup (``_cleanupTransientOnJobDone``) would never reach them and
-    the assembled NRRD — hidden from the source list as ``volviewTransient`` —
-    is orphaned. Mirror the translate-time unwind.
-    """
-    try:
-        job_doc = _genDockerJob(cliItem, params, user)
-    except Exception:
-        _removeTransientItems(transientItemIds)
-        raise
-    # The job now exists and carries the transient ids, so cleanup is its
-    # responsibility from here on.
-    if transientItemIds:
-        _markJobTransients(job_doc, transientItemIds)
-    return job_doc
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_WRITE)
@@ -1261,19 +771,17 @@ def runTask(self, folder, taskId, body):
     # Auto-generate (unique) output filenames so the user never has to. Any
     # output param missing from `values` gets a fresh name keyed off the input
     # file + CLI name + parameter name + extension.
-    values = _autofillOutputs(dict(values), cliItem.xml, cliItem.name, user, folder)
+    values = _autofillOutputs(dict(values), cliItem.xml, cliItem.name, folder)
 
-    # Translate VolView values to slicer_cli_web params. A multi-file volume
-    # input is assembled here (D10 b1) and tracked as a transient for cleanup.
-    params, transientItemIds = _translateValuesToSlicerParams(
-        values, cliItem.xml, user, folder
-    )
+    # Resolve each bound input's client-minted URIs back to file ids (own-scheme
+    # validation + per-user ACL re-check) and forward the ids to the CLI (b3).
+    params = _translateValuesToSlicerParams(values, user, folder)
     logger.info(
         "[volview_processing] runTask folder=%s task=%s params=%s",
         folder["_id"], taskId, params,
     )
 
-    job_doc = _createCliJob(cliItem, params, transientItemIds, user)
+    job_doc = _genDockerJob(cliItem, params, user)
     return {"jobId": str(job_doc["_id"])}
 
 
@@ -1312,13 +820,6 @@ def getJobResults(self, folder, jobId):
 # ---------------------------------------------------------------------------
 
 def addProcessingRoutes(info):
-    # Delete transient assembled-volume inputs (D10 b1, item 3.3) when their job
-    # finishes. Bound once at plugin load.
-    events.bind(
-        "jobs.job.update.after",
-        "girder_volview.processing",
-        _cleanupTransientOnJobDone,
-    )
     info["apiRoot"].folder.route(
         "GET", (":folderId", "volview_processing", "tasks"), listTasks
     )
