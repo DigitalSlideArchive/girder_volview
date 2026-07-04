@@ -190,9 +190,18 @@ def test_all_plugin_write_routes_are_csrf_protected(server):
     found = _pluginWriteRoutes()
 
     # Guard against a vacuous pass: the known write routes must be present, so a
-    # broken introspection (empty result) fails rather than passes.
+    # broken introspection (empty result) fails rather than passes. `cancelJob`
+    # (Chunk 18) is the folder-free job-cancel write route on the dedicated
+    # `volview_processing` resource -- a cookie-auth state-changing POST, so it
+    # must carry @csrfProtect like every other write route here.
     names = sorted(handler.__name__ for _, _, handler in found)
-    assert names == ["runTask", "saveToFolder", "saveToItem", "stageInput"], names
+    assert names == [
+        "cancelJob",
+        "runTask",
+        "saveToFolder",
+        "saveToItem",
+        "stageInput",
+    ], names
 
     unguarded = [
         (method, route, handler.__name__)

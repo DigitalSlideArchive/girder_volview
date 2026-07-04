@@ -28,9 +28,9 @@ from bson.objectid import ObjectId
 from girder import events, logger
 from girder.api import access
 from girder.api.describe import Description, autoDescribeRoute
-from girder.api.rest import boundHandler
+from girder.api.rest import Resource, boundHandler
 from girder.constants import AccessType, TokenScope
-from girder.exceptions import GirderException, RestException
+from girder.exceptions import GirderException, RestException, ValidationException
 from girder.models.file import File
 from girder.models.folder import Folder
 from girder.models.item import Item
@@ -1175,15 +1175,23 @@ def runTask(self, folder, taskId, body):
     return {"jobId": str(job_doc["_id"])}
 
 
+# ---------------------------------------------------------------------------
+# Job-addressed routes (D5) — status / results / cancel are keyed by job id
+# alone and gated by the job's OWN ACL. The launch folder is not part of a job's
+# identity, so these carry no ``folderId`` (they live on the folder-free
+# ``volview_processing`` resource below, not the folder tree the launch-context
+# routes use). getJob / getJobResults are READ-gated; cancel is WRITE-gated so a
+# read-only viewer who can see a job's status cannot cancel it.
+# ---------------------------------------------------------------------------
+
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
 @boundHandler
 @autoDescribeRoute(
     Description("Get job status.")
-    .modelParam("folderId", model=Folder, level=AccessType.READ)
     .param("jobId", "The job identifier.", paramType="path")
     .produces(["application/json"])
 )
-def getJob(self, folder, jobId):
+def getJob(self, jobId):
     user = self.getCurrentUser()
     from girder_jobs.models.job import Job as JobModel
     job = JobModel().load(jobId, user=user, level=AccessType.READ, exc=True)
@@ -1194,15 +1202,50 @@ def getJob(self, folder, jobId):
 @boundHandler
 @autoDescribeRoute(
     Description("Get job results.")
-    .modelParam("folderId", model=Folder, level=AccessType.READ)
     .param("jobId", "The job identifier.", paramType="path")
     .produces(["application/json"])
 )
-def getJobResults(self, folder, jobId):
+def getJobResults(self, jobId):
     user = self.getCurrentUser()
     from girder_jobs.models.job import Job as JobModel
     job = JobModel().load(jobId, user=user, level=AccessType.READ, exc=True)
     return _jobResultsPayload(job, user)
+
+
+@access.public(cookie=True, scope=TokenScope.DATA_WRITE)
+@csrfProtect
+@boundHandler
+@autoDescribeRoute(
+    Description("Cancel a job.")
+    .notes(
+        "Best-effort: Girder only transitions an INACTIVE/QUEUED/RUNNING job to "
+        "CANCELED, so cancelling an already-terminal job is a no-op. The response "
+        "is the job's real projected status after the attempt -- never a "
+        "fabricated 'cancelled' -- and the client's poller converges on whatever "
+        "terminal state Girder ultimately reports."
+    )
+    .param("jobId", "The job identifier.", paramType="path")
+    .produces(["application/json"])
+    .errorResponse("Write access was denied for the job.", 403)
+)
+def cancelJob(self, jobId):
+    # WRITE-gated load: a read-only user (who can GET the status) is blocked here.
+    user = self.getCurrentUser()
+    from girder_jobs.models.job import Job as JobModel
+    jobModel = JobModel()
+    job = jobModel.load(jobId, user=user, level=AccessType.WRITE, exc=True)
+    try:
+        jobModel.cancelJob(job)
+    except ValidationException:
+        # Best-effort: Girder refuses a CANCELED transition from a terminal state,
+        # so an already-finished job simply cannot be cancelled. That is not an
+        # error here -- we fall through and report the job's real state below
+        # rather than fabricate a `cancelled` the poller would contradict.
+        pass
+    # Reload fresh and project the ACTUAL persisted state (contract Seam 3
+    # best-effort): the client's poller converges on whatever Girder holds.
+    fresh = jobModel.load(jobId, user=user, level=AccessType.READ, exc=True)
+    return _projectJobStatus(fresh)
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_WRITE)
@@ -1244,6 +1287,25 @@ def stageInput(self, folder, name):
 # Route registration
 # ---------------------------------------------------------------------------
 
+class _JobResource(Resource):
+    """Folder-free REST surface for the job-addressed routes (D5).
+
+    Mounted at ``/volview_processing`` (a sibling of ``/folder``, ``/item``),
+    this hosts status / results / cancel keyed by job id alone -- the launch
+    folder is not part of a job's identity. The launch-context routes
+    (tasks / spec / run / stage) stay on the folder tree because they genuinely
+    operate per-folder. The handlers are the same module-level ``@boundHandler``
+    functions; only their mount point differs.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.resourceName = "volview_processing"
+        self.route("GET", ("jobs", ":jobId"), getJob)
+        self.route("GET", ("jobs", ":jobId", "results"), getJobResults)
+        self.route("POST", ("jobs", ":jobId", "cancel"), cancelJob)
+
+
 def addProcessingRoutes(info):
     # Delete a job's transient staged inputs once it reaches a terminal state
     # (Chunk 14). Bound once at plugin load; fires for every job update but no-ops
@@ -1283,13 +1345,8 @@ def addProcessingRoutes(info):
         (":folderId", "volview_processing", "tasks", ":taskId", "run"),
         runTask,
     )
-    info["apiRoot"].folder.route(
-        "GET",
-        (":folderId", "volview_processing", "jobs", ":jobId"),
-        getJob,
-    )
-    info["apiRoot"].folder.route(
-        "GET",
-        (":folderId", "volview_processing", "jobs", ":jobId", "results"),
-        getJobResults,
-    )
+    # Job-addressed routes (D5) live on a dedicated folder-free resource: a job's
+    # status/results/cancel are keyed by job id alone (gated by the job's own
+    # ACL), so they must NOT hang off the folder tree. Greenfield -- no
+    # folder-scoped compat shim for the old shape.
+    info["apiRoot"].volview_processing = _JobResource()

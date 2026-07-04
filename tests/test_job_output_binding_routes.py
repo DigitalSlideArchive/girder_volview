@@ -65,7 +65,8 @@ _CLI_XML_IMAGE = (
     "</parameters></executable>"
 )
 
-RESULTS_PATH = "/folder/%s/volview_processing/jobs/%s/results"
+# Job-addressed (D5, Chunk 18): results are keyed by job id alone, no folder.
+RESULTS_PATH = "/volview_processing/jobs/%s/results"
 
 
 # ---------------------------------------------------------------------------
@@ -138,9 +139,9 @@ def _succeed(job):
     return job
 
 
-def _getResults(server, folder, user, jobId):
+def _getResults(server, user, jobId):
     return server.request(
-        path=RESULTS_PATH % (folder["_id"], jobId),
+        path=RESULTS_PATH % jobId,
         method="GET", user=user, isJson=True, exception=True,
     )
 
@@ -179,7 +180,7 @@ def test_n_outputs_each_bind_under_their_own_key(server, owner, ownerFolder):
         "outA": str(fa["_id"]), "outB": str(fb["_id"]), "outC": str(fc["_id"]),
     }
 
-    resp = _getResults(server, ownerFolder, owner, _succeed(job)["_id"])
+    resp = _getResults(server, owner, _succeed(job)["_id"])
     assert resp.output_status.startswith(b"200")
     assert len(resp.json) == 3
 
@@ -193,7 +194,7 @@ def test_results_route_returns_reference_bound_intent(server, owner, ownerFolder
     job, token = _makeBoundJob(owner)
     fileDoc = _recordOutput(owner, ownerFolder, token, "outVol", "brain.otsu.nii.gz")
 
-    resp = _getResults(server, ownerFolder, owner, _succeed(job)["_id"])
+    resp = _getResults(server, owner, _succeed(job)["_id"])
 
     assert resp.output_status.startswith(b"200")
     assert len(resp.json) == 1
@@ -214,7 +215,7 @@ def test_results_route_errors_on_non_succeeded_job(server, owner, ownerFolder):
     _recordOutput(owner, ownerFolder, token, "outVol", "out.nii.gz")
     # Job left INACTIVE (never transitioned to a terminal success).
 
-    resp = _getResults(server, ownerFolder, owner, job["_id"])
+    resp = _getResults(server, owner, job["_id"])
     assert resp.output_status.startswith(b"400")
 
 
@@ -227,7 +228,7 @@ def test_results_route_errors_when_bound_output_deleted(server, owner, ownerFold
 
     File().remove(File().load(fileDoc["_id"], force=True))
 
-    resp = _getResults(server, ownerFolder, owner, job["_id"])
+    resp = _getResults(server, owner, job["_id"])
     # Succeeded-but-output-deleted is an explicit error, never a silent empty list.
     assert resp.output_status.startswith(b"400")
 
@@ -246,8 +247,8 @@ def test_two_same_name_jobs_do_not_cross_results(server, owner, ownerFolder):
     fileB = _recordOutput(owner, ownerFolder, tokenB, "outVol", "out.nii.gz", content=b"BBBB")
     assert fileA["_id"] != fileB["_id"]
 
-    respA = _getResults(server, ownerFolder, owner, _succeed(jobA)["_id"])
-    respB = _getResults(server, ownerFolder, owner, _succeed(jobB)["_id"])
+    respA = _getResults(server, owner, _succeed(jobA)["_id"])
+    respB = _getResults(server, owner, _succeed(jobB)["_id"])
 
     # Each job resolves ONLY the file bound to itself, though the names collide.
     assert respA.json[0]["id"] == str(fileA["_id"])
