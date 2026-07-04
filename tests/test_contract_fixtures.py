@@ -39,7 +39,7 @@ def test_wire_fixtures_load():
     assert wire["input-value.labelmap"]["type"] == "labelmap"
     assert wire["job-handle"]["inputUris"]
     assert wire["job-results.missing"]["missing"] == 2
-    assert wire["job-results.error"]["state"] == "failed"
+    assert wire["job-results.error"]["state"] == "error"
 
 
 def test_add_segment_group_variants_carry_source():

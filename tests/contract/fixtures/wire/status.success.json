@@ -1,5 +1,5 @@
 {
   "jobId": "job-abc123",
-  "state": "succeeded",
+  "state": "success",
   "progress": 1
 }

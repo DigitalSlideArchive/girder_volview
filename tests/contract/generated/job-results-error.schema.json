@@ -8,10 +8,10 @@
     "state": {
       "type": "string",
       "enum": [
-        "queued",
+        "pending",
         "running",
-        "succeeded",
-        "failed",
+        "success",
+        "error",
         "cancelled"
       ]
     }

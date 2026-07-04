@@ -1,4 +1,4 @@
 {
   "jobId": "job-abc123",
-  "state": "queued"
+  "state": "error"
 }

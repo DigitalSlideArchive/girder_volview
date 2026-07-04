@@ -1,4 +1,4 @@
 {
-  "error": "Job did not succeed (state: failed); no results available.",
-  "state": "failed"
+  "error": "Job did not succeed (state: error); no results available.",
+  "state": "error"
 }
