@@ -1,0 +1,52 @@
+{
+  "specVersion": 1,
+  "id": "ThresholdSegmentation",
+  "title": "Threshold Segmentation",
+  "description": "Label voxels whose intensity falls between two thresholds. Emits a labelmap and a JSON sidecar of per-label names + RGB colors. Backed by SimpleITK.",
+  "parameters": [
+    {
+      "kind": "sourceRef",
+      "id": "inputVolume",
+      "title": "Input Volume",
+      "help": "Input volume (DICOM, NIfTI, NRRD, MHA, etc.)",
+      "section": "IO",
+      "order": 0,
+      "required": true,
+      "accepts": ["image"]
+    },
+    {
+      "kind": "float",
+      "id": "lowerThreshold",
+      "title": "Lower Threshold",
+      "help": "Lowest intensity to include (inclusive).",
+      "section": "Threshold parameters",
+      "order": 1,
+      "default": 50
+    },
+    {
+      "kind": "float",
+      "id": "upperThreshold",
+      "title": "Upper Threshold",
+      "help": "Highest intensity to include (inclusive).",
+      "section": "Threshold parameters",
+      "order": 2,
+      "default": 65535
+    }
+  ],
+  "outputs": [
+    {
+      "id": "outputLabelmap",
+      "title": "Output Labelmap",
+      "help": "Binary labelmap NIfTI.",
+      "type": "labelmap",
+      "format": ".nii.gz"
+    },
+    {
+      "id": "outputLabels",
+      "title": "Output Labels (JSON)",
+      "help": "Sidecar JSON: per-label name + RGB color.",
+      "type": "file",
+      "format": ".json"
+    }
+  ]
+}

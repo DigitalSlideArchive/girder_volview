@@ -1,0 +1,9 @@
+{
+  "jobId": "job-abc123",
+  "taskId": "OtsuSegmentation",
+  "inputUris": [
+    "/api/v1/file/6600000000000000000000a1/proxiable/1-001.dcm",
+    "/api/v1/file/6600000000000000000000a2/proxiable/1-002.dcm"
+  ],
+  "finishedAt": "2026-07-03T18:24:05.123000+00:00"
+}

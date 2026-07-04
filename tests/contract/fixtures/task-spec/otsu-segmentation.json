@@ -1,0 +1,46 @@
+{
+  "specVersion": 1,
+  "id": "OtsuSegmentation",
+  "title": "Otsu Multi-level Segmentation",
+  "description": "Segment a volume into N intensity bins via Otsu's multi-thresholding. Emits a labelmap and a JSON sidecar of per-label names + RGB colors. Backed by SimpleITK.",
+  "parameters": [
+    {
+      "kind": "sourceRef",
+      "id": "inputVolume",
+      "title": "Input Volume",
+      "help": "Input volume (DICOM, NIfTI, NRRD, MHA, etc.)",
+      "section": "IO",
+      "order": 0,
+      "required": true,
+      "accepts": ["image"]
+    },
+    {
+      "kind": "int",
+      "id": "numberOfLevels",
+      "title": "Number of levels",
+      "help": "How many foreground labels to produce. Otsu picks N thresholds; you get N+1 bins (including background).",
+      "section": "Segmentation parameters",
+      "order": 1,
+      "min": 2,
+      "max": 8,
+      "step": 1,
+      "default": 4
+    }
+  ],
+  "outputs": [
+    {
+      "id": "outputLabelmap",
+      "title": "Output Labelmap",
+      "help": "Multi-label segmentation NIfTI.",
+      "type": "labelmap",
+      "format": ".nii.gz"
+    },
+    {
+      "id": "outputLabels",
+      "title": "Output Labels (JSON)",
+      "help": "Sidecar JSON: per-label name + RGB color.",
+      "type": "file",
+      "format": ".json"
+    }
+  ]
+}

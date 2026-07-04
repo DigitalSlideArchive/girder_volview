@@ -1,0 +1,10 @@
+{
+  "intents": [
+    {
+      "intent": "add-base-image",
+      "url": "/api/v1/file/6600000000000000000000d1/proxiable/filtered.nii.gz",
+      "name": "filtered.nii.gz"
+    }
+  ],
+  "missing": 2
+}

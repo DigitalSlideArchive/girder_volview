@@ -1,0 +1,5 @@
+{
+  "jobId": "job-abc123",
+  "state": "running",
+  "progress": 0.42
+}
