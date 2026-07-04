@@ -419,20 +419,37 @@ def _parseCliOutputs(xmlText):
     return outputs
 
 
-def _intentForOutput(out):
-    """Result intent name for an output (item 3.1).
+def _intentForOutput(out, url, name, jobId, segments=None):
+    """Build the declarative result intent for one output (contract Seam 2, D3).
 
-    Emitted additively alongside the legacy ``role`` using the same five-name
-    v1 vocabulary the client validates (VolView ``src/processing/intents.ts``):
-    a labelmap → ``attach-segment-group`` (mirrors ``role == "segmentGroup"``),
-    a plain image → ``add-base-image``, any other file → ``download``. No CLI
-    declares a state output yet, so ``restore-state`` has no producer here.
+    Results cross the wire as declarative intents the client's single applier
+    applies — never a ``role`` the client switches on. The v1 vocabulary the
+    client validates (VolView ``processing-contract/wire.ts``): a labelmap →
+    ``add-segment-group``, a plain image → ``add-base-image``, any other file →
+    ``download``. No CLI declares a state output yet, so ``restore-state`` has no
+    producer here.
+
+    A labelmap intent carries a ``source: {jobId, outputId}`` provenance tag
+    (``outputId`` = the CLI's output identifier) so the created segment group
+    round-trips the ``.volview.zip`` (tier-2 idempotency key, Chunk 19). When the
+    bare-labelmap ``segments`` sidecar was folded in it is carried as the
+    optional ``segments`` payload; a ``seg.nrrd`` with embedded metadata carries
+    none and the client falls back to the file's own metadata. The returned
+    object validates against the contract ``result-intent`` schema.
     """
+    fileRef = {"url": url, "name": name}
     if out["isLabel"]:
-        return "attach-segment-group"
+        intent = {
+            "intent": "add-segment-group",
+            **fileRef,
+            "source": {"jobId": str(jobId), "outputId": out["name"]},
+        }
+        if segments:
+            intent["segments"] = segments
+        return intent
     if out["tag"] == "image":
-        return "add-base-image"
-    return "download"
+        return {"intent": "add-base-image", **fileRef}
+    return {"intent": "download", **fileRef}
 
 
 def _readLabelsSidecar(fileDoc):
@@ -628,35 +645,34 @@ def _collectJobResults(job, user):
         if e["out"]["tag"] == "image" and e["out"]["isLabel"]
     ]
 
-    # Pass 3: project each remaining file into ProcessingResult.
+    # Pass 3: project each remaining file into its declarative result intent
+    # (contract Seam 2). The wire shape is the intent object itself — `{intent,
+    # url, name, segments?, source?}` — plus the `id`/`mimeType`/`size` file
+    # metadata the client's JobList reads. No `role`: the client applies the
+    # intent directly and never switches on a role (D3/D4).
     for entry in resolved:
         out = entry["out"]
         fileDoc = entry["fileDoc"]
-        role = "segmentGroup" if out["isLabel"] else None
         url = (
             f"/api/v1/file/{fileDoc['_id']}/proxiable/"
             f"{fileDoc['name']}"
         )
+        # Fold the labels sidecar into the labelmap intent's `segments` payload
+        # so the client never learns the sidecar convention.
+        segments = None
+        if out["isLabel"] and sidecars and entry in labelmap_entries:
+            idx = labelmap_entries.index(entry)
+            if idx < len(sidecars):
+                segments = sidecars[idx]
+        intent = _intentForOutput(
+            out, url, fileDoc["name"], job["_id"], segments
+        )
         result = {
+            **intent,
             "id": str(fileDoc["_id"]),
-            "name": fileDoc["name"],
-            "url": url,
-            # `intent` is additive: `role` stays unchanged for older clients,
-            # while intent-aware clients prefer this validated field (item 3.1).
-            **({"role": role} if role else {}),
-            "intent": _intentForOutput(out),
             "mimeType": fileDoc.get("mimeType"),
             "size": fileDoc.get("size"),
         }
-        if (
-            role == "segmentGroup"
-            and sidecars
-            and entry in labelmap_entries
-        ):
-            # First labelmap gets the first sidecar.
-            idx = labelmap_entries.index(entry)
-            if idx < len(sidecars):
-                result["segments"] = sidecars[idx]
         results.append(result)
     return results
 
