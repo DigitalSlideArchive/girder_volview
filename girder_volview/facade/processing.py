@@ -1374,6 +1374,20 @@ def _genDockerJob(cliItem, params, user):
     token = Token().createToken(
         user=user, scope=[TokenScope.DATA_READ, TokenScope.DATA_WRITE]
     )
+    # Inject the CLI's `girderApiUrl`/`girderToken` params so slicer_cli_web feeds
+    # the container its API URL + token (the b3 convention). slicer_cli_web only
+    # substitutes its GirderApiUrl()/GirderToken() runtime transforms when these
+    # keys are present in the params it processes (prepare_task
+    # `_add_optional_input_param` skips a param absent from args); the REST route
+    # would default them in, but the facade calls `subHandler` directly, so we
+    # supply them here. Empty -> slicer_cli_web substitutes the transforms, and
+    # GirderToken resolves to THIS scoped token (Ch21), not a broader one. Without
+    # them a CLI that fetches its own inputs by id (`reference="_girder_id_"`, e.g.
+    # a multi-file DICOM series) has no way to reach Girder. Harmless for a CLI
+    # that declares neither -- slicer_cli_web ignores undeclared args.
+    params = dict(params)
+    params.setdefault("girderApiUrl", "")
+    params.setdefault("girderToken", "")
     # Capture the tokens girder_worker_utils mints WHILE building the result-hooks
     # (a fresh DATA_WRITE token per hook — the worker uploads each output under one of
     # THOSE, never `token`; girder_io.py). Bounded tightly around the synchronous
