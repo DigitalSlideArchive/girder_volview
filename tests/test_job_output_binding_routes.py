@@ -253,3 +253,40 @@ def test_two_same_name_jobs_do_not_cross_results(server, owner, ownerFolder):
     # Each job resolves ONLY the file bound to itself, though the names collide.
     assert respA.json[0]["id"] == str(fileA["_id"])
     assert respB.json[0]["id"] == str(fileB["_id"])
+
+
+# ---------------------------------------------------------------------------
+# 5. The live multi-token reality (Chunk 24 fix) — the worker uploads each output
+# under a per-hook token girder_worker_utils minted, NOT the facade's job token
+# ---------------------------------------------------------------------------
+
+@pytest.mark.plugin("volview")
+def test_output_recorded_under_worker_token_not_facade_token(server, owner, ownerFolder):
+    # girder_worker_utils' GirderClientTransform mints a fresh DATA_WRITE token per
+    # result-hook and the worker uploads each output under THAT, never the facade's
+    # own job token. _genDockerJob captures those tokens into volviewJobTokens; here
+    # we stamp both and deliver the upload under the WORKER token. On the pre-fix code
+    # (correlate by the single volviewJobToken) this recorded nothing and /results was
+    # a silent [] — the exact live bug.
+    from girder.models.token import Token
+    from girder_jobs.models.job import Job
+
+    job = Job().createJob(title="t", type="volview_test", user=owner, public=False)
+    facadeToken = Token().createToken(user=owner)
+    workerToken = Token().createToken(user=owner)  # a distinct per-hook upload token
+    assert str(facadeToken["_id"]) != str(workerToken["_id"])
+    processing._bindJobOutputs(
+        job, facadeToken, _CLI_XML_IMAGE, [str(workerToken["_id"])]
+    )
+    job = _reload(job)
+    assert str(workerToken["_id"]) in job[processing._JOB_TOKENS_FIELD]
+
+    # Deliver the output upload under the WORKER token (as girder_worker does).
+    fileDoc = _recordOutput(owner, ownerFolder, workerToken, "outVol", "brain.otsu.nii.gz")
+
+    assert _reload(job)[processing._OUTPUTS_FIELD] == {"outVol": str(fileDoc["_id"])}
+
+    resp = _getResults(server, owner, _succeed(job)["_id"])
+    assert resp.output_status.startswith(b"200")
+    assert len(resp.json) == 1
+    assert resp.json[0]["id"] == str(fileDoc["_id"])

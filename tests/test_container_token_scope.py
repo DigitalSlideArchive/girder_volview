@@ -37,6 +37,12 @@ def fakeDockerStack(monkeypatch):
             captured["createToken"] = {"user": user, "scope": scope}
             return {"_id": "fake-token", "scope": scope}
 
+        def find(self, query=None, **kwargs):
+            # _genDockerJob captures the per-hook upload tokens minted during
+            # subHandler; none exist in this faked stack.
+            captured["find"] = query
+            return []
+
     class _Handler:
         def subHandler(self, cliItem, params, user, token):
             captured["token"] = token
@@ -52,7 +58,9 @@ def fakeDockerStack(monkeypatch):
     monkeypatch.setitem(sys.modules, "slicer_cli_web.rest_slicer_cli", slicerMod)
     monkeypatch.setattr("girder.models.token.Token", _FakeToken)
     # Reference-bound output recording needs a real job/db; not under test here.
-    monkeypatch.setattr(processing, "_bindJobOutputs", lambda job, token, xml: None)
+    monkeypatch.setattr(
+        processing, "_bindJobOutputs", lambda job, token, xml, uploadTokens=None: None
+    )
     return captured
 
 

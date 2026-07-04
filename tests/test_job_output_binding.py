@@ -13,6 +13,7 @@ ACL, the results route, two same-name jobs against one folder) lives in
 ``test_job_output_binding_routes``.
 """
 
+import datetime
 import json
 
 import pytest
@@ -26,6 +27,7 @@ from girder_volview.facade import processing
 _OUTPUTS = processing._OUTPUTS_FIELD
 _SPECS = processing._OUTPUT_SPECS_FIELD
 _TOKEN = processing._JOB_TOKEN_FIELD
+_TOKENS = processing._JOB_TOKENS_FIELD
 
 
 # ---------------------------------------------------------------------------
@@ -50,11 +52,30 @@ class _FakeJob:
         return self._byId.get(str(jobId))
 
     def findOne(self, query):
-        token = query.get(_TOKEN)
         for job in self._byId.values():
-            if job.get(_TOKEN) == token:
+            if self._matches(job, query):
                 return job
         return None
+
+    @staticmethod
+    def _matches(job, query):
+        # Enough Mongo query semantics for the correlation queries: scalar equality
+        # (volviewJobToken), array-contains (volviewJobTokens), and dotted-into-a-list
+        # of dicts (volviewOutputSpecs.name).
+        for key, want in query.items():
+            if key == _TOKENS:
+                if want not in (job.get(key) or []):
+                    return False
+            elif "." in key:
+                head, tail = key.split(".", 1)
+                if not any(
+                    isinstance(e, dict) and e.get(tail) == want
+                    for e in (job.get(head) or [])
+                ):
+                    return False
+            elif job.get(key) != want:
+                return False
+        return True
 
     def updateJob(self, job, otherFields=None):
         self.updated.append(otherFields or {})
@@ -195,6 +216,51 @@ def test_job_for_upload_swallows_a_malformed_job_id(monkeypatch):
     ) is None
 
 
+def test_job_for_upload_correlates_by_captured_upload_token(monkeypatch):
+    # THE FIX: the worker uploads under a token girder_worker_utils minted per hook,
+    # NOT the facade's own job token. The job stamps that token in volviewJobTokens,
+    # so an upload arriving under it correlates though it differs from volviewJobToken.
+    job = {
+        "_id": ObjectId(),
+        _TOKEN: "facade-tok",
+        _TOKENS: ["facade-tok", "worker-tok"],
+        _SPECS: [_spec("outVol")],
+    }
+    _installJob(monkeypatch, _FakeJob([job]))
+    found = processing._jobForOutputUpload(
+        {"identifier": "outVol"}, {"currentToken": {"_id": "worker-tok"}}
+    )
+    assert found is job
+
+
+def test_job_for_upload_worker_token_misses_legacy_single_token_job(monkeypatch):
+    # The exact live failure this fix addresses: a job stamped the OLD way (only
+    # volviewJobToken = the facade token, no captured set) cannot be found by the
+    # worker's per-hook upload token — so nothing was ever recorded.
+    job = {"_id": ObjectId(), _TOKEN: "facade-tok"}  # no volviewJobTokens
+    _installJob(monkeypatch, _FakeJob([job]))
+    assert processing._jobForOutputUpload(
+        {"identifier": "outVol"}, {"currentToken": {"_id": "worker-tok"}}
+    ) is None
+
+
+def test_job_for_upload_identifier_narrows_when_token_set_overlaps(monkeypatch):
+    # Two same-user submits whose capture windows overlapped share a token in both
+    # sets. The declared output identifier still routes each upload to the job that
+    # actually produces it — concurrent DIFFERENT-task jobs never cross.
+    otsu = {"_id": ObjectId(), _TOKEN: "a", _TOKENS: ["a", "shared"],
+            _SPECS: [_spec("outLabel")]}
+    median = {"_id": ObjectId(), _TOKEN: "b", _TOKENS: ["b", "shared"],
+              _SPECS: [_spec("outVolume")]}
+    _installJob(monkeypatch, _FakeJob([otsu, median]))
+    assert processing._jobForOutputUpload(
+        {"identifier": "outVolume"}, {"currentToken": {"_id": "shared"}}
+    ) is median
+    assert processing._jobForOutputUpload(
+        {"identifier": "outLabel"}, {"currentToken": {"_id": "shared"}}
+    ) is otsu
+
+
 # ---------------------------------------------------------------------------
 # _recordJobOutput — the data.process handler records ids onto the job
 # ---------------------------------------------------------------------------
@@ -258,6 +324,22 @@ def test_record_output_ignores_malformed_event(monkeypatch):
     assert model.updated == []
 
 
+def test_record_output_binds_under_worker_upload_token(monkeypatch):
+    # The full data.process path against the live multi-token reality: the job stamped
+    # both its facade token and the per-hook worker token; the upload arrives under the
+    # WORKER token (≠ volviewJobToken) and is still recorded under its identifier.
+    job = {"_id": ObjectId(), _TOKEN: "facade-tok",
+           _TOKENS: ["facade-tok", "worker-tok"], _SPECS: [_spec("outVol")], _OUTPUTS: {}}
+    _installJob(monkeypatch, _FakeJob([job]))
+    fid = ObjectId()
+
+    processing._recordJobOutput(
+        _uploadEvent(json.dumps({"identifier": "outVol"}), fid, tokenId="worker-tok")
+    )
+
+    assert job[_OUTPUTS]["outVol"] == str(fid)
+
+
 # ---------------------------------------------------------------------------
 # _bindJobOutputs — submit-side stamping of specs + token + empty id map
 # ---------------------------------------------------------------------------
@@ -280,6 +362,82 @@ def test_bind_job_outputs_records_specs_token_and_empty_map(monkeypatch):
     assert fields[_SPECS] == [
         {"name": "outSeg", "tag": "image", "isLabel": True, "fileExtensions": ""}
     ]
+    # With no captured upload tokens, the set is just the facade token.
+    assert fields[_TOKENS] == ["tok-xyz"]
+
+
+def test_bind_job_outputs_records_captured_upload_token_set(monkeypatch):
+    job = {"_id": ObjectId()}
+    model = _installJob(monkeypatch, _FakeJob([job]))
+
+    processing._bindJobOutputs(
+        job, {"_id": "facade-tok"}, "<executable/>", ["worker-1", "worker-2"]
+    )
+
+    # Facade token leads; the captured per-hook upload tokens follow.
+    assert model.updated[0][_TOKENS] == ["facade-tok", "worker-1", "worker-2"]
+
+
+def test_bind_job_outputs_dedups_facade_token_in_set(monkeypatch):
+    job = {"_id": ObjectId()}
+    model = _installJob(monkeypatch, _FakeJob([job]))
+
+    # A capture that also swept in the facade token must not duplicate it.
+    processing._bindJobOutputs(
+        job, {"_id": "facade-tok"}, "<executable/>", ["facade-tok", "worker-1"]
+    )
+
+    assert model.updated[0][_TOKENS] == ["facade-tok", "worker-1"]
+
+
+# ---------------------------------------------------------------------------
+# _capturedUploadTokens — the DATA_WRITE tokens girder_worker_utils mints per
+# result-hook while subHandler runs (the real upload tokens)
+# ---------------------------------------------------------------------------
+
+def _installTokenModel(monkeypatch, model):
+    import girder.models.token as token_module
+    monkeypatch.setattr(token_module, "Token", lambda: model)
+    return model
+
+
+def test_captured_upload_tokens_filters_by_user_scope_and_window(monkeypatch):
+    seen = {}
+
+    class _FakeTokenModel:
+        def find(self, query):
+            seen["query"] = query
+            return [{"_id": "worker-1"}, {"_id": "worker-2"}]
+
+    _installTokenModel(monkeypatch, _FakeTokenModel())
+    since = datetime.datetime(2026, 7, 4, 0, 0, 0)
+    until = datetime.datetime(2026, 7, 4, 0, 0, 1)
+
+    out = processing._capturedUploadTokens({"_id": "user-1"}, since, until)
+
+    assert out == ["worker-1", "worker-2"]
+    q = seen["query"]
+    assert q["userId"] == "user-1"
+    assert q["scope"] == processing.TokenScope.DATA_WRITE
+    assert q["created"] == {"$gte": since, "$lte": until}
+
+
+def test_captured_upload_tokens_swallows_db_errors(monkeypatch):
+    class _BoomToken:
+        def find(self, query):
+            raise RuntimeError("db down")
+
+    _installTokenModel(monkeypatch, _BoomToken())
+    # A capture failure must never fail a submit — degrade to no auto-attach, not a 500.
+    assert processing._capturedUploadTokens(
+        {"_id": "u"}, datetime.datetime(2026, 7, 4), datetime.datetime(2026, 7, 4)
+    ) == []
+
+
+def test_captured_upload_tokens_no_user_is_empty():
+    assert processing._capturedUploadTokens(
+        {}, datetime.datetime(2026, 7, 4), datetime.datetime(2026, 7, 4)
+    ) == []
 
 
 # ---------------------------------------------------------------------------

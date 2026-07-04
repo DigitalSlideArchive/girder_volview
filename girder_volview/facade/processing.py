@@ -893,15 +893,22 @@ def _projectJobHandle(job):
 # ``_onUpload`` prior art, generalized to N outputs):
 #
 #   * At submit, ``_bindJobOutputs`` records on the job (plain ``otherFields`` — no
-#     schema change) the declared output specs and the job's own token.
+#     schema change) the declared output specs and the set of tokens an output
+#     upload may arrive under (see next bullet).
 #   * Each output file ``girder_worker`` uploads carries slicer_cli_web's per-run
 #     reference (``prepare_task.py`` stamps the output ``identifier`` + a per-run
 #     ``uuid`` on every ``GirderUploadVolumePathToFolder`` hook). The ``data.process``
-#     handler ``_recordJobOutput`` correlates that upload back to THIS job — by the
-#     job's token, which ``girder_worker`` uploads under — and records the file id
-#     keyed by ``identifier`` (dotted ``$set`` key → each output binds under its own
-#     key, so N outputs never overwrite, unlike slicer_cli_web's single
-#     ``slicerCLIBindings.outputs.parameters``).
+#     handler ``_recordJobOutput`` correlates that upload back to THIS job by the
+#     token it arrives under, and records the file id keyed by ``identifier`` (dotted
+#     ``$set`` key → each output binds under its own key, so N outputs never
+#     overwrite, unlike slicer_cli_web's single ``slicerCLIBindings.outputs.parameters``).
+#   * That upload token is NOT the facade's own job token: girder_worker_utils'
+#     ``GirderClientTransform`` mints a *fresh* DATA_WRITE token per result-hook
+#     GirderClient (``girder_io.py``) and the worker uploads each output under one of
+#     THOSE. So ``_bindJobOutputs`` records the SET of tokens minted while building the
+#     hooks (``_capturedUploadTokens``, captured tightly around the ``subHandler`` call),
+#     and ``_jobForOutputUpload`` matches that set — narrowed by the declared
+#     ``identifier`` so overlapping same-user submits never cross.
 #   * ``_collectJobResults`` reads those ids OFF the job. No name is ever matched,
 #     so the race is gone.
 # ---------------------------------------------------------------------------
@@ -910,7 +917,11 @@ def _projectJobHandle(job):
 # READ-exposed (``addProcessingRoutes``); the job's own ACL is the gate.
 _OUTPUTS_FIELD = "volviewOutputs"          # {identifier: str(fileId)}
 _OUTPUT_SPECS_FIELD = "volviewOutputSpecs"  # [{name, tag, isLabel, fileExtensions}]
-_JOB_TOKEN_FIELD = "volviewJobToken"       # str(token _id) — data.process key
+_JOB_TOKEN_FIELD = "volviewJobToken"       # str(token _id) — facade's own job token
+_JOB_TOKENS_FIELD = "volviewJobTokens"     # [str(token _id)] — every token an output
+#                                            upload may arrive under (the facade token
+#                                            PLUS the per-hook tokens girder_worker_utils
+#                                            mints); the real data.process correlation key
 
 # Launch-context stamp (Chunk 19, D5). Girder jobs are user-owned, not
 # folder-linked, and the Chunk-17 output-reference binding adds no job->folder
@@ -953,13 +964,16 @@ def _parseOutputReference(raw):
 def _jobForOutputUpload(ref, info):
     """Find the job an output upload belongs to — reference-bound, never by name.
 
-    Primary correlation is the job's own token: ``_bindJobOutputs`` records
-    ``token._id`` on the job at submit, and ``girder_worker`` uploads each output
-    under that same job token, so the ``data.process`` event's ``currentToken``
-    identifies exactly one job (per-job token → no cross-job collision). A
-    facade-minted reference may also carry the job id directly; it is honored when
-    present. Returns the job doc, or ``None`` (fail closed — an uncorrelated upload
-    is never recorded onto some other job).
+    Correlation is by the token the upload arrives under. girder_worker does NOT
+    upload under the facade's own job token: girder_worker_utils' ``GirderClientTransform``
+    mints a fresh DATA_WRITE token per result-hook and uploads each output under one
+    of those, so ``_bindJobOutputs`` records them all as ``_JOB_TOKENS_FIELD`` at submit
+    (``_capturedUploadTokens``). The match is narrowed by the reference ``identifier``
+    against the job's declared output specs, so two overlapping same-user submits whose
+    capture windows touch can never cross (a token in both sets still resolves to the job
+    that actually declares that output). A facade-minted reference may also carry the job
+    id directly; it is honored when present. Returns the job doc, or ``None`` (fail closed
+    — an uncorrelated upload is never recorded onto some other job).
     """
     from girder_jobs.models.job import Job as JobModel
     jobId = ref.get("jobId")
@@ -973,9 +987,21 @@ def _jobForOutputUpload(ref, info):
             return job
     token = info.get("currentToken")
     tokenId = token.get("_id") if isinstance(token, dict) else None
-    if tokenId:
-        return JobModel().findOne({_JOB_TOKEN_FIELD: str(tokenId)})
-    return None
+    if not tokenId:
+        return None
+    tokenId = str(tokenId)
+    # Primary: the token is one of the per-hook upload tokens captured at submit,
+    # narrowed by the declared output identifier.
+    query = {_JOB_TOKENS_FIELD: tokenId}
+    identifier = ref.get("identifier")
+    if isinstance(identifier, str) and identifier:
+        query["%s.name" % _OUTPUT_SPECS_FIELD] = identifier
+    job = JobModel().findOne(query)
+    if isinstance(job, dict):
+        return job
+    # Back-compat: a job stamped before token-set capture carried only the single
+    # facade token (its data.process events were synthesized under that same token).
+    return JobModel().findOne({_JOB_TOKEN_FIELD: tokenId})
 
 
 def _tagJobOutputItem(fileDoc):
@@ -1040,25 +1066,67 @@ def _recordJobOutput(event):
     _tagJobOutputItem(fileDoc)
 
 
-def _bindJobOutputs(job, token, cli_xml):
+def _bindJobOutputs(job, token, cli_xml, uploadTokens=None):
     """Record on the job everything reference-bound collection needs (D5).
 
     The declared output specs (so collection needs no CLIItem lookup and no
-    ``_original_params``), the job's own token (the ``data.process`` correlation
-    key), and an empty id map the handler fills in. Split out from ``_genDockerJob``
-    so it is unit-testable without slicer_cli_web: a pure ``updateJob`` write, the
-    same otherFields-on-job pattern ``_markJobTransients`` uses. Not a schema change.
+    ``_original_params``), the set of tokens an output upload may arrive under (the
+    ``data.process`` correlation key — see ``_jobForOutputUpload``), and an empty id
+    map the handler fills in. ``uploadTokens`` are the per-hook tokens captured around
+    ``subHandler`` (``_capturedUploadTokens``); the facade's own ``token`` is always
+    included first so a synthesized event under it (offline tests, older callers) still
+    correlates. Split out from ``_genDockerJob`` so it is unit-testable without
+    slicer_cli_web: a pure ``updateJob`` write, the same otherFields-on-job pattern
+    ``_markJobTransients`` uses. Not a schema change.
     """
     from girder_jobs.models.job import Job as JobModel
     specs = _parseCliOutputs(cli_xml or "")
+    tokens = [str(token["_id"])]
+    for extra in (uploadTokens or []):
+        extra = str(extra)
+        if extra not in tokens:
+            tokens.append(extra)
     try:
         JobModel().updateJob(job, otherFields={
             _OUTPUT_SPECS_FIELD: specs,
             _JOB_TOKEN_FIELD: str(token["_id"]),
+            _JOB_TOKENS_FIELD: tokens,
             _OUTPUTS_FIELD: {},
         })
     except Exception:
         logger.exception("Failed to bind outputs on job %s", job.get("_id"))
+
+
+def _capturedUploadTokens(user, since, until):
+    """Ids of the DATA_WRITE tokens minted for ``user`` during job build (D5 fix).
+
+    girder_worker_utils' ``GirderClientTransform`` mints a *fresh* DATA_READ/DATA_WRITE
+    token per result-hook GirderClient (``girder_io.py``) and the worker uploads each
+    output under one of those — never the facade's own job token. ``_genDockerJob``
+    captures them by querying the tokens this user gained over the (tight) ``subHandler``
+    window; ``_bindJobOutputs`` records them so ``_recordJobOutput`` can correlate the
+    upload back to this job. Best-effort: a capture failure must never fail a submit —
+    results simply won't auto-attach (the pre-fix behavior), never a 500.
+
+    The window is scoped to this user + DATA_WRITE scope + [since, until]; extra tokens
+    swept in are harmless (they only matter if an output arrives under them). The one
+    residual is two *same-task* same-user submits whose windows overlap — identifier
+    narrowing in ``_jobForOutputUpload`` disambiguates every other concurrent case.
+    """
+    userId = user.get("_id") if isinstance(user, dict) else getattr(user, "_id", None)
+    if userId is None:
+        return []
+    from girder.models.token import Token
+    try:
+        cursor = Token().find({
+            "userId": userId,
+            "scope": TokenScope.DATA_WRITE,
+            "created": {"$gte": since, "$lte": until},
+        })
+        return [str(doc["_id"]) for doc in cursor]
+    except Exception:
+        logger.exception("Failed to capture upload tokens for user %s", userId)
+        return []
 
 
 def _recordedJobOutputs(job):
@@ -1306,13 +1374,20 @@ def _genDockerJob(cliItem, params, user):
     token = Token().createToken(
         user=user, scope=[TokenScope.DATA_READ, TokenScope.DATA_WRITE]
     )
+    # Capture the tokens girder_worker_utils mints WHILE building the result-hooks
+    # (a fresh DATA_WRITE token per hook — the worker uploads each output under one of
+    # THOSE, never `token`; girder_io.py). Bounded tightly around the synchronous
+    # subHandler call so the window is just this submit. See _capturedUploadTokens.
+    since = datetime.datetime.utcnow()
     # Take a copy so the handler can mutate freely.
     job_obj = handler.subHandler(cliItem, copy.deepcopy(params), user, token)
+    until = datetime.datetime.utcnow()
     job = job_obj.job if hasattr(job_obj, "job") else job_obj
-    # Reference-bound outputs (D5): record the declared output specs + this job's
-    # token so the data.process handler can correlate each uploaded output back to
-    # THIS job (by token) and record its file id keyed by output identifier.
-    _bindJobOutputs(job, token, cliItem.xml)
+    # Reference-bound outputs (D5): record the declared output specs + the set of
+    # tokens an output upload may arrive under so the data.process handler can
+    # correlate each uploaded output back to THIS job and record its file id keyed by
+    # output identifier.
+    _bindJobOutputs(job, token, cliItem.xml, _capturedUploadTokens(user, since, until))
     return job
 
 
