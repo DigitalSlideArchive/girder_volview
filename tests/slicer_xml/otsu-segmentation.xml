@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<executable>
+  <category>Radiology</category>
+  <title>Otsu Multi-level Segmentation</title>
+  <description>Segment a volume into N intensity bins via Otsu's multi-thresholding. Emits a labelmap and a JSON sidecar of per-label names + RGB colors. Backed by SimpleITK.</description>
+  <version>0.1.0</version>
+  <license>Apache 2.0</license>
+  <contributor>VolView</contributor>
+  <parameters>
+    <label>IO</label>
+    <description>Input/output parameters.</description>
+    <image>
+      <name>inputVolume</name>
+      <label>Input Volume</label>
+      <channel>input</channel>
+      <description>Input volume (DICOM, NIfTI, NRRD, MHA, etc.)</description>
+      <index>0</index>
+    </image>
+    <image type="label" fileExtensions=".nii.gz" reference="inputVolume">
+      <name>outputLabelmap</name>
+      <label>Output Labelmap</label>
+      <channel>output</channel>
+      <description>Multi-label segmentation NIfTI.</description>
+      <index>1</index>
+    </image>
+    <file fileExtensions=".json" reference="inputVolume">
+      <name>outputLabels</name>
+      <label>Output Labels (JSON)</label>
+      <channel>output</channel>
+      <description>Sidecar JSON: per-label name + RGB color.</description>
+      <longflag>labels-json</longflag>
+    </file>
+  </parameters>
+  <parameters>
+    <label>Segmentation parameters</label>
+    <description>Tuning.</description>
+    <integer>
+      <name>numberOfLevels</name>
+      <label>Number of levels</label>
+      <description>How many foreground labels to produce. Otsu picks N thresholds; you get N+1 bins (including background).</description>
+      <longflag>levels</longflag>
+      <default>4</default>
+      <constraints>
+        <minimum>2</minimum>
+        <maximum>8</maximum>
+        <step>1</step>
+      </constraints>
+    </integer>
+  </parameters>
+</executable>

@@ -26,6 +26,7 @@ from girder.models.folder import Folder
 from girder.models.item import Item
 
 from ..csrf import csrfProtect
+from .slicer_spec import translate_slicer_xml
 
 # ---------------------------------------------------------------------------
 # SourceRef — provider-owned opaque handle
@@ -1172,6 +1173,28 @@ def getTaskXml(self, folder, taskId):
     return cliItem.xml
 
 
+@access.public(cookie=True, scope=TokenScope.DATA_READ)
+@boundHandler
+@autoDescribeRoute(
+    Description("Get the VolView task spec for a task.")
+    .modelParam("folderId", model=Folder, level=AccessType.READ)
+    .param("taskId", "The task identifier.", paramType="path")
+)
+def getTaskSpec(self, folder, taskId):
+    # Seam 2 (Chunk 6): the facade translates the Slicer XML into VolView's own
+    # task spec server-side (D2), so the client never parses backend XML. Runs
+    # alongside getTaskXml until the client switches (getTaskXml is removed in
+    # Chunk 13). Same scope guards as getTaskXml: an out-of-scope / unknown /
+    # slicer_cli_web-missing taskId 404s identically.
+    user = self.getCurrentUser()
+    if not _slicerCliAvailable():
+        raise RestException("slicer_cli_web is not installed", code=404)
+    cliItem = _findScopedCliItem(taskId, user)
+    if not cliItem:
+        raise RestException("Unknown taskId", code=404)
+    return translate_slicer_xml(cliItem.xml, cliItem.name)
+
+
 def _genDockerJob(cliItem, params, user):
     """Create the slicer_cli_web docker job for a CLI item and return its doc.
 
@@ -1303,6 +1326,11 @@ def addProcessingRoutes(info):
         "GET",
         (":folderId", "volview_processing", "tasks", ":taskId", "xml"),
         getTaskXml,
+    )
+    info["apiRoot"].folder.route(
+        "GET",
+        (":folderId", "volview_processing", "tasks", ":taskId", "spec"),
+        getTaskSpec,
     )
     info["apiRoot"].folder.route(
         "POST",

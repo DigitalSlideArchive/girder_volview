@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<executable>
+  <category>Radiology</category>
+  <title>Threshold Segmentation</title>
+  <description>Label voxels whose intensity falls between two thresholds. Emits a labelmap and a JSON sidecar of per-label names + RGB colors. Backed by SimpleITK.</description>
+  <version>0.1.0</version>
+  <license>Apache 2.0</license>
+  <contributor>VolView</contributor>
+  <parameters>
+    <label>IO</label>
+    <description>Input/output parameters.</description>
+    <image>
+      <name>inputVolume</name>
+      <label>Input Volume</label>
+      <channel>input</channel>
+      <description>Input volume (DICOM, NIfTI, NRRD, MHA, etc.)</description>
+      <index>0</index>
+    </image>
+    <image type="label" fileExtensions=".nii.gz" reference="inputVolume">
+      <name>outputLabelmap</name>
+      <label>Output Labelmap</label>
+      <channel>output</channel>
+      <description>Binary labelmap NIfTI.</description>
+      <index>1</index>
+    </image>
+    <file fileExtensions=".json" reference="inputVolume">
+      <name>outputLabels</name>
+      <label>Output Labels (JSON)</label>
+      <channel>output</channel>
+      <description>Sidecar JSON: per-label name + RGB color.</description>
+      <longflag>labels-json</longflag>
+    </file>
+  </parameters>
+  <parameters>
+    <label>Threshold parameters</label>
+    <description>Intensity window to label.</description>
+    <double>
+      <name>lowerThreshold</name>
+      <label>Lower Threshold</label>
+      <description>Lowest intensity to include (inclusive).</description>
+      <longflag>lower</longflag>
+      <default>50</default>
+    </double>
+    <double>
+      <name>upperThreshold</name>
+      <label>Upper Threshold</label>
+      <description>Highest intensity to include (inclusive).</description>
+      <longflag>upper</longflag>
+      <default>65535</default>
+    </double>
+  </parameters>
+</executable>
