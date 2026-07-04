@@ -41,6 +41,7 @@ API_ROOT = GIRDER_URL.rstrip("/") + "/api/v1"
 ADMIN_USER = os.environ.get("DSA_ADMIN_USER", "admin")
 ADMIN_PASS = os.environ.get("DSA_ADMIN_PASS", "password")
 OTSU_TITLE_PREFIX = "Otsu"
+THRESHOLD_TITLE_PREFIX = "Threshold"
 
 # A same-origin browser signal satisfies the facade's CSRF guard (Ch3) on the
 # write routes (runTask); a server-to-server client sends none, so we add the
@@ -184,15 +185,19 @@ def _upload_item(gc, folder_id, item_name, file_paths):
     return item, list(gc.listFile(item["_id"]))
 
 
-def _find_otsu(gc, folder_id):
+def _find_task(gc, folder_id, prefix):
     tasks = gc.get("folder/%s/volview_processing/tasks" % folder_id)
     for task in tasks:
-        if (task.get("title") or "").startswith(OTSU_TITLE_PREFIX):
+        if (task.get("title") or "").startswith(prefix):
             return task
     pytest.skip(
-        "OtsuSegmentation task not registered (run ./ensure-radiology-cli.sh); "
-        "tasks=%s" % [t.get("title") for t in tasks]
+        "%s task not registered (run ./ensure-radiology-cli.sh); tasks=%s"
+        % (prefix, [t.get("title") for t in tasks])
     )
+
+
+def _find_otsu(gc, folder_id):
+    return _find_task(gc, folder_id, OTSU_TITLE_PREFIX)
 
 
 def _run_task(gc, folder_id, task_id, values):
@@ -291,6 +296,56 @@ def test_single_volume_result_correlates_to_job(gc, e2e_folder, tmp_path):
 
     final = _poll_terminal(gc, job_id)
     _assert_labelmap_result(gc, job_id, final)
+
+
+# ---------------------------------------------------------------------------
+# 1b. Crash path -- a CLI that raises must reach ERROR, not a silent success
+# ---------------------------------------------------------------------------
+
+def test_crashed_cli_reports_error_not_silent_success(gc, e2e_folder, tmp_path):
+    """A CLI that raises (ThresholdSegmentation with lower > upper) must drive the
+    job to ERROR with a non-empty log tail, and /results must return the explicit
+    non-success 400 -- never a silent success with empty results.
+
+    This is the dispatcher-honesty payoff (Chunk 26): ``cli_list`` now propagates
+    the child's exit code, so girder_worker sees a non-zero exit and marks the job
+    failed. On the pre-fix image the crashed CLI exited 0, the job reported
+    ``success``, and ``/results`` was a silent ``[]``.
+    """
+    import girder_client
+
+    nrrd = _write_nrrd(str(tmp_path / "phantom.nrrd"))
+    _, files = _upload_item(gc, e2e_folder["_id"], "crash-input", [nrrd])
+    uris = [_proxiable_uri(f) for f in files]
+
+    task = _find_task(gc, e2e_folder["_id"], THRESHOLD_TITLE_PREFIX)
+    values = {
+        "inputVolume": {"type": "image", "uris": uris},
+        "lowerThreshold": 200,
+        "upperThreshold": 100,  # lower > upper => the CLI raises before any output
+    }
+    submitted = _run_task(gc, e2e_folder["_id"], task["id"], values)
+    job_id = submitted["jobId"]
+
+    final = _poll_terminal(gc, job_id)
+    assert final.get("state") == "error", (
+        "crashed CLI did not surface as error: state=%s -- the dispatcher swallowed "
+        "the child exit code?" % final.get("state")
+    )
+    job = gc.get("job/%s" % job_id)
+    log_tail = "".join((job.get("log") or [])[-25:])
+    combined = (final.get("errorTail") or "") + log_tail
+    assert combined.strip(), "error job carried no log tail"
+    # Specifically the lower>upper guard fired -- not some unrelated failure --
+    # so this stays a regression wall for the crash path, not just "any error".
+    assert "Lower threshold" in combined, (
+        "error tail did not mention the threshold guard: %r" % combined[-500:]
+    )
+
+    # /results is an explicit permanent error (400), not an empty list.
+    with pytest.raises(girder_client.HttpError) as exc:
+        gc.get("volview_processing/jobs/%s/results" % job_id)
+    assert exc.value.status == 400
 
 
 # ---------------------------------------------------------------------------
