@@ -31,12 +31,16 @@ def _providerConfigForFolder(folder, user):
     # No advertised sources: the client mints its own input refs from the
     # on-screen volume's provenance (D10 — grouping moved to the client), so the
     # facade advertises only where to reach the provider, not what is loaded.
+    #
+    # The client zod schema (`src/processing/config.ts` processingProviderConfig)
+    # reads only id/label/baseUrl/context. The former `protocol`/`auth` keys were
+    # vestigial wire fields the client never read (ARCHITECTURE-REVIEW §4.6) and
+    # were removed in Chunk 32 — a `protocol` field is "a standing invitation to
+    # switch on it". Absent shapes stay compatible (zod strips unknown keys).
     return {
         "id": "girder-slicer-cli",
         "label": "Analysis",
-        "protocol": "slicer-cli",
         "baseUrl": _providerBaseUrl(folder),
-        "auth": "same-origin",
         "context": {},
     }
 
@@ -139,56 +143,3 @@ from .routes import (  # noqa: E402,F401
     stageInput,
     _JobResource,
 )
-
-
-# ---------------------------------------------------------------------------
-# Legacy duplicate XML walks — retained here after the code motion so their
-# removal lands as an isolated deletion (they are dead: the split modules call
-# slicer_spec.parse_cli instead). Deleted next commit.
-# ---------------------------------------------------------------------------
-
-def _cliCategory(xmlText):
-    """Return a CLI's declared ``<category>`` (stripped) or None if absent/bad."""
-    if not xmlText:
-        return None
-    import xml.etree.ElementTree as ET
-    try:
-        root = ET.fromstring(xmlText)
-    except ET.ParseError:
-        return None
-    el = root.find("category")
-    if el is None or not el.text:
-        return None
-    return el.text.strip() or None
-
-
-def _parseCliOutputs(xmlText):
-    """Parse `<image channel=output>` / `<file channel=output>` from XML.
-
-    Returns a list of dicts:
-        [{name, tag, isLabel, fileExtensions}]
-    Recorded on the job at submit (`_bindJobOutputs`) as the declared output
-    descriptors result collection projects each reference-bound file through.
-    """
-    import xml.etree.ElementTree as ET
-    try:
-        root = ET.fromstring(xmlText)
-    except ET.ParseError:
-        return []
-    outputs = []
-    for param in root.iter():
-        channelEl = param.find("channel")
-        if channelEl is None or (channelEl.text or "").strip() != "output":
-            continue
-        if param.tag not in {"image", "file"}:
-            continue
-        nameEl = param.find("name")
-        if nameEl is None or not nameEl.text:
-            continue
-        outputs.append({
-            "name": nameEl.text.strip(),
-            "tag": param.tag,
-            "isLabel": param.get("type") == "label",
-            "fileExtensions": (param.get("fileExtensions") or "").lower(),
-        })
-    return outputs
