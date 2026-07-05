@@ -965,6 +965,16 @@
           },
           "finishedAt": {
             "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "success",
+              "error",
+              "cancelled"
+            ]
           }
         },
         "required": [

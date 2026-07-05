@@ -813,8 +813,16 @@ def _translateValuesToSlicerParams(values, user, folder):
     return params
 
 
-def _projectJobStatus(job):
-    """Convert Girder Job status to ProcessingJobStatus."""
+def _projectJobState(job):
+    """The neutral projected job state (a ``jobStateSchema`` value) from Girder's
+    ``JobStatus``.
+
+    The single shared JobStatus->state map, read by BOTH the status projection
+    (``_projectJobStatus``) and the tier-2 handle projection
+    (``_projectJobHandle``) — so a handle's ``state`` can never diverge from the
+    status the client polls. A job with no ``status`` maps to ``"pending"`` (fail
+    closed). Neutral names only — never the girder ``JobStatus`` enum on the wire.
+    """
     from girder_jobs.constants import JobStatus
     state_map = {
         JobStatus.INACTIVE: "pending",
@@ -824,7 +832,12 @@ def _projectJobStatus(job):
         JobStatus.ERROR: "error",
         JobStatus.CANCELED: "cancelled",
     }
-    state = state_map.get(job.get("status"), "pending")
+    return state_map.get(job.get("status"), "pending")
+
+
+def _projectJobStatus(job):
+    """Convert Girder Job status to ProcessingJobStatus."""
+    state = _projectJobState(job)
     out = {"jobId": str(job["_id"]), "state": state}
     if state == "error":
         log = job.get("log") or []
@@ -865,12 +878,18 @@ def _projectFinishedAt(job):
 def _projectJobHandle(job):
     """Project a facade job into a neutral ``NeutralJobHandle`` (Chunk 19, D5).
 
-    ``{jobId, taskId, inputUris, finishedAt}`` — the SAME neutral shape the
+    ``{jobId, taskId, inputUris, finishedAt, state}`` — the SAME neutral shape the
     ``processing-contract`` golden fixture pins (the client never sees the Girder
     route, the ``JobStatus`` enum, or a file id). ``taskId`` + ``inputUris`` are
     read straight off the launch-context stamp; ``finishedAt`` is projected from
     the job's terminal timestamp. The ``inputUris`` re-associate results to the
     reloaded scene by matching the client's OWN provenance (Seam 1).
+
+    ``state`` (Chunk 27, tier-2 reload economy) is the neutral projected job state
+    from the SAME shared map ``_projectJobStatus`` uses, so a client re-discovering
+    a terminal-non-success handle records it WITHOUT a ``getJob`` round-trip. It is
+    an OPTIONAL contract field; the reference facade always emits it, and a
+    pre-upgrade facade that omits it stays wire-compatible.
     """
     inputUris = job.get(_INPUT_URIS_FIELD)
     return {
@@ -878,6 +897,7 @@ def _projectJobHandle(job):
         "taskId": str(job.get(_TASK_ID_FIELD) or ""),
         "inputUris": list(inputUris) if isinstance(inputUris, list) else [],
         "finishedAt": _projectFinishedAt(job),
+        "state": _projectJobState(job),
     }
 
 

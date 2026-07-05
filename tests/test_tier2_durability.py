@@ -113,6 +113,7 @@ def test_projected_handle_shape_matches_the_golden_fixture():
     jid = ObjectId()
     job = {
         "_id": jid,
+        "status": JobStatus.SUCCESS,
         processing._TASK_ID_FIELD: "OtsuSegmentation",
         processing._INPUT_URIS_FIELD: [
             "/api/v1/file/6600000000000000000000a1/proxiable/1-001.dcm",
@@ -124,26 +125,58 @@ def test_projected_handle_shape_matches_the_golden_fixture():
     handle = processing._projectJobHandle(job)
 
     # Same key set as the frozen golden fixture (jobId + taskId + inputUris +
-    # finishedAt) — the client never sees a route, the JobStatus enum, or a file id.
+    # finishedAt + the Chunk-27 neutral `state`) — the client never sees a route,
+    # the JobStatus enum, or a file id.
     fixture = contract_loader.load_fixture("wire/job-handle.json")
     assert set(handle) == set(fixture)
     assert handle["jobId"] == str(jid)
     assert handle["taskId"] == "OtsuSegmentation"
     assert handle["inputUris"] == fixture["inputUris"]
     assert handle["finishedAt"] == fixture["finishedAt"]
+    # `state` is the neutral projected state (Chunk 27), sourced from the SAME map
+    # `_projectJobStatus` uses — matching the golden fixture's terminal-success.
+    assert handle["state"] == "success"
+    assert handle["state"] == fixture["state"]
     # ...and validates against the generated JSON Schema.
     _job_handle_validator().validate(handle)
+
+
+def test_projected_handle_carries_the_neutral_terminal_non_success_state():
+    # Chunk 27: a terminal-non-success job projects `state` so the client can
+    # record it WITHOUT a getJob round-trip. Same map/spelling the golden
+    # terminal-error variant fixture pins (`error`, never girder `ERROR`).
+    from girder_jobs.constants import JobStatus
+    from bson.objectid import ObjectId
+    job = {
+        "_id": ObjectId(),
+        "status": JobStatus.ERROR,
+        processing._TASK_ID_FIELD: "ThresholdSegmentation",
+        processing._INPUT_URIS_FIELD: [
+            "/api/v1/file/6600000000000000000000b1/proxiable/1-001.dcm",
+        ],
+        "timestamps": [_ts(JobStatus.ERROR,
+                       datetime.datetime(2026, 7, 3, 18, 30, 0))],
+    }
+    handle = processing._projectJobHandle(job)
+    variant = contract_loader.load_fixture("wire/job-handle.terminal-error.json")
+    assert handle["state"] == "error"
+    assert handle["state"] == variant["state"]
+    _job_handle_validator().validate(handle)
+    # The golden terminal-error variant is itself schema-valid on this side too.
+    _job_handle_validator().validate(variant)
 
 
 def test_projected_handle_defaults_are_schema_valid_for_a_bare_job():
     # A job missing the launch-context stamp (should not happen for facade jobs,
     # but must never crash the listing) projects to empty taskId/inputUris + an
-    # empty finishedAt, all still schema-valid strings/arrays.
+    # empty finishedAt, all still schema-valid strings/arrays. A job with no
+    # `status` fails closed to the neutral `pending` state (Chunk 27).
     from bson.objectid import ObjectId
     handle = processing._projectJobHandle({"_id": ObjectId()})
     assert handle["taskId"] == ""
     assert handle["inputUris"] == []
     assert handle["finishedAt"] == ""
+    assert handle["state"] == "pending"
     _job_handle_validator().validate(handle)
 
 

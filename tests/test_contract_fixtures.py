@@ -38,6 +38,9 @@ def test_wire_fixtures_load():
     assert len(wire["input-value.dicom-series"]["uris"]) > 1
     assert wire["input-value.labelmap"]["type"] == "labelmap"
     assert wire["job-handle"]["inputUris"]
+    # Chunk 27: the neutral projected `state` rides along on the handle fixtures.
+    assert wire["job-handle"]["state"] == "success"
+    assert wire["job-handle.terminal-error"]["state"] == "error"
     assert wire["job-results.missing"]["missing"] == 2
     assert wire["job-results.error"]["state"] == "error"
 

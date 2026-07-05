@@ -1,0 +1,9 @@
+{
+  "jobId": "job-def456",
+  "taskId": "ThresholdSegmentation",
+  "inputUris": [
+    "/api/v1/file/6600000000000000000000b1/proxiable/1-001.dcm"
+  ],
+  "finishedAt": "2026-07-03T18:30:00.000000+00:00",
+  "state": "error"
+}

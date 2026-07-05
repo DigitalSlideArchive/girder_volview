@@ -201,14 +201,19 @@ def test_handles_match_generated_schema_and_finished_at_gates_on_terminal(
     validator = _handle_validator()
     byId = {}
     for handle in resp.json:
-        # Exactly the NeutralJobHandle keys — no route, no JobStatus enum, no file id.
-        assert set(handle) == {"jobId", "taskId", "inputUris", "finishedAt"}
+        # Exactly the NeutralJobHandle keys — no route, no JobStatus enum, no file
+        # id. `state` (Chunk 27) is the neutral projected status, not girder's enum.
+        assert set(handle) == {"jobId", "taskId", "inputUris", "finishedAt", "state"}
         validator.validate(handle)
         byId[handle["jobId"]] = handle
 
     # The succeeded job carries a real terminal instant; the running one is empty.
     assert byId[str(done["_id"])]["finishedAt"] != ""
     assert byId[str(running["_id"])]["finishedAt"] == ""
+    # ...and the neutral `state` (Chunk 27) tracks the same lifecycle, from the
+    # SAME map _projectJobStatus uses (neutral names, never girder's JobStatus).
+    assert byId[str(done["_id"])]["state"] == "success"
+    assert byId[str(running["_id"])]["state"] == "running"
 
 
 @pytest.mark.plugin("volview")
