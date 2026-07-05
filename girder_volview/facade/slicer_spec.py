@@ -192,6 +192,20 @@ def _parse_panel(panel_el):
     return groups
 
 
+def _params_from_root(root):
+    """Ordered parsed params across every ``<parameters>`` panel (shared walk).
+
+    Extracted so the strict spec path (``_parse_executable``) and the tolerant
+    facade surface (``parse_cli``) reuse the one panel/group/param walk.
+    """
+    params = []
+    for panel_el in _all_children(root, "parameters"):
+        for section, param_els in _parse_panel(panel_el):
+            for param_el in param_els:
+                params.append(_parse_param(param_el, section))
+    return params
+
+
 def _parse_executable(xml_text):
     try:
         root = ET.fromstring(xml_text)
@@ -199,16 +213,67 @@ def _parse_executable(xml_text):
         raise ValueError("Invalid Slicer CLI XML: {}".format(exc))
     if root.tag != "executable":
         raise ValueError("Slicer CLI XML missing <executable>")
-    params = []
-    for panel_el in _all_children(root, "parameters"):
-        for section, param_els in _parse_panel(panel_el):
-            for param_el in param_els:
-                params.append(_parse_param(param_el, section))
     return {
         "title": _child_text(root, "title"),
         "description": _child_text(root, "description"),
-        "params": params,
+        "params": _params_from_root(root),
     }
+
+
+# ---------------------------------------------------------------------------
+# Single-walk facade surface (Chunk 32) -- ``parse_cli`` consolidates the two
+# duplicate XML walks the facade used to run (the deleted
+# ``processing._cliCategory`` + ``processing._parseCliOutputs``) with the
+# parsed-param walk into ONE ElementTree parse (ARCHITECTURE-REVIEW §5.2 "One XML
+# walk, not three"). Mappings are PORTED, not reinvented (D2): the emitted
+# ``<category>`` text and ``{name, tag, isLabel, fileExtensions}`` descriptors are
+# byte-for-byte what the deleted walkers produced.
+# ---------------------------------------------------------------------------
+
+
+def parse_cli(xml_text):
+    """Parse a Slicer CLI XML once into ``{category, outputs, params}``.
+
+    A SINGLE ElementTree walk replacing the facade's two duplicate walks
+    (``processing._cliCategory`` + ``processing._parseCliOutputs``): ``category``
+    (the stripped ``<category>``, or ``None``) is what D11 task scoping reads;
+    ``outputs`` is the ``{name, tag, isLabel, fileExtensions}`` descriptor list --
+    every ``<image>``/``<file>`` output-channel param declaring a ``<name>`` --
+    that reference-bound collection records and autofill reads; ``params`` is the
+    raw parsed-param list. The category/output shapes are byte-for-byte what the
+    deleted walkers produced (``isLabel`` = ``type == "label"``; ``fileExtensions``
+    lowercased).
+
+    Tolerant like the walkers it replaces: an unparseable document yields
+    ``{category: None, outputs: [], params: []}`` (a malformed CLI is out of
+    scope / autofills nothing). The strict spec path keeps ``_parse_executable``.
+    """
+    try:
+        root = ET.fromstring(xml_text or "")
+    except ET.ParseError:
+        return {"category": None, "outputs": [], "params": []}
+    category_el = root.find("category")
+    if category_el is not None and category_el.text:
+        category = category_el.text.strip() or None
+    else:
+        category = None
+    outputs = []
+    for param in root.iter():
+        channel_el = param.find("channel")
+        if channel_el is None or (channel_el.text or "").strip() != "output":
+            continue
+        if param.tag not in {"image", "file"}:
+            continue
+        name_el = param.find("name")
+        if name_el is None or not name_el.text:
+            continue
+        outputs.append({
+            "name": name_el.text.strip(),
+            "tag": param.tag,
+            "isLabel": param.get("type") == "label",
+            "fileExtensions": (param.get("fileExtensions") or "").lower(),
+        })
+    return {"category": category, "outputs": outputs, "params": _params_from_root(root)}
 
 
 # ---------------------------------------------------------------------------
