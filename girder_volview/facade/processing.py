@@ -27,6 +27,14 @@ def _providerBaseUrl(folder):
     return f"/api/v1/folder/{folder['_id']}/volview_processing"
 
 
+# The folder-free root for the job-addressed routes (status/results/cancel),
+# which are keyed by job id alone (D5) and mounted on the ``volview_processing``
+# resource -- a sibling of ``/folder`` (see routes.py ``_JobResource``). Advertised
+# explicitly so the client never string-surgeries the folder segment out of
+# ``baseUrl`` (ARCHITECTURE-REVIEW §4.6/§6.4).
+_JOBS_BASE_URL = "/api/v1/volview_processing"
+
+
 def _providerConfigForFolder(folder, user):
     # No advertised sources: the client mints its own input refs from the
     # on-screen volume's provenance (D10 — grouping moved to the client), so the
@@ -41,6 +49,7 @@ def _providerConfigForFolder(folder, user):
         "id": "girder-slicer-cli",
         "label": "Analysis",
         "baseUrl": _providerBaseUrl(folder),
+        "jobsBaseUrl": _JOBS_BASE_URL,
         "context": {},
     }
 

@@ -325,6 +325,24 @@ def test_provider_config_no_longer_advertises_loaded_sources():
     assert "activeSourceRef" not in serialized
 
 
+def test_provider_config_advertises_explicit_jobs_base_url():
+    # Chunk 33 (ARCHITECTURE-REVIEW §4.6/§6.4): the config block advertises the
+    # explicit folder-free root for the job-addressed routes (status/results/
+    # cancel) alongside the folder-scoped baseUrl, so the client never string-
+    # surgeries the folder segment out of baseUrl. It matches the _JobResource
+    # mount (routes.py) -- a sibling of /folder -- and is folder-independent.
+    folderId = ObjectId()
+    provider = processing.buildProcessingConfigBlock(
+        {"_id": folderId}, user=None
+    )["providers"][0]
+    assert provider["baseUrl"] == (
+        "/api/v1/folder/%s/volview_processing" % folderId
+    )
+    assert provider["jobsBaseUrl"] == "/api/v1/volview_processing"
+    # Folder-free: no launch folder id leaks into the jobs base.
+    assert str(folderId) not in provider["jobsBaseUrl"]
+
+
 # ---------------------------------------------------------------------------
 # Chunk 21 item (b): submit-boundary reserved-param deny-list (offline half).
 # The end-to-end 400 lives in test_input_resolution_routes; here the pure screen.
