@@ -11,8 +11,6 @@ This module owns the neutral projections the client polls and applies:
   result-read envelope (D5).
 """
 
-import json
-
 from girder import logger
 from girder.constants import AccessType
 from girder.exceptions import RestException
@@ -119,7 +117,7 @@ def _projectJobHandle(job):
 # Result intents + collection (Seam 2 / Seam 3, D3/D5) — reference-bound reads
 # ---------------------------------------------------------------------------
 
-def _intentForOutput(out, url, name, jobId, segments=None):
+def _intentForOutput(out, url, name, jobId):
     """Build the declarative result intent for one output (contract Seam 2, D3).
 
     Results cross the wire as declarative intents the client's single applier
@@ -131,60 +129,23 @@ def _intentForOutput(out, url, name, jobId, segments=None):
 
     A labelmap intent carries a ``source: {jobId, outputId}`` provenance tag
     (``outputId`` = the CLI's output identifier) so the created segment group
-    round-trips the ``.volview.zip`` (tier-2 idempotency key, Chunk 19). When the
-    bare-labelmap ``segments`` sidecar was folded in it is carried as the
-    optional ``segments`` payload; a ``seg.nrrd`` with embedded metadata carries
-    none and the client falls back to the file's own metadata. The returned
-    object validates against the contract ``result-intent`` schema.
+    round-trips the ``.volview.zip`` (tier-2 idempotency key, Chunk 19). A
+    labelmap's segment names/colors travel *inside* the ``.seg.nrrd`` file as
+    embedded metadata (Chunk 34) and are read client-side, so the facade sets no
+    ``segments`` payload (the wire field stays optional — a producer that embeds
+    its metadata simply never sets it). Validates against the contract
+    ``result-intent`` schema.
     """
     fileRef = {"url": url, "name": name}
     if out["isLabel"]:
-        intent = {
+        return {
             "intent": "add-segment-group",
             **fileRef,
             "source": {"jobId": str(jobId), "outputId": out["name"]},
         }
-        if segments:
-            intent["segments"] = segments
-        return intent
     if out["tag"] == "image":
         return {"intent": "add-base-image", **fileRef}
     return {"intent": "download", **fileRef}
-
-
-def _readLabelsSidecar(fileDoc):
-    """Read a small JSON sidecar listing per-label segment descriptors.
-
-    Returns a list like `[{"value": 1, "name": "...", "color": [r,g,b,a]}, ...]`
-    or `None` if the file isn't a parseable JSON list of labels.
-    """
-    if (fileDoc.get("size") or 0) > 256 * 1024:
-        return None  # not our sidecar
-    try:
-        chunks = File().download(fileDoc, headers=False)
-        raw = b"".join(chunks() if callable(chunks) else chunks)
-        data = json.loads(raw.decode("utf-8"))
-    except Exception:
-        return None
-    if not isinstance(data, list):
-        return None
-    cleaned = []
-    for entry in data:
-        if not isinstance(entry, dict):
-            continue
-        if "value" not in entry or "name" not in entry:
-            continue
-        color = entry.get("color")
-        if not isinstance(color, list) or len(color) not in (3, 4):
-            continue
-        if len(color) == 3:
-            color = list(color) + [255]
-        cleaned.append({
-            "value": int(entry["value"]),
-            "name": str(entry["name"]),
-            "color": [int(c) for c in color],
-        })
-    return cleaned or None
 
 
 def _recordedJobOutputs(job):
@@ -251,45 +212,19 @@ def _collectJobResults(job, user):
             continue
         resolved.append({"out": out, "fileDoc": fileDoc})
 
-    # Pass 2: find any JSON labels sidecars and pair them with labelmap outputs.
-    sidecars = []
-    for entry in list(resolved):
-        out = entry["out"]
-        fileDoc = entry["fileDoc"]
-        name = (fileDoc.get("name") or "").lower()
-        if out["tag"] == "file" and (
-            name.endswith(".json") or ".labels.json" in name
-        ):
-            labels = _readLabelsSidecar(fileDoc)
-            if labels:
-                sidecars.append(labels)
-                resolved.remove(entry)
-    # For now, pair-by-position: a sidecar attaches to the first labelmap output.
-    labelmap_entries = [
-        e for e in resolved
-        if e["out"]["tag"] == "image" and e["out"]["isLabel"]
-    ]
-
-    # Pass 3: project each remaining file into its declarative result intent
+    # Pass 2: project each resolved file into its declarative result intent
     # (contract Seam 2). The wire shape is the intent object itself — `{intent,
-    # url, name, segments?, source?}` — plus the `id`/`mimeType`/`size` file
-    # metadata the client's JobList reads. No `role`: the client applies the
-    # intent directly and never switches on a role (D3/D4).
+    # url, name, source?}` — plus the `id`/`mimeType`/`size` file metadata the
+    # client's JobList reads. No `role`: the client applies the intent directly
+    # and never switches on a role (D3/D4). A labelmap's segment names/colors
+    # travel inside the `.seg.nrrd` file (Chunk 34) and are read client-side, so
+    # the facade never content-sniffs an output or pairs a sidecar by position.
     results = []
     for entry in resolved:
         out = entry["out"]
         fileDoc = entry["fileDoc"]
         url = makeFileDownloadUrl(fileDoc)
-        # Fold the labels sidecar into the labelmap intent's `segments` payload
-        # so the client never learns the sidecar convention.
-        segments = None
-        if out["isLabel"] and sidecars and entry in labelmap_entries:
-            idx = labelmap_entries.index(entry)
-            if idx < len(sidecars):
-                segments = sidecars[idx]
-        intent = _intentForOutput(
-            out, url, fileDoc["name"], job["_id"], segments
-        )
+        intent = _intentForOutput(out, url, fileDoc["name"], job["_id"])
         result = {
             **intent,
             "id": str(fileDoc["_id"]),

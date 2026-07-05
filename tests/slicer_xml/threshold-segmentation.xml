@@ -2,7 +2,7 @@
 <executable>
   <category>Radiology</category>
   <title>Threshold Segmentation</title>
-  <description>Label voxels whose intensity falls between two thresholds. Emits a labelmap and a JSON sidecar of per-label names + RGB colors. Backed by SimpleITK.</description>
+  <description>Label voxels whose intensity falls between two thresholds. Emits a .seg.nrrd labelmap whose segment name and RGB color travel inside the file. Backed by ITK.</description>
   <version>0.1.0</version>
   <license>Apache 2.0</license>
   <contributor>VolView</contributor>
@@ -16,20 +16,13 @@
       <description>Input volume (DICOM, NIfTI, NRRD, MHA, etc.)</description>
       <index>0</index>
     </image>
-    <image type="label" fileExtensions=".nii.gz" reference="inputVolume">
+    <image type="label" fileExtensions=".seg.nrrd" reference="inputVolume">
       <name>outputLabelmap</name>
       <label>Output Labelmap</label>
       <channel>output</channel>
-      <description>Binary labelmap NIfTI.</description>
+      <description>Binary labelmap (.seg.nrrd) with the segment's embedded name and color.</description>
       <index>1</index>
     </image>
-    <file fileExtensions=".json" reference="inputVolume">
-      <name>outputLabels</name>
-      <label>Output Labels (JSON)</label>
-      <channel>output</channel>
-      <description>Sidecar JSON: per-label name + RGB color.</description>
-      <longflag>labels-json</longflag>
-    </file>
   </parameters>
   <parameters>
     <label>Threshold parameters</label>

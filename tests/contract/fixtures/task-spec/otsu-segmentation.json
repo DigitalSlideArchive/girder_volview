@@ -2,7 +2,7 @@
   "specVersion": 1,
   "id": "OtsuSegmentation",
   "title": "Otsu Multi-level Segmentation",
-  "description": "Segment a volume into N intensity bins via Otsu's multi-thresholding. Emits a labelmap and a JSON sidecar of per-label names + RGB colors. Backed by SimpleITK.",
+  "description": "Segment a volume into N intensity bins via Otsu's multi-thresholding. Emits a .seg.nrrd labelmap whose per-label names and RGB colors travel inside the file. Backed by ITK.",
   "parameters": [
     {
       "kind": "sourceRef",
@@ -12,7 +12,9 @@
       "section": "IO",
       "order": 0,
       "required": true,
-      "accepts": ["image"]
+      "accepts": [
+        "image"
+      ]
     },
     {
       "kind": "int",
@@ -31,16 +33,9 @@
     {
       "id": "outputLabelmap",
       "title": "Output Labelmap",
-      "help": "Multi-label segmentation NIfTI.",
+      "help": "Multi-label segmentation (.seg.nrrd) with embedded per-label names and colors.",
       "type": "labelmap",
-      "format": ".nii.gz"
-    },
-    {
-      "id": "outputLabels",
-      "title": "Output Labels (JSON)",
-      "help": "Sidecar JSON: per-label name + RGB color.",
-      "type": "file",
-      "format": ".json"
+      "format": ".seg.nrrd"
     }
   ]
 }

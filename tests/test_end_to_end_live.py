@@ -219,8 +219,24 @@ def _poll_terminal(gc, job_id, timeout=240):
     return last
 
 
-def _assert_labelmap_result(gc, job_id, final):
-    """Shared assertions: outputs bound + an add-segment-group result resolves."""
+def _seg_nrrd_header(gc, file_id, tmp_path):
+    """Download a `.seg.nrrd` output and return its plaintext NRRD header.
+
+    NRRD keeps its header (including custom `key:=value` fields) in plaintext
+    before the compressed data section, so the embedded segment metadata is
+    readable without itk — the same header itk-wasm surfaces to the client.
+    """
+    dest = str(tmp_path / ("out-%s.seg.nrrd" % file_id))
+    gc.downloadFile(file_id, dest)
+    with open(dest, "rb") as fh:
+        raw = fh.read()
+    header = raw.split(b"\n\n", 1)[0]
+    return header.decode("ascii", "replace")
+
+
+def _assert_labelmap_result(gc, job_id, final, tmp_path):
+    """Shared assertions: outputs bound + an add-segment-group result resolves,
+    with the segment names/colors embedded in the `.seg.nrrd` (Chunk 34)."""
     if final.get("state") != "success":
         job = gc.get("job/%s" % job_id)
         tail = "".join((job.get("log") or [])[-25:])
@@ -235,15 +251,26 @@ def _assert_labelmap_result(gc, job_id, final):
     assert outputs, "volviewOutputs empty -- output->job correlation broke (silent [])"
     assert "outputLabelmap" in outputs
 
-    results = gc.get("volview_processing/jobs/%s/results" % job_id)
-    assert results, "/results returned [] for a succeeded job"
-    seg = next((r for r in results if r.get("intent") == "add-segment-group"), None)
-    assert seg is not None, "no add-segment-group intent in %s" % results
+    # Chunk 28: /results is the `{intents, missing}` envelope.
+    payload = gc.get("volview_processing/jobs/%s/results" % job_id)
+    intents = payload["intents"] if isinstance(payload, dict) else payload
+    assert intents, "/results returned no intents for a succeeded job"
+    seg = next((r for r in intents if r.get("intent") == "add-segment-group"), None)
+    assert seg is not None, "no add-segment-group intent in %s" % intents
     # Correlated to THIS job, and the bound file is real + ACL-served.
     assert seg.get("source", {}).get("jobId") == job_id
-    assert seg.get("segments"), "labelmap decoded to no segments"
     fileDoc = gc.getFile(seg["id"])
     assert fileDoc and int(fileDoc.get("size") or 0) > 0
+    # Chunk 34: the segment name/color travel INSIDE the .seg.nrrd (the facade
+    # sets no `segments` payload) — prove it from the output file's own header.
+    assert seg["name"].endswith(".seg.nrrd"), (
+        "labelmap output is not a .seg.nrrd: %s" % seg.get("name")
+    )
+    assert "segments" not in seg, "facade should fold no sidecar (Chunk 34)"
+    header = _seg_nrrd_header(gc, seg["id"], tmp_path)
+    assert "Segment0_Name" in header and "Segment0_Color" in header, (
+        "embedded segment metadata missing from the .seg.nrrd header:\n%s" % header
+    )
     return seg
 
 
@@ -295,7 +322,7 @@ def test_single_volume_result_correlates_to_job(gc, e2e_folder, tmp_path):
     job_id = submitted["jobId"]
 
     final = _poll_terminal(gc, job_id)
-    _assert_labelmap_result(gc, job_id, final)
+    _assert_labelmap_result(gc, job_id, final, tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -379,4 +406,4 @@ def test_multifile_dicom_series_result_correlates_to_job(gc, e2e_folder, tmp_pat
     job_id = submitted["jobId"]
 
     final = _poll_terminal(gc, job_id)
-    _assert_labelmap_result(gc, job_id, final)
+    _assert_labelmap_result(gc, job_id, final, tmp_path)

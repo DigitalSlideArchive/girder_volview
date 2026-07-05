@@ -549,26 +549,20 @@ def test_collect_labelmap_projects_add_segment_group_with_source(monkeypatch):
     assert results[0]["source"] == {"jobId": str(job["_id"]), "outputId": "outSeg"}
 
 
-def test_collect_folds_labels_sidecar_into_segments(monkeypatch):
+def test_collect_labelmap_carries_no_segments_payload(monkeypatch):
+    # Chunk 34: a `.seg.nrrd` labelmap embeds its segment names/colors, which the
+    # client reads on load. The facade folds no JSON sidecar, so the
+    # add-segment-group intent carries no `segments` payload.
     _deterministicUrls(monkeypatch)
-    labels = [{"value": 1, "name": "liver", "color": [255, 0, 0, 255]}]
-    monkeypatch.setattr(results_mod, "_readLabelsSidecar", lambda f: labels)
-    segf, jsonf = ObjectId(), ObjectId()
-    _installFile(monkeypatch, {
-        str(segf): {"_id": segf, "name": "seg.nii.gz"},
-        str(jsonf): {"_id": jsonf, "name": "seg.labels.json"},
-    })
-    job = _job(
-        {"outSeg": str(segf), "outLabels": str(jsonf)},
-        [_spec("outSeg", tag="image", isLabel=True), _spec("outLabels", tag="file")],
-    )
+    fid = ObjectId()
+    _installFile(monkeypatch, {str(fid): {"_id": fid, "name": "seg.seg.nrrd"}})
+    job = _job({"outSeg": str(fid)}, [_spec("outSeg", tag="image", isLabel=True)])
 
     results, _ = processing._collectJobResults(job, user=None)
 
-    # The .json sidecar folds into the labelmap's segments, not its own result.
     assert len(results) == 1
     assert results[0]["intent"] == "add-segment-group"
-    assert results[0]["segments"] == labels
+    assert "segments" not in results[0]
 
 
 # ---------------------------------------------------------------------------

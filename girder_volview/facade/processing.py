@@ -131,7 +131,6 @@ from .results import (  # noqa: E402,F401
     _projectFinishedAt,
     _projectJobHandle,
     _intentForOutput,
-    _readLabelsSidecar,
     _recordedJobOutputs,
     _recordedOutputSpecs,
     _loadOutputFile,

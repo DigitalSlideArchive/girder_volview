@@ -2,9 +2,10 @@
 
 Results cross the wire as declarative *intents* the client's single applier
 applies — never a ``role`` the client switches on (contract Seam 2; D3/D4).
-``_collectJobResults`` builds each output's intent via ``_intentForOutput`` and
-folds the ``_readLabelsSidecar`` labels into a labelmap intent's optional
-``segments`` payload. This suite exercises the pure intent builder and, like the
+``_collectJobResults`` builds each output's intent via ``_intentForOutput``; a
+labelmap's segment names/colors travel inside the ``.seg.nrrd`` file as embedded
+metadata the client reads (Chunk 34), so the facade sets no ``segments`` payload.
+This suite exercises the pure intent builder and, like the
 VolView ``wire.spec.ts`` client suite, validates BOTH the facade's emitted
 intents and the shared golden fixtures against the same generated JSON Schema
 (``result-intent.schema.json``) — one normative definition, two validators.
@@ -67,8 +68,9 @@ def test_non_image_file_maps_to_download():
 
 
 # ---------------------------------------------------------------------------
-# add-segment-group carries source:{jobId, outputId} and folds the labels
-# sidecar into the optional `segments` payload (embedded metadata carries none).
+# add-segment-group carries source:{jobId, outputId} and sets NO `segments`
+# payload — a `.seg.nrrd` labelmap carries its names/colors as embedded metadata
+# the client reads on load (Chunk 34), so the facade folds no sidecar.
 # ---------------------------------------------------------------------------
 
 
@@ -95,17 +97,6 @@ def test_job_id_is_stringified():
     assert isinstance(intent["source"]["jobId"], str)
 
 
-def test_folded_sidecar_becomes_segments_payload():
-    segments = [
-        {"value": 1, "name": "Bin 1", "color": [255, 0, 0, 255]},
-        {"value": 2, "name": "Bin 2", "color": [0, 255, 0, 255]},
-    ]
-    intent = _intentForOutput(
-        _out("image", True), _URL, _NAME, _JOB_ID, segments
-    )
-    assert intent["segments"] == segments
-
-
 def test_embedded_labelmap_carries_no_segments():
     # A seg.nrrd with embedded metadata folds no sidecar -> no `segments`.
     intent = _intentForOutput(_out("image", True), _URL, _NAME, _JOB_ID)
@@ -124,16 +115,12 @@ def test_base_image_and_download_carry_no_source_or_segments():
 # side of "both suites validate intent payloads against the same fixtures").
 # ---------------------------------------------------------------------------
 
+# The facade emits the embedded (no-`segments`) labelmap shape (Chunk 34); the
+# optional `segments` shape stays contract-valid and is covered by the
+# fixture-schema check below, but the facade no longer produces it.
 _EMITTED_CASES = {
     "add-segment-group.embedded": _intentForOutput(
         _out("image", True), _URL, _NAME, _JOB_ID
-    ),
-    "add-segment-group.with-segments": _intentForOutput(
-        _out("image", True),
-        _URL,
-        _NAME,
-        _JOB_ID,
-        [{"value": 1, "name": "Bin 1", "color": [255, 0, 0, 255]}],
     ),
     "add-base-image": _intentForOutput(
         _out("image", False), _URL, _NAME, _JOB_ID
@@ -180,19 +167,8 @@ def test_unknown_intent_fixture_is_accepted_fail_open():
 
 def test_emitted_add_segment_group_matches_fixture_shape():
     # The facade's emitted labelmap intent has the same key set as the golden
-    # add-segment-group fixtures (with/without segments) the client validates.
-    with_segments = _intentForOutput(
-        _out("image", True),
-        _URL,
-        _NAME,
-        _JOB_ID,
-        [{"value": 1, "name": "Bin 1", "color": [255, 0, 0, 255]}],
-    )
-    fixture = contract_loader.load_fixture(
-        "wire/intent.add-segment-group.with-segments.json"
-    )
-    assert set(with_segments) == set(fixture)
-
+    # embedded add-segment-group fixture the client validates (Chunk 34: the
+    # facade emits no `segments` payload — names/colors ride inside the file).
     embedded = _intentForOutput(_out("image", True), _URL, _NAME, _JOB_ID)
     embedded_fixture = contract_loader.load_fixture(
         "wire/intent.add-segment-group.embedded.json"

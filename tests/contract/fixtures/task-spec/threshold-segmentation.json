@@ -2,7 +2,7 @@
   "specVersion": 1,
   "id": "ThresholdSegmentation",
   "title": "Threshold Segmentation",
-  "description": "Label voxels whose intensity falls between two thresholds. Emits a labelmap and a JSON sidecar of per-label names + RGB colors. Backed by SimpleITK.",
+  "description": "Label voxels whose intensity falls between two thresholds. Emits a .seg.nrrd labelmap whose segment name and RGB color travel inside the file. Backed by ITK.",
   "parameters": [
     {
       "kind": "sourceRef",
@@ -12,7 +12,9 @@
       "section": "IO",
       "order": 0,
       "required": true,
-      "accepts": ["image"]
+      "accepts": [
+        "image"
+      ]
     },
     {
       "kind": "float",
@@ -37,16 +39,9 @@
     {
       "id": "outputLabelmap",
       "title": "Output Labelmap",
-      "help": "Binary labelmap NIfTI.",
+      "help": "Binary labelmap (.seg.nrrd) with the segment's embedded name and color.",
       "type": "labelmap",
-      "format": ".nii.gz"
-    },
-    {
-      "id": "outputLabels",
-      "title": "Output Labels (JSON)",
-      "help": "Sidecar JSON: per-label name + RGB color.",
-      "type": "file",
-      "format": ".json"
+      "format": ".seg.nrrd"
     }
   ]
 }

@@ -148,17 +148,16 @@ _REAL_CASES = [
         {"name": "outputVolume", "tag": "image", "isLabel": False,
          "fileExtensions": ".nii.gz"},
     ]),
+    # Chunk 34: the segmentation CLIs emit a single .seg.nrrd labelmap whose
+    # per-label names/colors ride inside the file -- the old `.json` sidecar
+    # (`outputLabels`) is gone, so parse_cli surfaces exactly one output.
     ("otsu-segmentation.xml", "Radiology", [
         {"name": "outputLabelmap", "tag": "image", "isLabel": True,
-         "fileExtensions": ".nii.gz"},
-        {"name": "outputLabels", "tag": "file", "isLabel": False,
-         "fileExtensions": ".json"},
+         "fileExtensions": ".seg.nrrd"},
     ]),
     ("threshold-segmentation.xml", "Radiology", [
         {"name": "outputLabelmap", "tag": "image", "isLabel": True,
-         "fileExtensions": ".nii.gz"},
-        {"name": "outputLabels", "tag": "file", "isLabel": False,
-         "fileExtensions": ".json"},
+         "fileExtensions": ".seg.nrrd"},
     ]),
 ]
 
