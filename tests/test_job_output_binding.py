@@ -573,7 +573,8 @@ def test_collect_folds_labels_sidecar_into_segments(monkeypatch):
 
 # ---------------------------------------------------------------------------
 # _jobResultsPayload — honest semantics (non-succeeded/total-loss -> error;
-# succeeded -> bare list; the client half shipped in Chunk 12 consumes this)
+# succeeded -> {intents, missing} envelope (Chunk 28); the client half shipped
+# in Chunk 12 consumes this)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("status", [
@@ -598,28 +599,35 @@ def test_payload_errors_when_all_outputs_unresolvable(monkeypatch):
     assert "resolved" in str(exc.value)
 
 
-def test_payload_returns_bare_list_on_success(monkeypatch):
+def test_payload_returns_envelope_on_success(monkeypatch):
     _deterministicUrls(monkeypatch)
     fid = ObjectId()
     _installFile(monkeypatch, {str(fid): {"_id": fid, "name": "out.nii.gz"}})
     payload = processing._jobResultsPayload(_job({"outVol": str(fid)}, [_spec("outVol")]), user=None)
-    # A bare array, client-transparent (the client's zod parse rejects an object).
-    assert isinstance(payload, list) and len(payload) == 1
+    # The {intents, missing} envelope (contract jobResultsSchema): the SAME items
+    # as before, wrapped; a clean success reports missing == 0.
+    assert isinstance(payload, dict)
+    assert len(payload["intents"]) == 1
+    assert payload["missing"] == 0
 
 
-def test_payload_empty_success_is_empty_list_not_an_error(monkeypatch):
+def test_payload_empty_success_is_empty_envelope_not_an_error(monkeypatch):
     _deterministicUrls(monkeypatch)
     _installFile(monkeypatch, {})
-    # Succeeded with nothing bound -> legit empty (distinguishable from deleted,
-    # which errors).
-    assert processing._jobResultsPayload(_job({}, []), user=None) == []
+    # Succeeded with nothing bound -> legit empty envelope (distinguishable from
+    # deleted, which errors).
+    assert processing._jobResultsPayload(_job({}, []), user=None) == {
+        "intents": [], "missing": 0,
+    }
 
 
-def test_payload_partial_loss_returns_resolved_not_an_error(monkeypatch):
+def test_payload_partial_loss_returns_resolved_and_missing_count(monkeypatch):
     _deterministicUrls(monkeypatch)
     live = ObjectId()
     _installFile(monkeypatch, {str(live): {"_id": live, "name": "a.nii.gz"}})
     job = _job({"outA": str(live), "outB": str(ObjectId())},
                [_spec("outA"), _spec("outB")])
     payload = processing._jobResultsPayload(job, user=None)
-    assert isinstance(payload, list) and len(payload) == 1
+    # The survivor rides `intents`; the deleted output rides the `missing` count.
+    assert len(payload["intents"]) == 1
+    assert payload["missing"] == 1

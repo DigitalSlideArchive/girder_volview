@@ -1263,7 +1263,7 @@ def _collectJobResults(job, user):
 
 
 def _jobResultsPayload(job, user):
-    """Apply honest result-read semantics (D5) and return the wire result list.
+    """Apply honest result-read semantics (D5) and return the wire result envelope.
 
     - A non-succeeded job (failed / running / pending / cancelled) is an EXPLICIT
       error, never an empty list — the client (Chunk 12) gates reads on terminal
@@ -1271,8 +1271,12 @@ def _jobResultsPayload(job, user):
     - A succeeded job whose recorded outputs ALL fail to resolve (every output file
       deleted) is likewise an error carrying the ``missing`` count, so "succeeded,
       outputs deleted" is distinguishable from "succeeded, no outputs".
-    - Otherwise the resolved intents are returned as a bare list (wire-unchanged,
-      client-transparent); a partial loss returns what resolved and logs the rest.
+    - Otherwise the resolved intents are returned inside the ``{intents, missing}``
+      envelope (contract ``jobResultsSchema``, Seam 3 / Chunk 28): the SAME result
+      items as before, wrapped, with the ``missing`` count of outputs that could
+      not be resolved riding alongside (a partial loss returns what resolved and
+      reports the rest, rather than silently dropping it). ``missing`` is 0 on a
+      clean success.
 
     ``400`` (not ``404``/``401``) so the client classifies it as a permanent error
     that surfaces loudly without dropping the job or expiring the session.
@@ -1296,7 +1300,7 @@ def _jobResultsPayload(job, user):
             "resolved (deleted?)" % (job.get("_id"), missing),
             code=400,
         )
-    return results
+    return {"intents": results, "missing": missing}
 
 
 # ---------------------------------------------------------------------------

@@ -146,6 +146,21 @@ def _getResults(server, user, jobId):
     )
 
 
+def _assertValidJobResults(payload):
+    """Validate a LIVE results payload against the generated job-results schema.
+
+    The route emits the ``{intents, missing}`` envelope (Chunk 28) whose items are
+    HYBRID (the intent fields + ``id``/``mimeType``/``size`` file metadata); they
+    validate against ``job-results.schema.json`` via the fail-open unknown-intent
+    member's catchall — one normative definition, two validators (D4), same schema
+    the contract's own vitest asserts against for the golden fixtures.
+    """
+    jsonschema = pytest.importorskip("jsonschema")
+    import contract_loader
+    schema = contract_loader.load_generated_schema("job-results")
+    jsonschema.Draft202012Validator(schema).validate(payload)
+
+
 # ---------------------------------------------------------------------------
 # 1. Real Mongo: the dotted otherFields key nests, and N outputs each bind
 # ---------------------------------------------------------------------------
@@ -182,7 +197,9 @@ def test_n_outputs_each_bind_under_their_own_key(server, owner, ownerFolder):
 
     resp = _getResults(server, owner, _succeed(job)["_id"])
     assert resp.output_status.startswith(b"200")
-    assert len(resp.json) == 3
+    _assertValidJobResults(resp.json)
+    assert len(resp.json["intents"]) == 3
+    assert resp.json["missing"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -197,12 +214,15 @@ def test_results_route_returns_reference_bound_intent(server, owner, ownerFolder
     resp = _getResults(server, owner, _succeed(job)["_id"])
 
     assert resp.output_status.startswith(b"200")
-    assert len(resp.json) == 1
-    assert resp.json[0]["id"] == str(fileDoc["_id"])
-    assert resp.json[0]["intent"] == "add-base-image"
+    _assertValidJobResults(resp.json)
+    assert resp.json["missing"] == 0
+    intents = resp.json["intents"]
+    assert len(intents) == 1
+    assert intents[0]["id"] == str(fileDoc["_id"])
+    assert intents[0]["intent"] == "add-base-image"
     # Built via makeFileDownloadUrl (origin-relative, filename-encoded), NOT the
     # retired hand-built f-string.
-    assert resp.json[0]["url"] == "/api/v1/file/%s/proxiable/brain.otsu.nii.gz" % fileDoc["_id"]
+    assert intents[0]["url"] == "/api/v1/file/%s/proxiable/brain.otsu.nii.gz" % fileDoc["_id"]
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +253,37 @@ def test_results_route_errors_when_bound_output_deleted(server, owner, ownerFold
     assert resp.output_status.startswith(b"400")
 
 
+@pytest.mark.plugin("volview")
+def test_results_route_partial_miss_returns_survivor_and_missing_count(
+    server, owner, ownerFolder
+):
+    from girder.models.file import File
+    cli_xml = (
+        '<?xml version="1.0"?>'
+        "<executable><category>Radiology</category><title>Two</title><parameters>"
+        "<image><name>outA</name><channel>output</channel></image>"
+        "<image><name>outB</name><channel>output</channel></image>"
+        "</parameters></executable>"
+    )
+    job, token = _makeBoundJob(owner, cli_xml)
+    survivor = _recordOutput(owner, ownerFolder, token, "outA", "a.nii.gz")
+    doomed = _recordOutput(owner, ownerFolder, token, "outB", "b.nii.gz")
+    job = _succeed(job)
+
+    # One of the two bound outputs is deleted before the read.
+    File().remove(File().load(doomed["_id"], force=True))
+
+    resp = _getResults(server, owner, job["_id"])
+    # A PARTIAL loss is NOT an error (unlike total loss): the survivor rides
+    # `intents`, the deleted output rides the `missing` count — never a silently
+    # shorter list, so the client can surface the loss (Chunk 28).
+    assert resp.output_status.startswith(b"200")
+    _assertValidJobResults(resp.json)
+    assert len(resp.json["intents"]) == 1
+    assert resp.json["intents"][0]["id"] == str(survivor["_id"])
+    assert resp.json["missing"] == 1
+
+
 # ---------------------------------------------------------------------------
 # 4. The race is gone — two same-name jobs, one folder, own results
 # ---------------------------------------------------------------------------
@@ -251,8 +302,8 @@ def test_two_same_name_jobs_do_not_cross_results(server, owner, ownerFolder):
     respB = _getResults(server, owner, _succeed(jobB)["_id"])
 
     # Each job resolves ONLY the file bound to itself, though the names collide.
-    assert respA.json[0]["id"] == str(fileA["_id"])
-    assert respB.json[0]["id"] == str(fileB["_id"])
+    assert respA.json["intents"][0]["id"] == str(fileA["_id"])
+    assert respB.json["intents"][0]["id"] == str(fileB["_id"])
 
 
 # ---------------------------------------------------------------------------
@@ -288,5 +339,5 @@ def test_output_recorded_under_worker_token_not_facade_token(server, owner, owne
 
     resp = _getResults(server, owner, _succeed(job)["_id"])
     assert resp.output_status.startswith(b"200")
-    assert len(resp.json) == 1
-    assert resp.json[0]["id"] == str(fileDoc["_id"])
+    assert len(resp.json["intents"]) == 1
+    assert resp.json["intents"][0]["id"] == str(fileDoc["_id"])
