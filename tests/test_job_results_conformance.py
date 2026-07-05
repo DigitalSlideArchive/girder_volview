@@ -13,18 +13,20 @@ Offline (no Girder/Mongo): pure fixtures + schema. The live route payload is
 validated end-to-end in ``test_job_output_binding_routes``.
 """
 
+import jsonschema
 import pytest
 
 import contract_loader
 
 
 def _validator(schema_name):
-    """Build a Draft2020-12 validator for a generated schema, or skip if absent.
+    """Build a Draft2020-12 validator for a generated schema.
 
     The generated schema is the facade-side stand-in for the normative ``zod``
     definition (D2/D4: internal conformance tooling, not the contract format).
+    ``jsonschema`` is a hard test dependency (Chunk 29): a missing validator FAILS
+    this conformance layer rather than silently skipping it.
     """
-    jsonschema = pytest.importorskip("jsonschema")
     schema = contract_loader.load_generated_schema(schema_name)
     return jsonschema.Draft202012Validator(schema)
 

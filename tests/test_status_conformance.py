@@ -12,6 +12,7 @@ Pure-unit (no server fixture / Mongo): it drives the pure projector against
 hand-built job dicts and validates with the vendored generated JSON Schema.
 """
 
+import jsonschema
 import pytest
 
 import contract_loader
@@ -30,7 +31,8 @@ def _girder_statuses():
 
 
 def _status_validator():
-    jsonschema = pytest.importorskip("jsonschema")
+    # Hard import (Chunk 29): jsonschema is a declared test dep; a missing
+    # validator FAILS the conformance layer, never silently skips it.
     schema = contract_loader.load_generated_schema("neutral-job-status")
     return jsonschema.Draft202012Validator(schema)
 

@@ -18,7 +18,7 @@ What is proven here:
 
 import datetime
 
-import pytest
+import jsonschema
 
 import contract_loader
 from girder_volview import utils
@@ -102,7 +102,8 @@ def test_finished_at_reflects_error_and_cancelled_terminals():
 # ---------------------------------------------------------------------------
 
 def _job_handle_validator():
-    jsonschema = pytest.importorskip("jsonschema")
+    # Hard import (Chunk 29): jsonschema is a declared test dep; a missing
+    # validator FAILS the conformance layer, never silently skips it.
     schema = contract_loader.load_generated_schema("neutral-job-handle")
     return jsonschema.Draft202012Validator(schema)
 

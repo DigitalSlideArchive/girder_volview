@@ -22,6 +22,7 @@ whitespace never fail the test -- the Chunk 6 acceptance requirement.
 import importlib.util
 from pathlib import Path
 
+import jsonschema
 import pytest
 
 import contract_loader
@@ -79,12 +80,13 @@ _CASE_IDS = [stem for _, _, stem in _CONFORMANCE_CASES]
 
 
 def _task_spec_validator():
-    """A JSON Schema validator for the generated task-spec schema, or skip.
+    """A JSON Schema validator for the generated task-spec schema.
 
     The generated schema is internal conformance tooling (D2: not the contract
     format); it is the facade-side stand-in for the normative ``zod`` schema.
+    ``jsonschema`` is a hard test dep (Chunk 29): a missing validator FAILS this
+    conformance layer, never silently skips it.
     """
-    jsonschema = pytest.importorskip("jsonschema")
     schema = contract_loader.load_generated_schema("task-spec")
     return jsonschema.Draft202012Validator(schema)
 

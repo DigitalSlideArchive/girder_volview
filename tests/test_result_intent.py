@@ -10,6 +10,7 @@ intents and the shared golden fixtures against the same generated JSON Schema
 (``result-intent.schema.json``) — one normative definition, two validators.
 """
 
+import jsonschema
 import pytest
 
 import contract_loader
@@ -26,13 +27,13 @@ def _out(tag, isLabel, name="outputLabelmap"):
 
 
 def _intent_validator():
-    """A JSON Schema validator for the generated result-intent schema, or skip.
+    """A JSON Schema validator for the generated result-intent schema.
 
     The generated schema is the facade-side stand-in for the normative ``zod``
     ``resultIntentSchema`` (D2/D4: internal conformance tooling, not the contract
-    format itself).
+    format itself). ``jsonschema`` is a hard test dep (Chunk 29): a missing
+    validator FAILS this conformance layer, never silently skips it.
     """
-    jsonschema = pytest.importorskip("jsonschema")
     schema = contract_loader.load_generated_schema("result-intent")
     return jsonschema.Draft202012Validator(schema)
 

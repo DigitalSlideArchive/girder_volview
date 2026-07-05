@@ -24,6 +24,7 @@ import io
 import os
 import socket
 
+import jsonschema
 import pytest
 
 import contract_loader
@@ -142,7 +143,8 @@ def _get(server, path, user, params=None):
 
 
 def _handle_validator():
-    jsonschema = pytest.importorskip("jsonschema")
+    # Hard import (Chunk 29): jsonschema is a declared test dep; a missing
+    # validator FAILS the conformance layer, never silently skips it.
     schema = contract_loader.load_generated_schema("neutral-job-handle")
     return jsonschema.Draft202012Validator(schema)
 

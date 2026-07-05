@@ -9,6 +9,7 @@ route live in ``test_input_resolution_routes`` (server fixture).
 
 import json
 
+import jsonschema
 import pytest
 from bson.objectid import ObjectId
 
@@ -96,6 +97,50 @@ def test_parses_against_configured_api_root_not_a_literal(monkeypatch):
         f"/girder/api/v1/file/{fid}/proxiable/x.nrrd"
     ) == fid
     assert processing._fileIdFromMintedUri(_mint(fid, apiRoot="api/v1")) is None
+
+
+# ---------------------------------------------------------------------------
+# Seam-1 input-value wire conformance (Chunk 29): the golden input-value fixtures
+# are a validating consumer of the generated ``input-value.schema.json`` — the
+# facade-side stand-in for the normative zod ``inputValueSchema`` (one normative
+# definition, two validators; D4). Before Chunk 29 these fixtures were loaded as
+# DATA ONLY; now every published schema has a validating consumer. ``jsonschema``
+# is a hard test dep (Chunk 29): a missing validator FAILS, never silently skips.
+# ---------------------------------------------------------------------------
+
+_INPUT_VALUE_FIXTURES = (
+    "wire/input-value.dicom-series.json",
+    "wire/input-value.single-file.json",
+    "wire/input-value.labelmap.json",
+)
+
+
+def _input_value_validator():
+    schema = contract_loader.load_generated_schema("input-value")
+    return jsonschema.Draft202012Validator(schema)
+
+
+@pytest.mark.parametrize("fixture_path", _INPUT_VALUE_FIXTURES)
+def test_input_value_fixture_validates_against_generated_schema(fixture_path):
+    value = contract_loader.load_fixture(fixture_path)
+    _input_value_validator().validate(value)  # raises on drift
+
+
+def test_input_value_missing_uris_is_rejected():
+    # ``uris`` is REQUIRED — a value that names a type but carries no bytes handle
+    # is not a valid input value (fail closed).
+    validator = _input_value_validator()
+    with pytest.raises(jsonschema.ValidationError):
+        validator.validate({"type": "image"})
+
+
+def test_input_value_rejects_unknown_member():
+    # ``additionalProperties: false`` — a stray member is a drift signal, rejected.
+    validator = _input_value_validator()
+    with pytest.raises(jsonschema.ValidationError):
+        validator.validate(
+            {"type": "image", "uris": ["/api/v1/file/x/proxiable/y"], "role": "base"}
+        )
 
 
 # ---------------------------------------------------------------------------

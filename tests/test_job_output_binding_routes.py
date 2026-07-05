@@ -26,6 +26,7 @@ import os
 import socket
 import types
 
+import jsonschema
 import pytest
 
 from girder_volview.facade import processing
@@ -153,9 +154,10 @@ def _assertValidJobResults(payload):
     HYBRID (the intent fields + ``id``/``mimeType``/``size`` file metadata); they
     validate against ``job-results.schema.json`` via the fail-open unknown-intent
     member's catchall — one normative definition, two validators (D4), same schema
-    the contract's own vitest asserts against for the golden fixtures.
+    the contract's own vitest asserts against for the golden fixtures. ``jsonschema``
+    is a hard test dep (Chunk 29): a missing validator FAILS this conformance check,
+    never silently skips it.
     """
-    jsonschema = pytest.importorskip("jsonschema")
     import contract_loader
     schema = contract_loader.load_generated_schema("job-results")
     jsonschema.Draft202012Validator(schema).validate(payload)
