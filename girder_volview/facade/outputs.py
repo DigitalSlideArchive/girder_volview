@@ -39,6 +39,7 @@ with the ecosystem's reference→job binding (slicer_cli_web ``girder_plugin.py`
     matched, so the race is gone.
 """
 
+import contextlib
 import json
 import threading
 
@@ -262,21 +263,21 @@ def _installUploadTokenRecorder():
     Token._volviewUploadRecorder = True
 
 
-class _captureUploadTokens:
-    """Context manager: collect ids of every token minted on THIS thread within the block.
+@contextlib.contextmanager
+def _captureUploadTokens():
+    """Yield a list that collects ids of every token minted on THIS thread within the block.
 
     ``routes._genDockerJob`` wraps its synchronous ``subHandler`` call in this block so
-    ``cap.ids`` holds exactly the per-hook upload tokens girder_worker_utils minted for
-    THIS job (plus the harmless ``rest.create_job`` token — no output ever uploads under
-    it). Requires ``_installUploadTokenRecorder`` to have wrapped ``Token.createToken``;
-    if it has not, ``cap.ids`` is simply empty (results won't auto-attach — the pre-fix
-    behavior, never a 500).
+    the yielded list holds exactly the per-hook upload tokens girder_worker_utils minted
+    for THIS job (plus the harmless ``rest.create_job`` token — no output ever uploads
+    under it). Requires ``_installUploadTokenRecorder`` to have wrapped ``Token.createToken``;
+    if it has not, the list is simply empty (results won't auto-attach — the pre-fix
+    behavior, never a 500). The list stays valid after the block: only the thread-local
+    pointer is cleared, so a caller may read it once the recorder is torn down.
     """
-    def __enter__(self):
-        self.ids = []
-        _tokenCapture.ids = self.ids
-        return self
-
-    def __exit__(self, *exc):
+    ids = []
+    _tokenCapture.ids = ids
+    try:
+        yield ids
+    finally:
         _tokenCapture.ids = None
-        return False

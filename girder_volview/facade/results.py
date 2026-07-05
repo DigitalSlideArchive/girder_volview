@@ -33,9 +33,18 @@ def _projectJobState(job):
 
     The single shared JobStatus->state map, read by BOTH the status projection
     (``_projectJobStatus``) and the tier-2 handle projection
-    (``_projectJobHandle``) — so a handle's ``state`` can never diverge from the
-    status the client polls. A job with no ``status`` maps to ``"pending"`` (fail
-    closed). Neutral names only — never the girder ``JobStatus`` enum on the wire.
+    (``_projectJobHandle``) — so both derive a job's neutral state from the same
+    source of truth. A job with no ``status`` maps to ``"pending"`` (fail closed).
+    Neutral names only — never the girder ``JobStatus`` enum on the wire.
+
+    One deliberate divergence: ``_projectJobStatus`` overlays the output-drain
+    guard (holds a just-succeeded job at ``"running"`` until its declared outputs
+    drain), while ``_projectJobHandle`` reads this map directly. So during the
+    sub-second drain window the polled status can read ``"running"`` while the
+    tier-2 handle reads ``"success"``. Benign: the handle only drives reload
+    re-discovery, and a reloaded ``/results`` read hits the same drain gate — the
+    guard lives on the read path (``_projectJobStatus``), never in this lifecycle
+    map, so ``finishedAt``/handle discovery never inherits a time-windowed fudge.
     """
     from girder_jobs.constants import JobStatus
     state_map = {
@@ -85,19 +94,14 @@ def _projectFinishedAt(job):
 
     Projected from Girder's job status-transition timestamps (``_updateStatus``
     pushes ``{status, time}`` on every transition): the ``time`` of the most
-    recent transition into a terminal state. A still-running / never-terminal job
-    has no such entry and yields ``""`` — the client applies results only for a
-    terminal-succeeded job anyway (result reads gate on terminal success), and
-    the empty instant sorts before any real watermark. ISO-8601 UTC so the client
-    compares it to ``sessionSavedAt`` as UTC instants (D5).
+    recent transition into a terminal state (``_terminalTime``). A still-running /
+    never-terminal job has no such entry and yields ``""`` — the client applies
+    results only for a terminal-succeeded job anyway (result reads gate on
+    terminal success), and the empty instant sorts before any real watermark.
+    ISO-8601 UTC so the client compares it to ``sessionSavedAt`` as UTC instants
+    (D5).
     """
-    from girder_jobs.constants import JobStatus
-    terminal = {JobStatus.SUCCESS, JobStatus.ERROR, JobStatus.CANCELED}
-    timestamps = job.get("timestamps") or []
-    for ts in reversed(timestamps):
-        if isinstance(ts, dict) and ts.get("status") in terminal:
-            return _toIso(ts.get("time")) or ""
-    return ""
+    return _toIso(_terminalTime(job)) or ""
 
 
 def _projectJobHandle(job):

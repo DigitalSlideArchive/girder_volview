@@ -408,7 +408,7 @@ def test_capture_records_tokens_minted_within_the_block(monkeypatch):
     outside = tok.createToken(user={"_id": "u"})  # minted after the block — NOT recorded
 
     assert a["_id"] == "tok-1" and b["_id"] == "tok-2"
-    assert cap.ids == ["tok-1", "tok-2"]
+    assert cap == ["tok-1", "tok-2"]
     assert outside["_id"] == "tok-3"  # createToken still works, just uncaptured
 
 
@@ -422,8 +422,8 @@ def test_capture_blocks_are_independent(monkeypatch):
         tok.createToken()
     with processing._captureUploadTokens() as second:
         tok.createToken()
-    assert first.ids == ["a"]
-    assert second.ids == ["b"]
+    assert first == ["a"]
+    assert second == ["b"]
 
 
 def test_recorder_is_noop_outside_a_block_and_install_is_idempotent(monkeypatch):

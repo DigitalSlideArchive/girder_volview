@@ -327,10 +327,13 @@ def _liveJobClaimedItemIds():
     from girder_jobs.models.job import Job as JobModel
     terminal = [JobStatus.SUCCESS, JobStatus.ERROR, JobStatus.CANCELED]
     claimed = set()
+    # Project only the claimed-item array: this runs once per staged input, and an
+    # unprojected job doc drags its unbounded ``log`` / args / kwargs along for a
+    # field we never read.
     cursor = JobModel().find({
         _TRANSIENT_META_KEY: {"$exists": True, "$ne": []},
         "status": {"$nin": terminal},
-    })
+    }, fields=[_TRANSIENT_META_KEY])
     for job in cursor:
         for itemId in (job.get(_TRANSIENT_META_KEY) or []):
             claimed.add(str(itemId))

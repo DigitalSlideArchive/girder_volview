@@ -146,7 +146,7 @@ def _genDockerJob(cliItem, params, user):
     # intercepts Token.createToken on THIS request thread only, so a concurrent
     # same-user/same-task submit (running on another thread) can never bleed its tokens
     # in — killing the old [since,until] time-window race. subHandler is synchronous.
-    with outputs._captureUploadTokens() as cap:
+    with outputs._captureUploadTokens() as capturedTokenIds:
         # Take a copy so the handler can mutate freely.
         job_obj = handler.subHandler(cliItem, copy.deepcopy(params), user, token)
     job = job_obj.job if hasattr(job_obj, "job") else job_obj
@@ -154,7 +154,7 @@ def _genDockerJob(cliItem, params, user):
     # tokens an output upload may arrive under so the data.process handler can
     # correlate each uploaded output back to THIS job and record its file id keyed by
     # output identifier.
-    outputs._bindJobOutputs(job, token, cliItem.xml, cap.ids)
+    outputs._bindJobOutputs(job, token, cliItem.xml, capturedTokenIds)
     return job
 
 

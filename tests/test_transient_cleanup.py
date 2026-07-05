@@ -69,9 +69,11 @@ class _FakeJobModel:
                 return j
         return None
 
-    def find(self, query):
+    def find(self, query, fields=None):
         # Enough of _liveJobClaimedItemIds' query semantics: a non-empty
         # volviewTransient marker AND a status NOT in the terminal $nin set.
+        # ``fields`` is the projection (a DB-side optimization) — accepted and
+        # ignored; it never changes which docs match.
         nin = (query.get("status") or {}).get("$nin", [])
         return [
             j for j in self._jobs
@@ -89,7 +91,7 @@ class _FakeJobModel:
 class _RaisingJobModel:
     """Job() stand-in whose ``find`` raises, to prove the sweep fails closed."""
 
-    def find(self, query):
+    def find(self, query, fields=None):
         raise RuntimeError("job db down")
 
 
