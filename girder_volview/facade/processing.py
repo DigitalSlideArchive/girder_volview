@@ -23,16 +23,26 @@ the REST routes + job creation in ``routes.py``.
 # Provider config (per-launch payload)
 # ---------------------------------------------------------------------------
 
+from girder.utility.server import getApiRoot  # noqa: E402
+
+
 def _providerBaseUrl(folder):
-    return f"/api/v1/folder/{folder['_id']}/volview_processing"
+    # Origin-relative, keyed off getApiRoot() -- the SAME mount
+    # utils.makeFileDownloadUrl and inputs._fileIdFromMintedUri use -- so a
+    # non-default API mount (e.g. /girder/api/v1) still resolves. A hardcoded
+    # "/api/v1" here made every submit/status/results/stage call 404 on such a
+    # deployment while file downloads (which use getApiRoot) worked.
+    return f"/{getApiRoot()}/folder/{folder['_id']}/volview_processing"
 
 
 # The folder-free root for the job-addressed routes (status/results/cancel),
 # which are keyed by job id alone (D5) and mounted on the ``volview_processing``
 # resource -- a sibling of ``/folder`` (see routes.py ``_JobResource``). Advertised
 # explicitly so the client never string-surgeries the folder segment out of
-# ``baseUrl`` (ARCHITECTURE-REVIEW §4.6/§6.4).
-_JOBS_BASE_URL = "/api/v1/volview_processing"
+# ``baseUrl`` (ARCHITECTURE-REVIEW §4.6/§6.4). A function, not a module constant,
+# because -- like ``baseUrl`` -- it derives from the runtime ``getApiRoot()``.
+def _jobsBaseUrl():
+    return f"/{getApiRoot()}/volview_processing"
 
 
 def _providerConfigForFolder(folder, user):
@@ -49,7 +59,7 @@ def _providerConfigForFolder(folder, user):
         "id": "girder-slicer-cli",
         "label": "Analysis",
         "baseUrl": _providerBaseUrl(folder),
-        "jobsBaseUrl": _JOBS_BASE_URL,
+        "jobsBaseUrl": _jobsBaseUrl(),
         "context": {},
     }
 
@@ -82,6 +92,7 @@ from .inputs import (  # noqa: E402,F401
     _stampJobContext,
     _removeTransientItems,
     _cleanupTransientOnJobDone,
+    _liveJobClaimedItemIds,
     _sweepOrphanTransients,
     _streamBodyIntoItem,
     _tagItemTransient,
@@ -122,7 +133,9 @@ from .outputs import (  # noqa: E402,F401
     _tagJobOutputItem,
     _recordJobOutput,
     _bindJobOutputs,
-    _capturedUploadTokens,
+    _tokenCapture,
+    _installUploadTokenRecorder,
+    _captureUploadTokens,
 )
 
 from .results import (  # noqa: E402,F401

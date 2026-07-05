@@ -13,7 +13,6 @@ later ``setattr(submit, "_foo", ...)`` could not reach.
 """
 
 import copy
-import datetime
 
 import cherrypy
 from girder import events, logger
@@ -141,22 +140,21 @@ def _genDockerJob(cliItem, params, user):
     params = dict(params)
     params.setdefault("girderApiUrl", "")
     params.setdefault("girderToken", "")
-    # Capture the tokens girder_worker_utils mints WHILE building the result-hooks
-    # (a fresh DATA_WRITE token per hook — the worker uploads each output under one of
-    # THOSE, never `token`; girder_io.py). Bounded tightly around the synchronous
-    # subHandler call so the window is just this submit. See outputs._capturedUploadTokens.
-    since = datetime.datetime.utcnow()
-    # Take a copy so the handler can mutate freely.
-    job_obj = handler.subHandler(cliItem, copy.deepcopy(params), user, token)
-    until = datetime.datetime.utcnow()
+    # Capture the EXACT per-hook DATA_WRITE tokens girder_worker_utils mints WHILE
+    # subHandler builds the result-hooks (a fresh token per hook — the worker uploads
+    # each output under one of THOSE, never `token`; girder_io.py). The recorder
+    # intercepts Token.createToken on THIS request thread only, so a concurrent
+    # same-user/same-task submit (running on another thread) can never bleed its tokens
+    # in — killing the old [since,until] time-window race. subHandler is synchronous.
+    with outputs._captureUploadTokens() as cap:
+        # Take a copy so the handler can mutate freely.
+        job_obj = handler.subHandler(cliItem, copy.deepcopy(params), user, token)
     job = job_obj.job if hasattr(job_obj, "job") else job_obj
     # Reference-bound outputs (D5): record the declared output specs + the set of
     # tokens an output upload may arrive under so the data.process handler can
     # correlate each uploaded output back to THIS job and record its file id keyed by
     # output identifier.
-    outputs._bindJobOutputs(
-        job, token, cliItem.xml, outputs._capturedUploadTokens(user, since, until)
-    )
+    outputs._bindJobOutputs(job, token, cliItem.xml, cap.ids)
     return job
 
 
@@ -351,6 +349,11 @@ class _JobResource(Resource):
 
 
 def addProcessingRoutes(info):
+    # Install the upload-token recorder once (fix #4): wraps Token.createToken so a
+    # submit captures the EXACT per-hook upload tokens girder_worker_utils mints on its
+    # request thread (outputs._captureUploadTokens), replacing the racy time-window
+    # capture. Idempotent + a no-op outside a capture block.
+    outputs._installUploadTokenRecorder()
     # Delete a job's transient staged inputs once it reaches a terminal state
     # (Chunk 14). Bound once at plugin load; fires for every job update but no-ops
     # cheaply unless the job carries the transient marker.

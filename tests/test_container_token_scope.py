@@ -37,12 +37,6 @@ def fakeDockerStack(monkeypatch):
             captured["createToken"] = {"user": user, "scope": scope}
             return {"_id": "fake-token", "scope": scope}
 
-        def find(self, query=None, **kwargs):
-            # _genDockerJob captures the per-hook upload tokens minted during
-            # subHandler; none exist in this faked stack.
-            captured["find"] = query
-            return []
-
     class _Handler:
         def subHandler(self, cliItem, params, user, token):
             captured["token"] = token

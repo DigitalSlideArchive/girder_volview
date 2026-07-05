@@ -1,0 +1,9 @@
+# Provenance of the vendored processing-contract copy.
+# Written by processing-contract/scripts/sync-facade.sh -- DO NOT hand-edit.
+# tree_sha256 = sha256 of MANIFEST.sha256; the facade test re-derives it.
+contract_version=0.1.0
+spec_version=1
+intent_vocabulary_version=1
+client_git_sha=beb727fe
+client_git_dirty=true
+tree_sha256=decb77105666f7d93226aabe87b55969cf02f0441ee65106cdf61b2e4b4d5b6e

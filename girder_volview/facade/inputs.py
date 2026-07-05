@@ -311,16 +311,56 @@ def _cleanupTransientOnJobDone(event):
     _removeTransientItems(transientItemIds)
 
 
+def _liveJobClaimedItemIds():
+    """Item ids currently claimed by a non-terminal (live) facade job.
+
+    A job records its staged input item ids in ``volviewTransient`` at submit
+    (``_markJobTransients``); only ``_cleanupTransientOnJobDone`` clears them, and
+    only at a terminal state. So any such id on a job that has NOT reached a
+    terminal state is a live input the orphan sweep must never delete. Unscoped by
+    folder on purpose: a job's launch folder equals its staged inputs' folder in
+    the normal flow, but the union stays correct even if a future client stages
+    into one folder and submits against another. Raises on query failure so the
+    caller can fail closed.
+    """
+    from girder_jobs.constants import JobStatus
+    from girder_jobs.models.job import Job as JobModel
+    terminal = [JobStatus.SUCCESS, JobStatus.ERROR, JobStatus.CANCELED]
+    claimed = set()
+    cursor = JobModel().find({
+        _TRANSIENT_META_KEY: {"$exists": True, "$ne": []},
+        "status": {"$nin": terminal},
+    })
+    for job in cursor:
+        for itemId in (job.get(_TRANSIENT_META_KEY) or []):
+            claimed.add(str(itemId))
+    return claimed
+
+
 def _sweepOrphanTransients(folder, now=None):
-    """Age out transient items in ``folder`` never bound to a job (best-effort).
+    """Age out transient items in ``folder`` never bound to a LIVE job (best-effort).
 
     Piggybacked on staging calls (an upload precedes its job, so job-end cleanup
-    never sees an orphan). Keyed off ``item['created']`` because the marker carries
-    no timestamp; only items strictly older than :data:`_TRANSIENT_ORPHAN_TTL` are
-    swept, so the item this same call is about to create is never a candidate.
+    never sees a never-submitted orphan). Keyed off ``item['created']`` because the
+    marker carries no timestamp; only items strictly older than
+    :data:`_TRANSIENT_ORPHAN_TTL` are candidates, so the item this same call is
+    about to create is never one. An item that is still an input of a non-terminal
+    job is NOT an orphan -- ``_cleanupTransientOnJobDone`` owns it and deletes it at
+    terminal state -- so it is excluded here regardless of age. (A genuinely stuck
+    job that never reaches terminal thus leaks its input indefinitely; that bounded
+    leak is the deliberate price of never deleting a live job's input.)
     """
     now = now or datetime.datetime.utcnow()
     cutoff = now - _TRANSIENT_ORPHAN_TTL
+    # Resolve the live-job claim set FIRST; if that lookup fails, skip the whole
+    # sweep rather than risk deleting a live job's staged input (fail closed).
+    try:
+        claimed = _liveJobClaimedItemIds()
+    except Exception:
+        logger.exception(
+            "Failed to resolve live-job transient claims; skipping orphan sweep"
+        )
+        return
     query = {
         "folderId": folder["_id"],
         "meta.%s" % _TRANSIENT_META_KEY: True,
@@ -332,6 +372,8 @@ def _sweepOrphanTransients(folder, now=None):
         logger.exception("Failed to query orphan transient items")
         return
     for item in stale:
+        if str(item["_id"]) in claimed:
+            continue  # bound to a live (non-terminal) job -- not an orphan
         try:
             Item().remove(item)
         except Exception:

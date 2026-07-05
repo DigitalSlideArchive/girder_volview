@@ -56,14 +56,28 @@ def _installItemModel(monkeypatch, model):
 
 
 class _FakeJobModel:
-    def __init__(self, job):
+    def __init__(self, job=None, jobs=None):
         self._job = job
+        self._jobs = list(jobs or [])
         self.updated = []
 
     def load(self, jobId, force=False):
         if self._job is not None and str(jobId) == str(self._job.get("_id")):
             return self._job
+        for j in self._jobs:
+            if str(jobId) == str(j.get("_id")):
+                return j
         return None
+
+    def find(self, query):
+        # Enough of _liveJobClaimedItemIds' query semantics: a non-empty
+        # volviewTransient marker AND a status NOT in the terminal $nin set.
+        nin = (query.get("status") or {}).get("$nin", [])
+        return [
+            j for j in self._jobs
+            if j.get(processing._TRANSIENT_META_KEY)
+            and j.get("status") not in nin
+        ]
 
     def updateJob(self, job, otherFields=None):
         self.updated.append(otherFields)
@@ -72,9 +86,23 @@ class _FakeJobModel:
         return job
 
 
+class _RaisingJobModel:
+    """Job() stand-in whose ``find`` raises, to prove the sweep fails closed."""
+
+    def find(self, query):
+        raise RuntimeError("job db down")
+
+
 def _installJobModel(monkeypatch, job):
     import girder_jobs.models.job as job_module
     model = _FakeJobModel(job)
+    monkeypatch.setattr(job_module, "Job", lambda: model)
+    return model
+
+
+def _installJobsModel(monkeypatch, model):
+    """Install an arbitrary Job() stand-in (for the sweep's live-claim query)."""
+    import girder_jobs.models.job as job_module
     monkeypatch.setattr(job_module, "Job", lambda: model)
     return model
 
@@ -187,6 +215,9 @@ def test_sweep_builds_ttl_query_and_removes(monkeypatch):
         monkeypatch,
         _RecordingItemModel(found=[{"_id": o1}, {"_id": o2}], capture=captured),
     )
+    # No live job claims these orphans, so both are swept (fix #5 excludes only
+    # items bound to a non-terminal job — none here).
+    _installJobsModel(monkeypatch, _FakeJobModel(jobs=[]))
     folder = {"_id": ObjectId()}
 
     processing._sweepOrphanTransients(folder, now=now)
@@ -196,6 +227,64 @@ def test_sweep_builds_ttl_query_and_removes(monkeypatch):
     assert query["folderId"] == folder["_id"]
     assert query["meta.volviewTransient"] is True
     assert query["created"] == {"$lt": now - processing._TRANSIENT_ORPHAN_TTL}
+
+
+def test_sweep_skips_items_claimed_by_live_job(monkeypatch):
+    # Fix #5: a stale transient item that is still an input of a NON-terminal job
+    # must survive the sweep (its terminal cleanup owns it) — only genuinely
+    # unbound orphans are reaped.
+    now = datetime.datetime(2026, 7, 4, 12, 0, 0)
+    o1, o2 = ObjectId(), ObjectId()
+    model = _installItemModel(
+        monkeypatch, _RecordingItemModel(found=[{"_id": o1}, {"_id": o2}])
+    )
+    liveJob = {
+        "_id": ObjectId(),
+        "status": JobStatus.RUNNING,
+        processing._TRANSIENT_META_KEY: [str(o1)],
+    }
+    _installJobsModel(monkeypatch, _FakeJobModel(jobs=[liveJob]))
+
+    processing._sweepOrphanTransients({"_id": ObjectId()}, now=now)
+
+    # o1 is protected (claimed by the running job); only the unbound o2 is removed.
+    assert model.removed == [str(o2)]
+
+
+def test_sweep_reaps_item_claimed_only_by_terminal_job(monkeypatch):
+    # A terminal job does NOT protect its transient: terminal cleanup should already
+    # have deleted it, and if that failed the item is a genuine orphan the sweep must
+    # still reap. The $nin status filter excludes the SUCCESS job, so find() is empty.
+    now = datetime.datetime(2026, 7, 4, 12, 0, 0)
+    o1 = ObjectId()
+    model = _installItemModel(
+        monkeypatch, _RecordingItemModel(found=[{"_id": o1}])
+    )
+    doneJob = {
+        "_id": ObjectId(),
+        "status": JobStatus.SUCCESS,
+        processing._TRANSIENT_META_KEY: [str(o1)],
+    }
+    _installJobsModel(monkeypatch, _FakeJobModel(jobs=[doneJob]))
+
+    processing._sweepOrphanTransients({"_id": ObjectId()}, now=now)
+
+    assert model.removed == [str(o1)]
+
+
+def test_sweep_skipped_when_live_claim_query_fails(monkeypatch):
+    # Fail closed: if the live-job claim lookup errors, skip the whole sweep rather
+    # than risk deleting a live job's staged input.
+    now = datetime.datetime(2026, 7, 4, 12, 0, 0)
+    o1 = ObjectId()
+    model = _installItemModel(
+        monkeypatch, _RecordingItemModel(found=[{"_id": o1}])
+    )
+    _installJobsModel(monkeypatch, _RaisingJobModel())
+
+    processing._sweepOrphanTransients({"_id": ObjectId()}, now=now)
+
+    assert model.removed == []
 
 
 def test_orphan_ttl_is_24_hours():

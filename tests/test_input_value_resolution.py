@@ -50,7 +50,10 @@ class _DenyFile:
 def _fixed_api_root(monkeypatch):
     # Deterministic mount so the fixtures' ``/api/v1/...`` uris parse regardless
     # of ambient server config; one test flexes a non-default root explicitly.
+    # ``processing`` is patched too: after fix #3 the provider config's
+    # ``baseUrl``/``jobsBaseUrl`` derive from ``processing.getApiRoot()``.
     monkeypatch.setattr(inputs, "getApiRoot", lambda: API_ROOT)
+    monkeypatch.setattr(processing, "getApiRoot", lambda: API_ROOT)
 
 
 def _acceptAll(monkeypatch):
@@ -341,6 +344,22 @@ def test_provider_config_advertises_explicit_jobs_base_url():
     assert provider["jobsBaseUrl"] == "/api/v1/volview_processing"
     # Folder-free: no launch folder id leaks into the jobs base.
     assert str(folderId) not in provider["jobsBaseUrl"]
+
+
+def test_provider_config_urls_derive_from_api_root_not_a_literal(monkeypatch):
+    # Fix #3: baseUrl/jobsBaseUrl are built from getApiRoot() (like file download
+    # urls), not a hardcoded /api/v1 -- so a non-default mount resolves instead of
+    # 404ing every submit/status/results call. A non-default root proves the literal
+    # was actually retired (the default-root assertion above would pass either way).
+    monkeypatch.setattr(processing, "getApiRoot", lambda: "girder/api/v1")
+    folderId = ObjectId()
+    provider = processing.buildProcessingConfigBlock(
+        {"_id": folderId}, user=None
+    )["providers"][0]
+    assert provider["baseUrl"] == (
+        "/girder/api/v1/folder/%s/volview_processing" % folderId
+    )
+    assert provider["jobsBaseUrl"] == "/girder/api/v1/volview_processing"
 
 
 # ---------------------------------------------------------------------------

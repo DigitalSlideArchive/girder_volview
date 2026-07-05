@@ -22,7 +22,7 @@ from bson.objectid import ObjectId
 from girder.exceptions import RestException
 from girder_jobs.constants import JobStatus
 
-from girder_volview.facade import outputs as outputs_mod, processing, results as results_mod
+from girder_volview.facade import processing, results as results_mod
 
 _OUTPUTS = processing._OUTPUTS_FIELD
 _SPECS = processing._OUTPUT_SPECS_FIELD
@@ -184,13 +184,16 @@ def test_job_for_upload_correlates_by_token(monkeypatch):
     assert found is job
 
 
-def test_job_for_upload_honors_explicit_job_id(monkeypatch):
-    job = {"_id": ObjectId()}
+def test_job_for_upload_ignores_jobId_in_reference(monkeypatch):
+    # Fix #1: a reference-supplied jobId must NOT force-load a job -- that bypassed
+    # both token correlation and the job ACL, letting a crafted upload attach a file
+    # onto any job. With no currentToken, only the removed jobId branch could have
+    # matched, so the crafted reference now resolves to None (fail closed).
+    job = {"_id": ObjectId(), _TOKEN: "tok-1"}
     _installJob(monkeypatch, _FakeJob([job]))
-    found = processing._jobForOutputUpload(
+    assert processing._jobForOutputUpload(
         {"identifier": "o", "jobId": str(job["_id"])}, {}
-    )
-    assert found is job
+    ) is None
 
 
 def test_job_for_upload_uncorrelated_is_none(monkeypatch):
@@ -199,21 +202,6 @@ def test_job_for_upload_uncorrelated_is_none(monkeypatch):
         {"identifier": "o"}, {"currentToken": {"_id": "stranger"}}
     ) is None
     assert processing._jobForOutputUpload({"identifier": "o"}, {}) is None
-
-
-def test_job_for_upload_swallows_a_malformed_job_id(monkeypatch):
-    class _RaisingJob:
-        def load(self, jobId, force=False, exc=False):
-            raise ValueError("bad id")
-
-        def findOne(self, query):
-            return None
-
-    _installJob(monkeypatch, _RaisingJob())
-    # A malformed jobId in the reference must fail closed, never escape the handler.
-    assert processing._jobForOutputUpload(
-        {"identifier": "o", "jobId": "not-an-id"}, {}
-    ) is None
 
 
 def test_job_for_upload_correlates_by_captured_upload_token(monkeypatch):
@@ -391,53 +379,140 @@ def test_bind_job_outputs_dedups_facade_token_in_set(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# _capturedUploadTokens — the DATA_WRITE tokens girder_worker_utils mints per
-# result-hook while subHandler runs (the real upload tokens)
+# _captureUploadTokens / _installUploadTokenRecorder (fix #4) — the recorder
+# intercepts Token.createToken so a submit captures the EXACT per-hook upload
+# tokens girder_worker_utils mints on ITS thread, killing the old time-window race.
 # ---------------------------------------------------------------------------
 
-def _installTokenModel(monkeypatch, model):
+def _installRecorderOnFakeToken(monkeypatch, minted):
+    """Point girder.models.token.Token at a throwaway fake whose createToken yields
+    ``minted`` in order, install the recorder onto it, and return the fake class."""
     import girder.models.token as token_module
-    monkeypatch.setattr(token_module, "Token", lambda: model)
-    return model
+
+    class _FakeToken:
+        def createToken(self, *args, **kwargs):
+            return {"_id": next(minted)}
+
+    monkeypatch.setattr(token_module, "Token", _FakeToken)
+    processing._installUploadTokenRecorder()  # wraps _FakeToken.createToken
+    return _FakeToken
 
 
-def test_captured_upload_tokens_filters_by_user_scope_and_window(monkeypatch):
-    seen = {}
+def test_capture_records_tokens_minted_within_the_block(monkeypatch):
+    minted = iter(["tok-1", "tok-2", "tok-3"])
+    FakeToken = _installRecorderOnFakeToken(monkeypatch, minted)
+    tok = FakeToken()
+    with processing._captureUploadTokens() as cap:
+        a = tok.createToken(user={"_id": "u"})
+        b = tok.createToken(user={"_id": "u"})
+    outside = tok.createToken(user={"_id": "u"})  # minted after the block — NOT recorded
 
-    class _FakeTokenModel:
-        def find(self, query):
-            seen["query"] = query
-            return [{"_id": "worker-1"}, {"_id": "worker-2"}]
-
-    _installTokenModel(monkeypatch, _FakeTokenModel())
-    since = datetime.datetime(2026, 7, 4, 0, 0, 0)
-    until = datetime.datetime(2026, 7, 4, 0, 0, 1)
-
-    out = processing._capturedUploadTokens({"_id": "user-1"}, since, until)
-
-    assert out == ["worker-1", "worker-2"]
-    q = seen["query"]
-    assert q["userId"] == "user-1"
-    assert q["scope"] == outputs_mod.TokenScope.DATA_WRITE
-    assert q["created"] == {"$gte": since, "$lte": until}
+    assert a["_id"] == "tok-1" and b["_id"] == "tok-2"
+    assert cap.ids == ["tok-1", "tok-2"]
+    assert outside["_id"] == "tok-3"  # createToken still works, just uncaptured
 
 
-def test_captured_upload_tokens_swallows_db_errors(monkeypatch):
-    class _BoomToken:
-        def find(self, query):
-            raise RuntimeError("db down")
+def test_capture_blocks_are_independent(monkeypatch):
+    # Two sequential capture blocks (the analogue of two concurrent submits on their
+    # own threads) collect DISJOINT sets — the property that kills race #4.
+    minted = iter(["a", "b"])
+    FakeToken = _installRecorderOnFakeToken(monkeypatch, minted)
+    tok = FakeToken()
+    with processing._captureUploadTokens() as first:
+        tok.createToken()
+    with processing._captureUploadTokens() as second:
+        tok.createToken()
+    assert first.ids == ["a"]
+    assert second.ids == ["b"]
 
-    _installTokenModel(monkeypatch, _BoomToken())
-    # A capture failure must never fail a submit — degrade to no auto-attach, not a 500.
-    assert processing._capturedUploadTokens(
-        {"_id": "u"}, datetime.datetime(2026, 7, 4), datetime.datetime(2026, 7, 4)
-    ) == []
+
+def test_recorder_is_noop_outside_a_block_and_install_is_idempotent(monkeypatch):
+    minted = iter(["x", "y"])
+    FakeToken = _installRecorderOnFakeToken(monkeypatch, minted)
+    processing._installUploadTokenRecorder()  # second install is a guarded no-op
+    tok = FakeToken()
+    # No active capture block: mint succeeds, nothing recorded, thread-local stays clear.
+    assert tok.createToken()["_id"] == "x"
+    assert getattr(processing._tokenCapture, "ids", None) is None
 
 
-def test_captured_upload_tokens_no_user_is_empty():
-    assert processing._capturedUploadTokens(
-        {}, datetime.datetime(2026, 7, 4), datetime.datetime(2026, 7, 4)
-    ) == []
+# ---------------------------------------------------------------------------
+# _projectJobStatus drain guard (fix #2) — a SUCCESS job whose async
+# data.process output-record events haven't drained is held "running" so the
+# client keeps polling instead of reading an empty success.
+# ---------------------------------------------------------------------------
+
+def test_status_holds_running_while_declared_output_undrained():
+    now = datetime.datetime.utcnow()
+    job = {
+        "_id": ObjectId(),
+        "status": JobStatus.SUCCESS,
+        "timestamps": [{"status": JobStatus.SUCCESS, "time": now}],
+        _SPECS: [_spec("outVol")],
+        _OUTPUTS: {},  # data.process hasn't recorded the output yet
+    }
+    assert results_mod._projectJobStatus(job)["state"] == "running"
+    # Once the declared output is recorded, it flips to the real terminal state.
+    job[_OUTPUTS] = {"outVol": "file-1"}
+    assert results_mod._projectJobStatus(job)["state"] == "success"
+
+
+def test_status_success_when_no_outputs_declared():
+    # A genuinely output-less success must never be held as "draining".
+    job = {"_id": ObjectId(), "status": JobStatus.SUCCESS, _SPECS: [], _OUTPUTS: {}}
+    assert results_mod._projectJobStatus(job)["state"] == "success"
+
+
+def test_status_success_after_drain_grace_expires():
+    # Bounded: a declared output the CLI never writes resolves to success once the
+    # grace window passes — never an infinite poll.
+    old = datetime.datetime.utcnow() - datetime.timedelta(
+        seconds=results_mod._OUTPUT_DRAIN_GRACE_SECONDS + 5
+    )
+    job = {
+        "_id": ObjectId(),
+        "status": JobStatus.SUCCESS,
+        "timestamps": [{"status": JobStatus.SUCCESS, "time": old}],
+        _SPECS: [_spec("outVol")],
+        _OUTPUTS: {},
+    }
+    assert results_mod._projectJobStatus(job)["state"] == "success"
+
+
+def test_status_running_job_unaffected_by_drain_guard():
+    # A truly running (non-success) job is untouched by the guard.
+    job = {"_id": ObjectId(), "status": JobStatus.RUNNING, _SPECS: [_spec("o")],
+           _OUTPUTS: {}}
+    assert results_mod._projectJobStatus(job)["state"] == "running"
+
+
+def test_status_drain_guard_handles_tz_aware_timestamp():
+    # Girder's Mongo collections are tz-aware, so a job loaded from the DB carries a
+    # tz-AWARE terminal timestamp. The age math must not raise (naive utcnow() minus
+    # aware -> TypeError -> 500); it must project "running" within the grace window.
+    now = datetime.datetime.now(datetime.timezone.utc)
+    job = {
+        "_id": ObjectId(),
+        "status": JobStatus.SUCCESS,
+        "timestamps": [{"status": JobStatus.SUCCESS, "time": now}],
+        _SPECS: [_spec("outVol")],
+        _OUTPUTS: {},
+    }
+    assert results_mod._projectJobStatus(job)["state"] == "running"
+    # And an aware timestamp past the grace window resolves to success (no crash).
+    old = now - datetime.timedelta(
+        seconds=results_mod._OUTPUT_DRAIN_GRACE_SECONDS + 5
+    )
+    job["timestamps"] = [{"status": JobStatus.SUCCESS, "time": old}]
+    assert results_mod._projectJobStatus(job)["state"] == "success"
+
+
+def test_status_success_when_terminal_timestamp_missing():
+    # Anomalous SUCCESS job with no terminal timestamp resolves to its real state
+    # rather than wedging the client in an unbounded "running" poll.
+    job = {"_id": ObjectId(), "status": JobStatus.SUCCESS, "timestamps": [],
+           _SPECS: [_spec("outVol")], _OUTPUTS: {}}
+    assert results_mod._projectJobStatus(job)["state"] == "success"
 
 
 # ---------------------------------------------------------------------------

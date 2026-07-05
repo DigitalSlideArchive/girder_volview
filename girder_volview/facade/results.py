@@ -11,6 +11,8 @@ This module owns the neutral projections the client polls and applies:
   result-read envelope (D5).
 """
 
+import datetime
+
 from girder import logger
 from girder.constants import AccessType
 from girder.exceptions import RestException
@@ -50,6 +52,17 @@ def _projectJobState(job):
 def _projectJobStatus(job):
     """Convert Girder Job status to ProcessingJobStatus."""
     state = _projectJobState(job)
+    # Race guard (fix #2): a job can read terminal SUCCESS while its output-record
+    # events are still queued on Girder's async data.process daemon, so a results
+    # read here would return {intents:[], missing:0} -- indistinguishable from a
+    # genuine empty success -- and the client would stop polling. Hold the
+    # projected status non-terminal ("running") until every declared output has
+    # drained, so the client's existing poll loop keeps polling (no client change)
+    # and only fires completion once /results can actually return the intents. A
+    # racy direct /results call during drain still hits the explicit 400 gate in
+    # _jobResultsPayload (which also calls this), a free secondary defense.
+    if state == "success" and _outputsStillDraining(job):
+        return {"jobId": str(job["_id"]), "state": "running"}
     out = {"jobId": str(job["_id"]), "state": state}
     if state == "error":
         log = job.get("log") or []
@@ -158,6 +171,70 @@ def _recordedOutputSpecs(job):
     """The declared output specs recorded at submit (or [])."""
     specs = (job or {}).get(_OUTPUT_SPECS_FIELD)
     return list(specs) if isinstance(specs, list) else []
+
+
+# Grace window: how long after the SUCCESS transition to treat un-recorded
+# declared outputs as "still draining" on Girder's async data.process daemon
+# before accepting the job as genuinely done. The daemon normally drains in well
+# under a second; the window only bounds the pathological "declared output never
+# written" case so it can never pin the client in an infinite poll.
+_OUTPUT_DRAIN_GRACE_SECONDS = 30
+
+
+def _terminalTime(job):
+    """The datetime of the job's most recent terminal status transition, or None."""
+    from girder_jobs.constants import JobStatus
+    terminal = {JobStatus.SUCCESS, JobStatus.ERROR, JobStatus.CANCELED}
+    for ts in reversed(job.get("timestamps") or []):
+        if isinstance(ts, dict) and ts.get("status") in terminal:
+            return ts.get("time")
+    return None
+
+
+def _outputsStillDraining(job):
+    """A SUCCESS job whose async data.process output-record events are still queued.
+
+    True iff the job succeeded but at least one DECLARED projectable output spec
+    (``volviewOutputSpecs``) has not yet been recorded into ``volviewOutputs``.
+    Keyed on declared spec NAMES only, so a recorded-but-undeclared identifier
+    (slicer's ``returnparameterfile``) -- which lives only on the recorded side --
+    never counts as pending. Bounded by a grace window after the terminal
+    transition so an output the CLI never writes cannot hold the client in an
+    infinite poll.
+
+    Used by ``_projectJobStatus`` to hold the poll status non-terminal while the
+    outputs drain: without it, a job read as terminal-SUCCESS during the drain
+    window would collect ``{intents:[], missing:0}`` -- indistinguishable from a
+    genuine empty success -- and the client would stop polling and never see the
+    real outputs.
+    """
+    from girder_jobs.constants import JobStatus
+    if job.get("status") != JobStatus.SUCCESS:
+        return False
+    specs = [
+        s for s in _recordedOutputSpecs(job)
+        if isinstance(s, dict) and s.get("name")
+    ]
+    if not specs:
+        return False  # nothing declared -> genuine empty success, never "draining"
+    recorded = _recordedJobOutputs(job)
+    if all(s["name"] in recorded for s in specs):
+        return False  # every declared output recorded -> genuinely done
+    finished = _terminalTime(job)
+    if not isinstance(finished, datetime.datetime):
+        # A SUCCESS job normally carries its terminal timestamp (girder_jobs writes
+        # the status $set and the timestamp $push atomically), so this is anomalous.
+        # Resolve to the real state rather than hold "running" with no time bound
+        # (a missing timestamp must never wedge the client in an infinite poll).
+        return False
+    # Girder's Mongo collections are tz-aware UTC, so a timestamp read back from the
+    # DB is tz-aware while ``datetime.utcnow()`` is naive -- subtracting the two
+    # raises TypeError (a 500 on the poll). Normalize both to aware-UTC, mirroring
+    # ``utils._toIso``; a hand-built naive timestamp (offline tests) is treated UTC.
+    if finished.tzinfo is None:
+        finished = finished.replace(tzinfo=datetime.timezone.utc)
+    age = (datetime.datetime.now(datetime.timezone.utc) - finished).total_seconds()
+    return age < _OUTPUT_DRAIN_GRACE_SECONDS
 
 
 def _loadOutputFile(fileId, user):

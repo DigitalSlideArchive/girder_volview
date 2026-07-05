@@ -31,17 +31,18 @@ with the ecosystem's reference→job binding (slicer_cli_web ``girder_plugin.py`
     ``GirderClientTransform`` mints a *fresh* DATA_WRITE token per result-hook
     GirderClient (``girder_io.py``) and the worker uploads each output under one of
     THOSE. So ``_bindJobOutputs`` records the SET of tokens minted while building the
-    hooks (``_capturedUploadTokens``, captured tightly around the ``subHandler`` call),
-    and ``_jobForOutputUpload`` matches that set — narrowed by the declared
-    ``identifier`` so overlapping same-user submits never cross.
+    hooks (``_captureUploadTokens`` intercepts ``Token.createToken`` on this submit's
+    thread, so the set is EXACTLY this job's hook tokens — two concurrent same-user
+    same-task submits capture disjoint sets and never cross), and
+    ``_jobForOutputUpload`` matches that set, narrowed by the declared ``identifier``.
   * ``results._collectJobResults`` reads those ids OFF the job. No name is ever
     matched, so the race is gone.
 """
 
 import json
+import threading
 
 from girder import logger
-from girder.constants import TokenScope
 from girder.models.item import Item
 
 from ..utils import JOB_OUTPUT_META_KEY
@@ -91,23 +92,18 @@ def _jobForOutputUpload(ref, info):
     upload under the facade's own job token: girder_worker_utils' ``GirderClientTransform``
     mints a fresh DATA_WRITE token per result-hook and uploads each output under one
     of those, so ``_bindJobOutputs`` records them all as ``_JOB_TOKENS_FIELD`` at submit
-    (``_capturedUploadTokens``). The match is narrowed by the reference ``identifier``
-    against the job's declared output specs, so two overlapping same-user submits whose
-    capture windows touch can never cross (a token in both sets still resolves to the job
-    that actually declares that output). A facade-minted reference may also carry the job
-    id directly; it is honored when present. Returns the job doc, or ``None`` (fail closed
-    — an uncorrelated upload is never recorded onto some other job).
+    (``_captureUploadTokens``, which captures the EXACT tokens minted on this submit's
+    thread — see ``_installUploadTokenRecorder``). The match is narrowed by the reference
+    ``identifier`` against the job's declared output specs. Returns the job doc, or
+    ``None`` (fail closed — an uncorrelated upload is never recorded onto some other job).
+
+    The upload ``reference`` is caller-controllable (Girder passes a POST-supplied
+    ``reference`` straight into ``data.process``), so it is NEVER trusted to name its own
+    job: correlation is solely by the server-minted, user-bound upload token. (A prior
+    ``jobId``-in-reference shortcut was removed — it force-loaded an arbitrary job past
+    the ACL, letting a crafted upload attach a file onto any job.)
     """
     from girder_jobs.models.job import Job as JobModel
-    jobId = ref.get("jobId")
-    if jobId:
-        # A malformed id must never escape and disrupt the data.process daemon.
-        try:
-            job = JobModel().load(jobId, force=True, exc=False)
-        except Exception:
-            job = None
-        if isinstance(job, dict):
-            return job
     token = info.get("currentToken")
     tokenId = token.get("_id") if isinstance(token, dict) else None
     if not tokenId:
@@ -195,8 +191,8 @@ def _bindJobOutputs(job, token, cli_xml, uploadTokens=None):
     The declared output specs (so collection needs no CLIItem lookup and no
     ``_original_params``), the set of tokens an output upload may arrive under (the
     ``data.process`` correlation key — see ``_jobForOutputUpload``), and an empty id
-    map the handler fills in. ``uploadTokens`` are the per-hook tokens captured around
-    ``subHandler`` (``_capturedUploadTokens``); the facade's own ``token`` is always
+    map the handler fills in. ``uploadTokens`` are the per-hook tokens captured during
+    ``subHandler`` (``_captureUploadTokens``); the facade's own ``token`` is always
     included first so a synthesized event under it (offline tests, older callers) still
     correlates. The declared output specs come from the single
     ``slicer_spec.parse_cli`` walk. Split out from ``routes._genDockerJob`` so it is
@@ -221,33 +217,66 @@ def _bindJobOutputs(job, token, cli_xml, uploadTokens=None):
         logger.exception("Failed to bind outputs on job %s", job.get("_id"))
 
 
-def _capturedUploadTokens(user, since, until):
-    """Ids of the DATA_WRITE tokens minted for ``user`` during job build (D5 fix).
+# Thread-local bucket: while a submit is inside a ``_captureUploadTokens`` block on
+# this request thread, ``.ids`` is a list the wrapped ``Token.createToken`` appends
+# each minted token id to. ``None`` (the default) means "not recording", so the
+# wrapper is a no-op for every other token mint process-wide.
+_tokenCapture = threading.local()
 
-    girder_worker_utils' ``GirderClientTransform`` mints a *fresh* DATA_READ/DATA_WRITE
-    token per result-hook GirderClient (``girder_io.py``) and the worker uploads each
-    output under one of those — never the facade's own job token. ``routes._genDockerJob``
-    captures them by querying the tokens this user gained over the (tight) ``subHandler``
-    window; ``_bindJobOutputs`` records them so ``_recordJobOutput`` can correlate the
-    upload back to this job. Best-effort: a capture failure must never fail a submit —
-    results simply won't auto-attach (the pre-fix behavior), never a 500.
 
-    The window is scoped to this user + DATA_WRITE scope + [since, until]; extra tokens
-    swept in are harmless (they only matter if an output arrives under them). The one
-    residual is two *same-task* same-user submits whose windows overlap — identifier
-    narrowing in ``_jobForOutputUpload`` disambiguates every other concurrent case.
+def _installUploadTokenRecorder():
+    """Wrap ``Token.createToken`` ONCE so a submit can capture the EXACT upload tokens
+    girder_worker_utils mints per result-hook (``girder_io.py``) during its ``subHandler``
+    call — on THIS request thread only.
+
+    This replaces the old ``[since, until]`` time-window query, whose one residual race
+    was that two same-user *same-task* submits with overlapping windows captured each
+    other's tokens (and identical output identifiers could not disambiguate them). The
+    exact per-hook token is not recoverable from the created job document (girder_worker
+    stores only args/kwargs/celeryTaskId, never the result-hook tokens), so we intercept
+    the mint itself. Two concurrent submits run on different request threads, each with
+    its own ``threading.local`` bucket, so their captured sets are DISJOINT by
+    construction — the race is gone regardless of identifier overlap or worker-process
+    topology.
+
+    Idempotent (guarded by ``_volviewUploadRecorder``) and a no-op for every mint outside
+    a capture block, so it never changes global token behavior. Installed once at plugin
+    load (``routes.addProcessingRoutes``).
     """
-    userId = user.get("_id") if isinstance(user, dict) else getattr(user, "_id", None)
-    if userId is None:
-        return []
     from girder.models.token import Token
-    try:
-        cursor = Token().find({
-            "userId": userId,
-            "scope": TokenScope.DATA_WRITE,
-            "created": {"$gte": since, "$lte": until},
-        })
-        return [str(doc["_id"]) for doc in cursor]
-    except Exception:
-        logger.exception("Failed to capture upload tokens for user %s", userId)
-        return []
+    if getattr(Token, "_volviewUploadRecorder", False):
+        return
+    _original = Token.createToken
+
+    def createToken(self, *args, **kwargs):
+        tok = _original(self, *args, **kwargs)
+        bucket = getattr(_tokenCapture, "ids", None)
+        if bucket is not None:
+            try:
+                bucket.append(str(tok["_id"]))
+            except Exception:
+                pass
+        return tok
+
+    Token.createToken = createToken
+    Token._volviewUploadRecorder = True
+
+
+class _captureUploadTokens:
+    """Context manager: collect ids of every token minted on THIS thread within the block.
+
+    ``routes._genDockerJob`` wraps its synchronous ``subHandler`` call in this block so
+    ``cap.ids`` holds exactly the per-hook upload tokens girder_worker_utils minted for
+    THIS job (plus the harmless ``rest.create_job`` token — no output ever uploads under
+    it). Requires ``_installUploadTokenRecorder`` to have wrapped ``Token.createToken``;
+    if it has not, ``cap.ids`` is simply empty (results won't auto-attach — the pre-fix
+    behavior, never a 500).
+    """
+    def __enter__(self):
+        self.ids = []
+        _tokenCapture.ids = self.ids
+        return self
+
+    def __exit__(self, *exc):
+        _tokenCapture.ids = None
+        return False
