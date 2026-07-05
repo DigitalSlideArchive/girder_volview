@@ -22,7 +22,7 @@ from bson.objectid import ObjectId
 from girder.exceptions import RestException
 from girder_jobs.constants import JobStatus
 
-from girder_volview.facade import processing
+from girder_volview.facade import outputs as outputs_mod, processing, results as results_mod
 
 _OUTPUTS = processing._OUTPUTS_FIELD
 _SPECS = processing._OUTPUT_SPECS_FIELD
@@ -108,14 +108,14 @@ class _FakeFile:
 
 
 def _installFile(monkeypatch, byId=None):
-    monkeypatch.setattr(processing, "File", lambda: _FakeFile(byId))
+    monkeypatch.setattr(results_mod, "File", lambda: _FakeFile(byId))
 
 
 def _deterministicUrls(monkeypatch):
     # Avoid the getApiRoot/server dependency; the real url shape is covered in the
     # server-fixture suite.
     monkeypatch.setattr(
-        processing,
+        results_mod,
         "makeFileDownloadUrl",
         lambda f: "/api/v1/file/%s/proxiable/%s" % (f["_id"], f["name"]),
     )
@@ -418,7 +418,7 @@ def test_captured_upload_tokens_filters_by_user_scope_and_window(monkeypatch):
     assert out == ["worker-1", "worker-2"]
     q = seen["query"]
     assert q["userId"] == "user-1"
-    assert q["scope"] == processing.TokenScope.DATA_WRITE
+    assert q["scope"] == outputs_mod.TokenScope.DATA_WRITE
     assert q["created"] == {"$gte": since, "$lte": until}
 
 
@@ -552,7 +552,7 @@ def test_collect_labelmap_projects_add_segment_group_with_source(monkeypatch):
 def test_collect_folds_labels_sidecar_into_segments(monkeypatch):
     _deterministicUrls(monkeypatch)
     labels = [{"value": 1, "name": "liver", "color": [255, 0, 0, 255]}]
-    monkeypatch.setattr(processing, "_readLabelsSidecar", lambda f: labels)
+    monkeypatch.setattr(results_mod, "_readLabelsSidecar", lambda f: labels)
     segf, jsonf = ObjectId(), ObjectId()
     _installFile(monkeypatch, {
         str(segf): {"_id": segf, "name": "seg.nii.gz"},

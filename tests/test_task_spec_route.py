@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from girder_volview.facade import processing
+from girder_volview.facade import processing, submit
 
 # ---------------------------------------------------------------------------
 # Self-skip when no live test Mongo is reachable (mirrors test_load).
@@ -77,9 +77,9 @@ def stub_slicer(monkeypatch):
         ),
     }
     monkeypatch.delenv(processing._ALLOWED_CATEGORIES_ENV, raising=False)
-    monkeypatch.setattr(processing, "_slicerCliAvailable", lambda: True)
+    monkeypatch.setattr(submit, "_slicerCliAvailable", lambda: True)
     monkeypatch.setattr(
-        processing, "_findCliItem", lambda taskId, user: catalog.get(taskId)
+        submit, "_findCliItem", lambda taskId, user: catalog.get(taskId)
     )
     return catalog
 

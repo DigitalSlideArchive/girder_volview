@@ -15,7 +15,7 @@ import types
 import pytest
 
 from girder.constants import TokenScope
-from girder_volview.facade import processing
+from girder_volview.facade import outputs, processing
 
 
 _EXPECTED_SCOPE = [TokenScope.DATA_READ, TokenScope.DATA_WRITE]
@@ -59,7 +59,7 @@ def fakeDockerStack(monkeypatch):
     monkeypatch.setattr("girder.models.token.Token", _FakeToken)
     # Reference-bound output recording needs a real job/db; not under test here.
     monkeypatch.setattr(
-        processing, "_bindJobOutputs", lambda job, token, xml, uploadTokens=None: None
+        outputs, "_bindJobOutputs", lambda job, token, xml, uploadTokens=None: None
     )
     return captured
 

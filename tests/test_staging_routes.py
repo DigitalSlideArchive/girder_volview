@@ -25,7 +25,7 @@ import types
 
 import pytest
 
-from girder_volview.facade import processing
+from girder_volview.facade import processing, routes, submit
 
 
 # ---------------------------------------------------------------------------
@@ -94,8 +94,8 @@ def realJobStub(monkeypatch):
     without docker, but create a REAL Girder job so the terminal transition fires
     the real jobs.job.update.after handler."""
     cli = types.SimpleNamespace(name="Seg", xml=_CLI_XML)
-    monkeypatch.setattr(processing, "_slicerCliAvailable", lambda: True)
-    monkeypatch.setattr(processing, "_findScopedCliItem", lambda taskId, user: cli)
+    monkeypatch.setattr(submit, "_slicerCliAvailable", lambda: True)
+    monkeypatch.setattr(submit, "_findScopedCliItem", lambda taskId, user: cli)
 
     def fake_gen(cliItem, params, user):
         from girder_jobs.models.job import Job
@@ -103,7 +103,7 @@ def realJobStub(monkeypatch):
             title="stub", type="volview_test", user=user, public=False
         )
 
-    monkeypatch.setattr(processing, "_genDockerJob", fake_gen)
+    monkeypatch.setattr(routes, "_genDockerJob", fake_gen)
     return cli
 
 

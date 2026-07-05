@@ -26,7 +26,7 @@ import pytest
 from bson.objectid import ObjectId
 
 import contract_loader
-from girder_volview.facade import processing
+from girder_volview.facade import processing, routes, submit
 from girder_volview.utils import makeFileDownloadUrl
 
 
@@ -121,14 +121,14 @@ def stubCli(monkeypatch):
     resolution without docker; capture the params the CLI would receive."""
     captured = {}
     cli = types.SimpleNamespace(name="Median", xml=_CLI_XML)
-    monkeypatch.setattr(processing, "_slicerCliAvailable", lambda: True)
-    monkeypatch.setattr(processing, "_findScopedCliItem", lambda taskId, user: cli)
+    monkeypatch.setattr(submit, "_slicerCliAvailable", lambda: True)
+    monkeypatch.setattr(submit, "_findScopedCliItem", lambda taskId, user: cli)
 
     def fake_gen(cliItem, params, user):
         captured["params"] = dict(params)
         return {"_id": ObjectId()}
 
-    monkeypatch.setattr(processing, "_genDockerJob", fake_gen)
+    monkeypatch.setattr(routes, "_genDockerJob", fake_gen)
     return captured
 
 

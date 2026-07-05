@@ -18,7 +18,7 @@ import types
 
 import pytest
 
-from girder_volview.facade import processing
+from girder_volview.facade import processing, slicer_spec, submit
 
 
 def _xml(category=None, name="Tool"):
@@ -61,7 +61,7 @@ def test_scoped_cli_items_keeps_only_radiology(monkeypatch):
         _cli("Mystery"),                              # no category — fail-closed
         _cli("Garbled", xml="<not-valid-xml"),        # unparseable — fail-closed
     ]
-    monkeypatch.setattr(processing, "_listCliItems", lambda user: items)
+    monkeypatch.setattr(submit, "_listCliItems", lambda user: items)
     kept = {c.name for c in processing._scopedCliItems(user="u")}
     assert kept == {"MedianFilter", "OtsuSegmentation", "ThresholdSegmentation"}
 
@@ -77,7 +77,7 @@ def test_find_scoped_cli_item_resolves_only_in_scope(monkeypatch):
         "none": _cli("Mystery"),
     }
     monkeypatch.setattr(
-        processing, "_findCliItem", lambda taskId, user: catalog.get(taskId)
+        submit, "_findCliItem", lambda taskId, user: catalog.get(taskId)
     )
     # In-scope id resolves; getTaskSpec/runTask proceed.
     assert processing._findScopedCliItem("rad", "u").name == "MedianFilter"
@@ -102,11 +102,13 @@ def test_task_in_scope_is_fail_closed_and_case_insensitive():
 
 
 def test_cli_category_parsing():
-    assert processing._cliCategory(_xml("Radiology")) == "Radiology"
-    assert processing._cliCategory(_xml(" Filtering ")) == "Filtering"
-    assert processing._cliCategory(_xml()) is None   # no <category> element
-    assert processing._cliCategory("") is None        # empty text
-    assert processing._cliCategory("<broken") is None  # unparseable
+    # The category walk now comes from the single ``slicer_spec.parse_cli`` surface
+    # (the former ``processing._cliCategory`` was deleted in Chunk 32).
+    assert slicer_spec.parse_cli(_xml("Radiology"))["category"] == "Radiology"
+    assert slicer_spec.parse_cli(_xml(" Filtering "))["category"] == "Filtering"
+    assert slicer_spec.parse_cli(_xml())["category"] is None   # no <category>
+    assert slicer_spec.parse_cli("")["category"] is None        # empty text
+    assert slicer_spec.parse_cli("<broken")["category"] is None  # unparseable
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +138,7 @@ def test_env_override_rescopes_catalog(monkeypatch):
         _cli("MedianFilter", "Radiology"),
         _cli("NucleiDetection", "HistomicsTK"),
     ]
-    monkeypatch.setattr(processing, "_listCliItems", lambda user: items)
+    monkeypatch.setattr(submit, "_listCliItems", lambda user: items)
     monkeypatch.setenv(processing._ALLOWED_CATEGORIES_ENV, "HistomicsTK")
     kept = {c.name for c in processing._scopedCliItems(user="u")}
     assert kept == {"NucleiDetection"}  # radiology now out of scope, pathology in

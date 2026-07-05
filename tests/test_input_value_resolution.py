@@ -16,7 +16,7 @@ from bson.objectid import ObjectId
 from girder.exceptions import AccessException, RestException
 
 import contract_loader
-from girder_volview.facade import processing
+from girder_volview.facade import inputs, processing
 
 
 API_ROOT = "api/v1"
@@ -50,11 +50,11 @@ class _DenyFile:
 def _fixed_api_root(monkeypatch):
     # Deterministic mount so the fixtures' ``/api/v1/...`` uris parse regardless
     # of ambient server config; one test flexes a non-default root explicitly.
-    monkeypatch.setattr(processing, "getApiRoot", lambda: API_ROOT)
+    monkeypatch.setattr(inputs, "getApiRoot", lambda: API_ROOT)
 
 
 def _acceptAll(monkeypatch):
-    monkeypatch.setattr(processing, "File", lambda: _AcceptAllFile())
+    monkeypatch.setattr(inputs, "File", lambda: _AcceptAllFile())
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +91,7 @@ def test_parses_against_configured_api_root_not_a_literal(monkeypatch):
     # Reconciliation flag: recover the id against getApiRoot() (how the minter
     # builds the uri), not a hardcoded /api/v1 — a non-default mount resolves and
     # the default-root shape no longer matches.
-    monkeypatch.setattr(processing, "getApiRoot", lambda: "girder/api/v1")
+    monkeypatch.setattr(inputs, "getApiRoot", lambda: "girder/api/v1")
     fid = str(ObjectId())
     assert processing._fileIdFromMintedUri(
         f"/girder/api/v1/file/{fid}/proxiable/x.nrrd"
@@ -225,7 +225,7 @@ def test_empty_uris_rejected_400(monkeypatch):
 
 def test_unreadable_id_raises_access_exception(monkeypatch):
     denied = str(ObjectId())
-    monkeypatch.setattr(processing, "File", lambda: _DenyFile([denied]))
+    monkeypatch.setattr(inputs, "File", lambda: _DenyFile([denied]))
     value = {"type": "image", "uris": [_mint(denied)]}
     with pytest.raises(AccessException):
         processing._translateValuesToSlicerParams(
@@ -237,7 +237,7 @@ def test_scheme_validation_precedes_acl(monkeypatch):
     # A malformed uri fails 400 before any id is loaded, even when another id in
     # the value would be denied — validation is a full pass ahead of authorization.
     denied = str(ObjectId())
-    monkeypatch.setattr(processing, "File", lambda: _DenyFile([denied]))
+    monkeypatch.setattr(inputs, "File", lambda: _DenyFile([denied]))
     value = {
         "type": "image",
         "uris": ["/api/v1/file/notanid/proxiable/x", _mint(denied)],

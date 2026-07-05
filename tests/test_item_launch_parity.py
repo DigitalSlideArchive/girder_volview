@@ -38,7 +38,7 @@ import types
 
 import pytest
 
-from girder_volview.facade import processing
+from girder_volview.facade import processing, routes, submit
 
 
 # ---------------------------------------------------------------------------
@@ -142,8 +142,8 @@ def runStub(monkeypatch):
     """
     cli = types.SimpleNamespace(name="Seg", xml=_CLI_XML)
     captured = {}
-    monkeypatch.setattr(processing, "_slicerCliAvailable", lambda: True)
-    monkeypatch.setattr(processing, "_findScopedCliItem", lambda taskId, user: cli)
+    monkeypatch.setattr(submit, "_slicerCliAvailable", lambda: True)
+    monkeypatch.setattr(submit, "_findScopedCliItem", lambda taskId, user: cli)
 
     def fake_gen(cliItem, params, user):
         from girder_jobs.models.job import Job
@@ -152,7 +152,7 @@ def runStub(monkeypatch):
             title="stub", type="volview_test", user=user, public=False
         )
 
-    monkeypatch.setattr(processing, "_genDockerJob", fake_gen)
+    monkeypatch.setattr(routes, "_genDockerJob", fake_gen)
     return captured
 
 
@@ -222,9 +222,9 @@ def test_list_tasks_under_item_launch_reaches_parent_folder(
     summary = {
         "id": "task-1", "title": "Seg", "description": "d", "dockerImage": "img",
     }
-    monkeypatch.setattr(processing, "_slicerCliAvailable", lambda: True)
-    monkeypatch.setattr(processing, "_scopedCliItems", lambda user: [object()])
-    monkeypatch.setattr(processing, "_cliItemToSummary", lambda c: summary)
+    monkeypatch.setattr(submit, "_slicerCliAvailable", lambda: True)
+    monkeypatch.setattr(submit, "_scopedCliItems", lambda user: [object()])
+    monkeypatch.setattr(submit, "_cliItemToSummary", lambda c: summary)
 
     folder_id = _served_launch_folder_id(server, launchItem, owner)
     assert folder_id == str(parentFolder["_id"])

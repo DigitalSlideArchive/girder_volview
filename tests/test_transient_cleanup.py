@@ -15,7 +15,7 @@ from bson.objectid import ObjectId
 
 from girder_jobs.constants import JobStatus
 
-from girder_volview.facade import processing
+from girder_volview.facade import inputs, processing
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +51,7 @@ class _RecordingItemModel:
 
 
 def _installItemModel(monkeypatch, model):
-    monkeypatch.setattr(processing, "Item", lambda: model)
+    monkeypatch.setattr(inputs, "Item", lambda: model)
     return model
 
 
