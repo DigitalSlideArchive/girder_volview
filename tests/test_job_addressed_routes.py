@@ -94,6 +94,7 @@ def _makeJob(user, public=False, status=None):
             JobStatus.QUEUED: [JobStatus.QUEUED],
             JobStatus.RUNNING: [JobStatus.QUEUED, JobStatus.RUNNING],
             JobStatus.SUCCESS: [JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.SUCCESS],
+            JobStatus.ERROR: [JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.ERROR],
         }[status]
         for s in path:
             job = Job().updateJob(job, status=s)
@@ -135,6 +136,25 @@ def test_status_route_is_job_addressed_no_folder(server, owner):
     assert resp.json["jobId"] == str(job["_id"])
     # RUNNING projects to the neutral `running` (no folder was needed to get here).
     assert resp.json["state"] == "running"
+
+
+@pytest.mark.plugin("volview")
+def test_status_route_includes_error_tail(server, owner):
+    from girder_jobs.constants import JobStatus
+    from girder_jobs.models.job import Job
+    job = _makeJob(owner, status=JobStatus.RUNNING)
+    job = Job().updateJob(
+        job,
+        log="FileNotFoundError: output.nii.gz\ntrace line\n",
+        status=JobStatus.ERROR,
+    )
+
+    resp = _get(server, STATUS_PATH % job["_id"], owner)
+
+    assert resp.output_status.startswith(b"200")
+    assert resp.json["state"] == "error"
+    assert "FileNotFoundError" in resp.json["errorTail"]
+    assert "trace line" in resp.json["errorTail"]
 
 
 @pytest.mark.plugin("volview")

@@ -236,7 +236,9 @@ def runTask(self, folder, taskId, body):
 def getJob(self, jobId):
     user = self.getCurrentUser()
     from girder_jobs.models.job import Job as JobModel
-    job = JobModel().load(jobId, user=user, level=AccessType.READ, exc=True)
+    job = JobModel().load(
+        jobId, user=user, level=AccessType.READ, exc=True, includeLog=True,
+    )
     return results._projectJobStatus(job)
 
 
@@ -286,7 +288,9 @@ def cancelJob(self, jobId):
         pass
     # Reload fresh and project the ACTUAL persisted state (contract Seam 3
     # best-effort): the client's poller converges on whatever Girder holds.
-    fresh = jobModel.load(jobId, user=user, level=AccessType.READ, exc=True)
+    fresh = jobModel.load(
+        jobId, user=user, level=AccessType.READ, exc=True, includeLog=True,
+    )
     return results._projectJobStatus(fresh)
 
 
