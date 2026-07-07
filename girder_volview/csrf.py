@@ -1,8 +1,8 @@
 """Server-side CSRF defense for the facade's cookie-authenticated write routes.
 
 VolView's session-save and ``runTask`` routes are ``@access.public(cookie=True)``,
-which opts them out of Girder's built-in same-origin protection for cookie auth
-(D9 addendum, 2026-07-02). The DSA topology serves the VolView client
+which opts them out of Girder's built-in same-origin protection for cookie auth.
+The DSA topology serves the VolView client
 *same-origin* with this facade behind a reverse proxy, so we re-establish that
 protection server-side and client-transparently: every state-changing handler is
 wrapped so a request whose browser-set ``Origin`` / ``Sec-Fetch-Site`` headers do
@@ -45,6 +45,7 @@ _DEFAULT_PORTS = {"http": "80", "https": "443"}
 # ---------------------------------------------------------------------------
 # Origin derivation -- the browser-facing origin, never cherrypy's local bind
 # ---------------------------------------------------------------------------
+
 
 def _firstHop(value):
     """First entry of a possibly comma-chained ``X-Forwarded-*`` value, or None."""
@@ -98,6 +99,7 @@ def deploymentOrigin(headers, fallbackScheme="https"):
 # The decision -- pure over a headers mapping
 # ---------------------------------------------------------------------------
 
+
 def isSameOriginWrite(headers, fallbackScheme="https"):
     """Whether a state-changing request's browser-set headers vouch for a
     same-origin caller.
@@ -137,6 +139,7 @@ def isSameOriginWrite(headers, fallbackScheme="https"):
 # The decorator -- bind the decision to the live cherrypy request
 # ---------------------------------------------------------------------------
 
+
 def csrfProtect(handler):
     """Wrap a facade write handler so a cross-site / unvouched-for request is
     rejected with HTTP 403 before it reaches the model layer.
@@ -154,6 +157,7 @@ def csrfProtect(handler):
     The wrapper carries :data:`CSRF_PROTECTED_ATTR` so the route-enumeration test
     can fail if a new write route ever ships without this guard.
     """
+
     @functools.wraps(handler)
     def wrapped(*args, **kwargs):
         scheme = getattr(cherrypy.request, "scheme", None) or "https"
