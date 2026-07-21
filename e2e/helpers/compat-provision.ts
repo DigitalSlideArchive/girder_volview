@@ -79,6 +79,7 @@ export async function provisionCompat(
   );
   const fixtures = {} as Record<FixtureId, FixtureFolder>;
 
+  async function provision(): Promise<CompatState> {
   async function nrrdFixture(id: FixtureId, count: 1 | 2): Promise<void> {
     const folderId = await createFolderUnder(request, token, 'folder', runRootFolderId, id);
     const uploaded = [];
@@ -157,6 +158,19 @@ export async function provisionCompat(
     devkitTrialFolderId,
     gestures: [],
   };
+  }
+
+  try {
+    return await provision();
+  } catch (error) {
+    if (!(await deleteFolder(request, token, runRootFolderId))) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `[compat] provisioning failed and could not delete run root ${runRootFolderId}: ${message}`
+      );
+    }
+    throw error;
+  }
 }
 
 export async function teardownCompat(request: APIRequestContext, state: CompatState): Promise<void> {

@@ -33,7 +33,6 @@ test.describe('compat verify: devkit study drill-down', () => {
     await gotoFolder(page, folderId);
     const launch = await drillRowNav(page, rowTexts);
     const m = await launch.manifest;
-    expect(m, 'no manifest captured on launch').toBeTruthy();
     expect(
       isSessionManifest(m),
       `study drill-down must resume the main-era session: ${resourceNames(m)}`

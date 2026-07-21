@@ -87,6 +87,40 @@ def test_output_folders_nest_in_one_marked_container(server, owner, launchFolder
 
 
 @pytest.mark.plugin("volview")
+def test_first_write_collaborator_does_not_gain_container_admin(
+    server, owner, launchFolder
+):
+    from girder.constants import AccessType
+    from girder.models.folder import Folder
+
+    collaborator = makeUser("writecollaborator")
+    Folder().setUserAccess(
+        launchFolder, collaborator, level=AccessType.WRITE, save=True
+    )
+
+    routes._createJobOutputFolder(
+        launchFolder, collaborator, uuid.uuid4().hex
+    )
+
+    container = _container(launchFolder)
+    launchAccess = Folder().getFullAccessList(launchFolder)
+    containerAccess = Folder().getFullAccessList(container)
+    assert sorted((u["id"], u["level"]) for u in containerAccess["users"]) == sorted(
+        (u["id"], u["level"]) for u in launchAccess["users"]
+    )
+    assert containerAccess["groups"] == launchAccess["groups"]
+    assert next(
+        u["level"]
+        for u in containerAccess["users"]
+        if u["id"] == collaborator["_id"]
+    ) == AccessType.WRITE
+
+    resp = _restDeleteFolder(server, container["_id"], collaborator)
+    assert resp.output_status.startswith(b"403")
+    assert _folderExists(container["_id"])
+
+
+@pytest.mark.plugin("volview")
 def test_output_folder_acl_failure_removes_partial_folder(
     server, owner, launchFolder, monkeypatch
 ):
@@ -94,10 +128,16 @@ def test_output_folder_acl_failure_removes_partial_folder(
 
     submissionId = uuid.uuid4().hex
 
-    def failAccessList(*args, **kwargs):
-        raise RuntimeError("cannot set output ACL")
+    realSetAccessList = Folder.setAccessList
+    calls = {"count": 0}
 
-    monkeypatch.setattr(Folder, "setAccessList", failAccessList)
+    def failOutputAccessList(self, *args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise RuntimeError("cannot set output ACL")
+        return realSetAccessList(self, *args, **kwargs)
+
+    monkeypatch.setattr(Folder, "setAccessList", failOutputAccessList)
 
     with pytest.raises(RuntimeError, match="cannot set output ACL"):
         routes._createJobOutputFolder(launchFolder, owner, submissionId)

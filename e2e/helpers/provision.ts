@@ -87,15 +87,17 @@ export async function deleteFolder(
   request: APIRequestContext,
   token: string,
   folderId: string
-): Promise<void> {
+): Promise<boolean> {
   const res = await request.delete(apiUrl(`/folder/${folderId}`), {
     headers: { 'Girder-Token': token },
   });
   if (res.status() >= 300) {
     // eslint-disable-next-line no-console
-    console.warn(`[e2e] delete folder ${folderId} returned HTTP ${res.status()} (ignored)`);
+    console.warn(`[e2e] delete folder ${folderId} returned HTTP ${res.status()}`);
+    return false;
   } else {
     // eslint-disable-next-line no-console
     console.log(`[e2e] deleted folder ${folderId}`);
+    return true;
   }
 }

@@ -249,9 +249,10 @@ def _jobsContainerFolder(launchFolder, user):
     gets a short grace period (a concurrent submission's container between its
     create and its stamp) before the 409, and a failed stamp removes the created
     folder rather than leave an unmarked container that would 409 every future
-    submission. Its ACL is the launch folder's (copied by ``createFolder``):
-    collaborators may see the container, but each per-job folder inside keeps its
-    submitter-only ACL.
+    submission. After creation its ACL is replaced with the launch folder's
+    exact user and group policy. This removes the implicit ADMIN grant that
+    ``createFolder`` gives its creator while retaining collaborators' inherited
+    access. Each per-job folder inside keeps its submitter-only ACL.
     """
 
     def findContainer():
@@ -301,6 +302,12 @@ def _jobsContainerFolder(launchFolder, user):
             raise
         return container
     try:
+        created = Folder().setAccessList(
+            created,
+            launchFolder.get("access", {"users": [], "groups": []}),
+            save=True,
+            force=True,
+        )
         return Folder().setMetadata(created, {JOB_OUTPUT_FOLDER_META_KEY: True})
     except Exception:
         Folder().remove(created)
