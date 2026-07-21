@@ -5,8 +5,9 @@
 # those into one row per patient; `layout.flatten: only` pulls items up from the
 # nested patient/study/CT|PET folders and hides the folders themselves.
 #
-# Grouping keys resolve against item metadata as `meta.dicom.*`, which nothing
-# populates on an S3 import -- `seed.py seed` sets it explicitly.
+# Grouping keys resolve against item metadata as `meta.dicom.*`. girder_volview
+# populates the instance tags on both uploads and S3 imports; `seed.py seed`
+# adds the derived `ModalitiesInStudy` value that is absent from each instance.
 
 defaultItemList: patientList
 

@@ -56,7 +56,7 @@ test.describe('jobs come-back path (Load results)', () => {
     const view = await launchChecked(page, g);
 
     // The come-back job must NOT auto-apply: before the explicit load there is
-    // no Otsu segment group and no loaded-result count.
+    // no Otsu segment group and the Load action is still available.
     await openModuleTab(view, 'Annotations');
     await expect(
       view.locator('.segment-group-list').getByText(/Otsu/),
@@ -160,11 +160,12 @@ test.describe('live submission + auto-apply (the submission gate)', () => {
     await submitTaskFromForm(view);
 
     const row = view.locator('.job-row').filter({ hasText: 'Threshold Segmentation' }).first();
-    await expect(row, 'the submitted threshold job did not appear in history').toContainText(/Failed/, {
-      timeout: 180_000,
-    });
-    await expect(row.getByRole('button', { name: 'Load', exact: true })).toHaveCount(0);
     await row.getByRole('button', { name: 'Details', exact: true }).click();
+    await expect(row.locator('.job-subtitle'), 'the threshold job did not reach Failed').toContainText(
+      /^Failed\b/,
+      { timeout: 180_000 }
+    );
+    await expect(row.getByRole('button', { name: 'Load', exact: true })).toHaveCount(0);
     await expect(row.locator('.error-log'), 'the failed job exposes no error details').toContainText(
       /Lower threshold/
     );

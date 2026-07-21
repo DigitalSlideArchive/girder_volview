@@ -66,7 +66,6 @@ and no longer need build-time env flags — `VITE_ENABLE_PROCESSING`,
 What the deployed client is allowed to contact is decided at runtime by a
 same-origin egress gate; a same-origin deployment (such as DSA) needs no
 configuration, and cross-origin targets are never allowed.
-See [Processing provider & remote-save origin gate](./processing_origin_gate.md).
 
 ## Radiology CLI task image
 

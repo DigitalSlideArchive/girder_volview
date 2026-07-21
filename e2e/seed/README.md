@@ -75,7 +75,7 @@ Girder then reaches it at `http://minio:9000`; from your host it's
 ```bash
 uv run seed.py fetch                  # download pinned series → data/
 uv run seed.py stage                  # arrange + push to MinIO
-uv run seed.py seed                   # assetstore + import + metadata + configs
+uv run seed.py seed                   # assetstore + import + study metadata + configs
 uv run seed.py verify                 # assert it all works
 ```
 
@@ -88,7 +88,7 @@ Other commands:
 | `select` | Re-query IDC and re-pin `manifest/series.json`. Rarely needed. |
 | `fetch --small` | Download only the three small-tier series (~a few MB of slices used). |
 | `stage --max-slices N` | Slices per CT/PET series (default 40). |
-| `seed-small --folder-id ID [--slices N]` | Plain-upload the small-tier slices (no MinIO) into a folder, with `meta.dicom.*` set. Used by the e2e compat provisioning. |
+| `seed-small --folder-id ID [--slices N]` | Plain-upload the small-tier slices (no MinIO) into a folder; girder_volview populates `meta.dicom.*`. Used by the e2e compat provisioning. |
 | `reset [--bucket]` | Delete the collection and assetstore; optionally empty the bucket. |
 
 The small tier is `patient-01/study-01/{CT,PET}` (a layerable CT+PET study) plus
@@ -115,12 +115,12 @@ Overridable via env: `GIRDER_URL`, `DSA_ADMIN_USER`, `DSA_ADMIN_PASS`,
 at the start of the basename, so `\.dcm$` matches nothing and the import silently
 creates folders with no items. Use `.*\.dcm$`.
 
-**An S3 import fires no `data.process` event.** It never routes through
-`Upload.finalizeUpload`, so the `dicom_viewer` plugin never runs and *nothing*
-populates DICOM metadata. `seed` therefore reads tags locally with pydicom and
-writes them to each item as `meta.dicom.*` — which is what the grouping actually
-queries. Note `POST /item/:id/parseDicom` would **not** be enough: it writes
-`item['dicom']`, while large_image groups on `item['meta']['dicom']`.
+**DICOM metadata is populated from `model.file.save.after`.** S3 imports do not
+route through `Upload.finalizeUpload` or fire `data.process`, but they do save
+each file. girder_volview's handler therefore parses both uploads and S3 imports
+into `meta.dicom.*`, which is what the grouping queries. `seed` only merges the
+derived `ModalitiesInStudy` field because it depends on all series selected for
+a study and is absent from the individual instances.
 
 **`large_image.auto_set` must be off during import.** Import does fire
 `model.file.save`, which walks into large_image's DICOM adjacency scan — a

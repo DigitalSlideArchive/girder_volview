@@ -88,17 +88,14 @@ export async function openModuleTab(page: Page, name: string): Promise<void> {
 // path: this fetches the results AND applies them through the same
 // intent-honoring pipeline the live flow uses (labelmap → segment group on the
 // reconstructed parent image, plain image → new dataset). The button is
-// consumed: the row's subtitle then reports the loaded result count.
+// consumed once the scene application finishes.
 export async function loadJobResults(page: Page): Promise<void> {
   await openModuleTab(page, 'Jobs');
   const panel = page.locator('.jobs-module');
   const load = panel.getByRole('button', { name: 'Load', exact: true }).first();
   await expect(load, 'no "Load" button — is the succeeded job listed in the Jobs tab?').toBeVisible();
   await load.click();
-  await expect(
-    panel.getByText(/\d+ results?/).first(),
-    'no result count on the job row after Load'
-  ).toBeVisible();
+  await expect(load, 'the job result did not finish applying').toHaveCount(0);
 }
 
 // Select a registered task in the Jobs tab's TaskPicker (a v-select labelled
