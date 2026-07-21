@@ -1045,7 +1045,11 @@ def cmd_seed(args) -> None:
             collections[collection_name] = collection
             log(f"Collection {collection_name!r}: {collection['_id']}")
             patients = ensure_folder(gc, collection["_id"], "collection", "patients")
+            ultrasound = ensure_folder(
+                gc, collection["_id"], "collection", "ultrasound"
+            )
             import_prefix(gc, assetstore["_id"], "trial/", patients["_id"])
+            import_prefix(gc, assetstore["_id"], "ultrasound/", ultrasound["_id"])
             apply_study_metadata(gc, plan, {"trial": patients["_id"]})
 
             trial_config_dir = CONFIGS_DIR / "trial"
@@ -1055,6 +1059,15 @@ def cmd_seed(args) -> None:
                 large_image_config = trial_config_dir / ".large_image_config.yaml"
                 upload_config(gc, patients["_id"], large_image_config)
                 log(f"  {collection_name}/patients/{large_image_config.name}")
+            ultrasound_config = CONFIGS_DIR / "ultrasound" / VOLVIEW_CONFIG_NAME
+            upload_config(gc, ultrasound["_id"], ultrasound_config)
+            log(f"  {collection_name}/ultrasound/{VOLVIEW_CONFIG_NAME}")
+            if collection_name == FILTERED_COLLECTION_NAME:
+                ultrasound_filter = (
+                    CONFIGS_DIR / "ultrasound" / ".large_image_config.yaml"
+                )
+                upload_config(gc, ultrasound["_id"], ultrasound_filter)
+                log(f"  {collection_name}/ultrasound/{ultrasound_filter.name}")
 
         developer = ensure_collection(gc, DEVELOPER_COLLECTION_NAME)
         collections[DEVELOPER_COLLECTION_NAME] = developer
@@ -1084,14 +1097,13 @@ def cmd_seed(args) -> None:
             "ultrasound/",
             developer_roots["ultrasound"],
         )
-
         developer_config = CONFIGS_DIR / "developer" / VOLVIEW_CONFIG_NAME
         for name in ("prostate", "fetus"):
             upload_config(gc, developer_roots[name], developer_config)
             log(f"  {DEVELOPER_COLLECTION_NAME}/{name}/{VOLVIEW_CONFIG_NAME}")
-        for config in sorted((CONFIGS_DIR / "ultrasound").glob(".*.yaml")):
-            upload_config(gc, developer_roots["ultrasound"], config)
-            log(f"  {DEVELOPER_COLLECTION_NAME}/ultrasound/{config.name}")
+        ultrasound_config = CONFIGS_DIR / "ultrasound" / VOLVIEW_CONFIG_NAME
+        upload_config(gc, developer_roots["ultrasound"], ultrasound_config)
+        log(f"  {DEVELOPER_COLLECTION_NAME}/ultrasound/{VOLVIEW_CONFIG_NAME}")
     finally:
         set_setting(gc, "large_image.auto_set", previous_auto_set)
         log(f"Restored large_image.auto_set to {previous_auto_set!r}")
@@ -1241,6 +1253,7 @@ def cmd_verify(args) -> None:
         die("Required collections are missing. Run `seed.py seed`.")
 
     trial_roots = {}
+    ultrasound_roots = {}
     sample_ct_folder = None
     expected_patients = {f"patient-{index:02d}" for index in range(1, N_PATIENTS + 1)}
     log("\nTrial hierarchies")
@@ -1251,6 +1264,9 @@ def cmd_verify(args) -> None:
             for folder in gc.listFolder(collection["_id"], "collection")
         }
         check(f"{collection_name}: patients root", "patients" in roots)
+        check(f"{collection_name}: ultrasound root", "ultrasound" in roots)
+        if "ultrasound" in roots:
+            ultrasound_roots[collection_name] = roots["ultrasound"]
         if "patients" not in roots:
             continue
         patients_root = roots["patients"]
@@ -1290,6 +1306,16 @@ def cmd_verify(args) -> None:
             f"{len(signatures[UNFILTERED_COLLECTION_NAME])} vs "
             f"{len(signatures[FILTERED_COLLECTION_NAME])} paths",
         )
+    if len(ultrasound_roots) == len(TRIAL_COLLECTION_NAMES):
+        signatures = {
+            name: imaging_tree_signature(gc, root["_id"])
+            for name, root in ultrasound_roots.items()
+        }
+        check(
+            "ultrasound folders mirror one another",
+            signatures[UNFILTERED_COLLECTION_NAME]
+            == signatures[FILTERED_COLLECTION_NAME],
+        )
 
     log("\nTrial configuration")
     for collection_name, root in trial_roots.items():
@@ -1304,6 +1330,17 @@ def cmd_verify(args) -> None:
             f"{collection_name}: VolView config present",
             VOLVIEW_CONFIG_NAME in names,
         )
+        ultrasound = ultrasound_roots.get(collection_name)
+        if ultrasound:
+            ultrasound_names = {item["name"] for item in gc.listItem(ultrasound["_id"])}
+            check(
+                f"{collection_name}/ultrasound: large-image filter {expected_state}",
+                (".large_image_config.yaml" in ultrasound_names) == should_filter,
+            )
+            check(
+                f"{collection_name}/ultrasound: VolView config present",
+                VOLVIEW_CONFIG_NAME in ultrasound_names,
+            )
 
     if sample_ct_folder is not None:
         items = list(gc.listItem(sample_ct_folder["_id"]))
@@ -1321,11 +1358,22 @@ def cmd_verify(args) -> None:
     }
     check(
         "developer sibling folders",
-        {"prostate", "fetus"} <= set(developer_roots),
+        set(developer_roots) == {"prostate", "fetus", "ultrasound"},
         f"got {sorted(developer_roots)}",
     )
     prostate = developer_roots.get("prostate")
     fetus = developer_roots.get("fetus")
+    developer_ultrasound = developer_roots.get("ultrasound")
+    if developer_ultrasound:
+        names = {item["name"] for item in gc.listItem(developer_ultrasound["_id"])}
+        check(
+            "Developer/ultrasound: large-image filter absent",
+            ".large_image_config.yaml" not in names,
+        )
+        check(
+            "Developer/ultrasound: VolView config present",
+            VOLVIEW_CONFIG_NAME in names,
+        )
     if prostate:
         prostate_items = {item["name"]: item for item in gc.listItem(prostate["_id"])}
         prostate_folders = child_folders(gc, prostate["_id"])
@@ -1381,7 +1429,7 @@ def cmd_verify(args) -> None:
             )
 
     log("\nServed VolView config")
-    ultrasound = developer_roots.get("ultrasound")
+    ultrasound = ultrasound_roots.get(UNFILTERED_COLLECTION_NAME)
     config_targets = []
     if FILTERED_COLLECTION_NAME in trial_roots:
         config_targets.append(
@@ -1461,20 +1509,33 @@ def cmd_verify(args) -> None:
 
     if ultrasound:
         log("\nUltrasound clips")
-        clips = [
-            item
-            for item in gc.listItem(ultrasound["_id"])
-            if item["name"].endswith(".dcm")
-        ]
-        check(f"{N_CLIPS} clips", len(clips) == N_CLIPS, f"got {len(clips)}")
-        for clip in clips:
-            meta = gc.getItem(clip["_id"]).get("meta", {})
-            frames = meta.get("dicom", {}).get("NumberOfFrames")
+        all_ultrasound_roots = {
+            **ultrasound_roots,
+            **(
+                {DEVELOPER_COLLECTION_NAME: developer_ultrasound}
+                if developer_ultrasound
+                else {}
+            ),
+        }
+        for collection_name, root in all_ultrasound_roots.items():
+            clips = [
+                item
+                for item in gc.listItem(root["_id"])
+                if item["name"].endswith(".dcm")
+            ]
             check(
-                f"{clip['name']} is cine",
-                bool(frames) and int(frames) > 1,
-                f"frames={frames}",
+                f"{collection_name}: {N_CLIPS} clips",
+                len(clips) == N_CLIPS,
+                f"got {len(clips)}",
             )
+            for clip in clips:
+                meta = gc.getItem(clip["_id"]).get("meta", {})
+                frames = meta.get("dicom", {}).get("NumberOfFrames")
+                check(
+                    f"{collection_name}/{clip['name']} is cine",
+                    bool(frames) and int(frames) > 1,
+                    f"frames={frames}",
+                )
 
     if failures:
         die(f"{len(failures)} checks failed: {', '.join(failures)}")
