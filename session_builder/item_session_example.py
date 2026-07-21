@@ -30,8 +30,6 @@ def make_session(api_url: str, api_key: str, item_id: str):
     item = gc.getItem(item_id)
     print(f"Found item: {item['name']}")
 
-    # Coordinates for CT_Electrodes sample CT scan:
-    # https://raw.githubusercontent.com/neurolabusc/niivue-images/main/CT_Electrodes.nii.gz
     annotations = [
         {
             "type": "rectangle",

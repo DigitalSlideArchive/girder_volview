@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<executable>
+  <category>Radiology</category>
+  <title>Otsu Multi-level Segmentation</title>
+  <description>Segment a volume into N intensity bins via Otsu's multi-thresholding. Emits a .seg.nrrd labelmap whose per-label names and RGB colors travel inside the file. Backed by ITK.</description>
+  <version>0.1.0</version>
+  <license>Apache 2.0</license>
+  <contributor>VolView</contributor>
+  <parameters>
+    <label>IO</label>
+    <description>Input/output parameters.</description>
+    <image>
+      <name>inputVolume</name>
+      <label>Input Volume</label>
+      <channel>input</channel>
+      <description>Input volume (DICOM, NIfTI, NRRD, MHA, etc.)</description>
+      <index>0</index>
+    </image>
+    <image type="label" fileExtensions=".seg.nrrd" reference="inputVolume">
+      <name>outputLabelmap</name>
+      <label>Output Labelmap</label>
+      <channel>output</channel>
+      <description>Multi-label segmentation (.seg.nrrd) with embedded per-label names and colors.</description>
+      <index>1</index>
+    </image>
+  </parameters>
+  <parameters>
+    <label>Segmentation parameters</label>
+    <description>Tuning.</description>
+    <integer>
+      <name>numberOfLevels</name>
+      <label>Number of levels</label>
+      <description>How many foreground labels to produce. Otsu picks N thresholds; you get N+1 bins (including background).</description>
+      <longflag>levels</longflag>
+      <default>4</default>
+      <constraints>
+        <minimum>2</minimum>
+        <maximum>8</maximum>
+        <step>1</step>
+      </constraints>
+    </integer>
+  </parameters>
+  <parameters advanced="true">
+    <label>Girder API</label>
+    <description>Server access injected by slicer_cli_web for v1 b3 feeding; not shown to users.</description>
+    <string>
+      <name>girderApiUrl</name>
+      <longflag>girderApiUrl</longflag>
+      <label>Girder API URL</label>
+      <description>Girder API URL (injected by slicer_cli_web).</description>
+      <default></default>
+    </string>
+    <string>
+      <name>girderToken</name>
+      <longflag>girderToken</longflag>
+      <label>Girder Token</label>
+      <description>Girder token (injected by slicer_cli_web).</description>
+      <default></default>
+    </string>
+  </parameters>
+</executable>

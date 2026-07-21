@@ -9,7 +9,6 @@ def test_exact_match():
 
 
 def test_row_with_extra_keys_does_not_match_coarser_session():
-    # Row carries Patient+Study; session has only Study. Different dicts.
     assert not filterMatchesSession(
         {"meta.dicom.PatientID": "P", "meta.dicom.StudyInstanceUID": "X"},
         {"meta.dicom.StudyInstanceUID": "X"},
@@ -17,7 +16,6 @@ def test_row_with_extra_keys_does_not_match_coarser_session():
 
 
 def test_coarser_row_does_not_match_session_with_extra_keys():
-    # Row has Study only; session has Patient+Study. Strict equality => no match.
     assert not filterMatchesSession(
         {"meta.dicom.StudyInstanceUID": "X"},
         {"meta.dicom.PatientID": "P", "meta.dicom.StudyInstanceUID": "X"},
@@ -73,7 +71,6 @@ def test_list_row_no_match_when_session_missing_element():
 
 
 def test_list_row_session_with_extra_element_does_not_match():
-    # Strict equality: extra elements on either side break the match.
     assert not filterMatchesSession(
         [{"meta.dicom.StudyInstanceUID": "A"}, {"meta.dicom.StudyInstanceUID": "B"}],
         [
@@ -85,7 +82,6 @@ def test_list_row_session_with_extra_element_does_not_match():
 
 
 def test_dict_row_does_not_match_multi_element_session():
-    # Single-row open does not pull in a multi-filter session.
     assert not filterMatchesSession(
         {"meta.dicom.StudyInstanceUID": "A"},
         [{"meta.dicom.StudyInstanceUID": "A"}, {"meta.dicom.StudyInstanceUID": "B"}],
@@ -111,4 +107,26 @@ def test_order_independent():
     assert filterMatchesSession(
         [{"meta.dicom.StudyInstanceUID": "A"}, {"meta.dicom.StudyInstanceUID": "B"}],
         [{"meta.dicom.StudyInstanceUID": "B"}, {"meta.dicom.StudyInstanceUID": "A"}],
+    )
+
+
+def test_mixed_type_values_compare_without_error():
+    # dicom.py coerces numeric DICOM values to int, so an int/str mix under one
+    # key is real; canonical ordering must not raise TypeError (raw tuple
+    # sorting would compare 3 < "3A").
+    assert filterMatchesSession(
+        [{"meta.dicom.SeriesNumber": 3}, {"meta.dicom.SeriesNumber": "3A"}],
+        [{"meta.dicom.SeriesNumber": "3A"}, {"meta.dicom.SeriesNumber": 3}],
+    )
+    assert not filterMatchesSession(
+        [{"meta.dicom.SeriesNumber": 3}, {"meta.dicom.SeriesNumber": "3A"}],
+        [{"meta.dicom.SeriesNumber": "3A"}],
+    )
+
+
+def test_operator_dict_values_compare_without_error():
+    # Mongo-operator (nested dict) values are unorderable as raw tuples too.
+    assert filterMatchesSession(
+        [{"a": {"$in": [1, 2]}}, {"a": 1}],
+        [{"a": 1}, {"a": {"$in": [1, 2]}}],
     )

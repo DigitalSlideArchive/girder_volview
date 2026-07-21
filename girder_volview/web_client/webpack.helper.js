@@ -10,12 +10,12 @@ module.exports = function (config) {
                     path.resolve(__dirname),
                     "node_modules",
                     "volview",
-                    "dist"
+                    "dist",
                 ),
                 to: config.output.path,
                 toType: "dir",
             },
-        ])
+        ]),
     );
     return config;
 };

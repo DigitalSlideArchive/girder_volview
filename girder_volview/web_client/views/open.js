@@ -7,7 +7,7 @@ export function addButton($el, parentSelector) {
     const parent = $el.find(parentSelector);
     if (!parent.length) {
         console.warn(
-            `Tried to add VolView button, but parent element not found with selector: ${parentSelector}`
+            `Tried to add VolView button, but parent element not found with selector: ${parentSelector}`,
         );
         return;
     }
@@ -18,12 +18,25 @@ export function addButton($el, parentSelector) {
 
 const volViewPath = `static/built/plugins/volview/index.html`;
 
+// Launch URL legs: `urls=` loads exactly what was picked, except a bare
+// folder-open, which resumes the folder's newest session.volview.zip. `save=`
+// returns a `resumeUrl` the client repoints `urls=` at, so a later F5 reloads
+// the last save. `config=` delivers the folder config that registers the
+// processing provider; without it the Analysis tab never appears.
+
+function configParam(folderId) {
+    const configUrl = `/${getApiRoot()}/folder/${folderId}/volview_config/.volview_config.yaml`;
+    return `&config=${encodeURIComponent(configUrl)}`;
+}
+
 export function openItemURL(item) {
     const itemRoute = `/${getApiRoot()}/item/${item.id}`;
     const saveParam = `&save=${itemRoute}/volview`;
     const manifestUrl = `${itemRoute}/volview`;
-    const downloadParams = `&names=[manifest.json]&urls=${manifestUrl}`;
-    const newTabUrl = `${volViewPath}?${saveParam}${downloadParams}`;
+    const downloadParams = `&names=[manifest.json]&urls=${encodeURIComponent(manifestUrl)}`;
+    const newTabUrl = `${volViewPath}?${saveParam}${downloadParams}${configParam(
+        item.get("folderId"),
+    )}`;
     return newTabUrl;
 }
 
@@ -47,10 +60,12 @@ export function openResourcesURL(folder, resources) {
         },
     };
     const saveParam = `&save=${folderRoute}/volview?metadata=${encodeURIComponent(
-        JSON.stringify(metaData)
+        JSON.stringify(metaData),
     )}`;
     const downloadParams = resourcesToDownloadParams(folder.id, resources);
-    const newTabUrl = `${volViewPath}?${saveParam}${downloadParams}`;
+    const newTabUrl = `${volViewPath}?${saveParam}${downloadParams}${configParam(
+        folder.id,
+    )}`;
     return newTabUrl;
 }
 
@@ -59,7 +74,7 @@ export function openResources(folder, resources) {
 }
 
 export function groupingFilterForItem(item) {
-    const groups = (item.get('meta') || {})._grouping || {};
+    const groups = (item.get("meta") || {})._grouping || {};
     const filter = {};
     (groups.keys || []).forEach((key, idx) => {
         if ((groups.values || [])[idx] !== undefined) {
@@ -71,19 +86,19 @@ export function groupingFilterForItem(item) {
 
 function volViewURLWithFilter(folderId, filterPayload) {
     const folderRoute = `/${getApiRoot()}/folder/${folderId}`;
-    const metaData = {linkedResources: {filter: filterPayload}};
+    const metaData = { linkedResources: { filter: filterPayload } };
     const saveParam = `&save=${folderRoute}/volview?metadata=${encodeURIComponent(
-        JSON.stringify(metaData)
+        JSON.stringify(metaData),
     )}`;
     const manifestUrl = `/${getApiRoot()}/folder/${folderId}/volview?filters=${encodeURIComponent(
-        JSON.stringify(filterPayload)
+        JSON.stringify(filterPayload),
     )}`;
     const downloadParams = `&names=[manifest.json]&urls=${encodeURIComponent(manifestUrl)}`;
-    return `${volViewPath}?${saveParam}${downloadParams}`;
+    return `${volViewPath}?${saveParam}${downloadParams}${configParam(folderId)}`;
 }
 
 export function openGroupedItemURL(item, folder) {
-    const folderId = folder ? folder.id : item.get('folderId');
+    const folderId = folder ? folder.id : item.get("folderId");
     return volViewURLWithFilter(folderId, groupingFilterForItem(item));
 }
 
