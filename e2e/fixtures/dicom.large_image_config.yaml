@@ -6,7 +6,7 @@
 # openable app), leaving the item list stuck on its loading spinner.
 #
 # Grouping keys resolve against item metadata as `meta.dicom.*`, which
-# `seed.py seed-small` sets when it uploads the slices.
+# girder_volview populates when `seed.py seed-small` uploads the slices.
 
 defaultItemList: seriesList
 

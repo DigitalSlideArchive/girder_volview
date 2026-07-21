@@ -17,7 +17,7 @@ Pipeline (each step is idempotent and re-runnable):
     uv run seed.py select     # query IDC -> manifest/series.json  (rare)
     uv run seed.py fetch      # download pinned series -> data/    + ATTRIBUTION.md
     uv run seed.py stage      # arrange into bucket layout -> MinIO
-    uv run seed.py seed       # assetstore + import + metadata + configs
+    uv run seed.py seed       # assetstore + import + study metadata + configs
     uv run seed.py verify     # assert the whole thing actually works
     uv run seed.py reset      # tear down the Girder side
 
@@ -113,8 +113,9 @@ US_MAX_SERIES_MB = 400
 # a multi-frame loop is tens of MB, a single-frame still is well under one.
 US_MIN_MB_PER_INSTANCE = 20
 
-# DICOM tags copied onto each Girder item as meta.dicom.* -- these are what the
-# .large_image_config.yaml files group and sort on.
+# DICOM tags retained in the staging plan. girder_volview reads the instance
+# tags into meta.dicom.* during import; the plan also carries study-level fields
+# derived from the selected series.
 META_TAGS = [
     "PatientID",
     "PatientName",
@@ -231,8 +232,7 @@ def pick_trial_series(idx):
     patients = list(longitudinal.groupby("PatientID"))[:N_PATIENTS]
     if len(patients) < N_PATIENTS:
         log(
-            f"  warning: only {len(patients)} qualifying patients "
-            f"(wanted {N_PATIENTS})"
+            f"  warning: only {len(patients)} qualifying patients (wanted {N_PATIENTS})"
         )
 
     for p_i, (_patient_id, group) in enumerate(patients, start=1):
@@ -541,7 +541,7 @@ def subsample(files: list[Path], limit: int) -> list[Path]:
 
 
 def file_metadata(path: Path) -> dict:
-    """DICOM tags for one file, destined for that item's meta.dicom.*."""
+    """Retain selected DICOM tags in the staging plan."""
     import pydicom
 
     ds = pydicom.dcmread(path, stop_before_pixels=True)
@@ -725,14 +725,22 @@ def folder_path_index(gc, root_id: str) -> dict:
     return index
 
 
-def apply_metadata(gc, plan: dict, roots: dict) -> int:
-    """Copy series-level DICOM tags onto every imported item as meta.dicom.*.
+def add_derived_dicom_metadata(gc, item_id: str, metadata: dict) -> None:
+    """Merge seed-derived fields with girder_volview's parsed DICOM metadata."""
+    item = gc.getItem(item_id)
+    dicom = item.get("meta", {}).get("dicom", {})
+    gc.addMetadataToItem(item_id, {"dicom": {**dicom, **metadata}})
 
-    An S3 import never routes through Upload.finalizeUpload, so `data.process`
-    never fires and nothing populates DICOM metadata. The hierarchy-view grouping
-    queries meta.dicom.*, so without this the folders render as a flat file list.
+
+def apply_study_metadata(gc, plan: dict, roots: dict) -> int:
+    """Add study-level fields that are absent from individual DICOM instances.
+
+    girder_volview populates the instance tags synchronously from
+    ``model.file.save.after`` for both uploads and asset-store imports.
+    ``ModalitiesInStudy`` is derived from all series staged for a study, so the
+    seed adds only that enrichment without replacing the parsed tags.
     """
-    log("Applying meta.dicom.* to imported items...")
+    log("Applying derived study metadata to imported items...")
 
     # folder id -> {item name: item id}, filled lazily.
     item_cache: dict[str, dict] = {}
@@ -740,6 +748,14 @@ def apply_metadata(gc, plan: dict, roots: dict) -> int:
     applied, orphaned = 0, []
 
     for obj in plan["objects"]:
+        derived = {
+            key: obj["meta"][key]
+            for key in ("ModalitiesInStudy",)
+            if key in obj["meta"]
+        }
+        if not derived:
+            continue
+
         parts = obj["key"].split("/")
         top, rel_dirs, filename = parts[0], parts[1:-1], parts[-1]
         root_id = roots.get(top)
@@ -762,7 +778,7 @@ def apply_metadata(gc, plan: dict, roots: dict) -> int:
             orphaned.append(obj["key"])
             continue
 
-        gc.addMetadataToItem(item_id, {"dicom": obj["meta"]})
+        add_derived_dicom_metadata(gc, item_id, derived)
         applied += 1
         if applied % 50 == 0:
             log(f"  {applied}...")
@@ -771,7 +787,7 @@ def apply_metadata(gc, plan: dict, roots: dict) -> int:
         log(f"  warning: {len(orphaned)} staged objects had no matching item")
         for key in orphaned[:5]:
             log(f"    {key}")
-    log(f"  applied metadata to {applied} items")
+    log(f"  applied derived metadata to {applied} items")
     return applied
 
 
@@ -818,7 +834,7 @@ def cmd_seed(args) -> None:
         for prefix, folder_id in roots.items():
             import_prefix(gc, assetstore["_id"], f"{prefix}/", folder_id)
 
-        apply_metadata(gc, plan, roots)
+        apply_study_metadata(gc, plan, roots)
 
         log("Uploading config files...")
         for prefix, folder_id in roots.items():
@@ -837,9 +853,9 @@ def cmd_seed_small(args) -> None:
 
     The e2e compat provisioning calls this against its own run folder: a couple
     of multi-file series (patient-01 study-01 CT+PET for layering, patient-02
-    study-01 CT for filtering) at --slices per series, flat item names, and
-    meta.dicom.* written the same way `seed` does — plain uploads fire
-    data.process, but nothing in this stack populates DICOM metadata from it.
+    study-01 CT for filtering) at --slices per series and flat item names.
+    girder_volview populates meta.dicom.* when each file is saved; this command
+    adds the study-level modality list derived from the selected series.
     """
     manifest = read_manifest()
     picks = small_tier_picks(manifest)
@@ -881,15 +897,17 @@ def cmd_seed_small(args) -> None:
                 if name in existing:
                     skipped += 1
                     continue
-                meta = file_metadata(path)
-                meta["ModalitiesInStudy"] = modalities
                 file_doc = gc.uploadFileToFolder(
                     args.folder_id,
                     str(path),
                     filename=name,
                     mimeType="application/dicom",
                 )
-                gc.addMetadataToItem(file_doc["itemId"], {"dicom": meta})
+                add_derived_dicom_metadata(
+                    gc,
+                    file_doc["itemId"],
+                    {"ModalitiesInStudy": modalities},
+                )
                 uploaded += 1
             log(f"  {slot}: {min(len(files), args.slices)} slices")
     finally:
@@ -950,13 +968,22 @@ def cmd_verify(args) -> None:
     check("trial folder exists", "trial" in roots)
     check("ultrasound folder exists", "ultrasound" in roots)
 
-    patients = list(gc.listFolder(roots["trial"], parentFolderType="folder"))
+    expected_patients = {f"patient-{index:02d}" for index in range(1, N_PATIENTS + 1)}
+    patient_folders = {
+        folder["name"]: folder
+        for folder in gc.listFolder(roots["trial"], parentFolderType="folder")
+        if folder["name"].startswith("patient-")
+    }
     check(
-        f"{N_PATIENTS} patient folders",
-        len(patients) == N_PATIENTS,
-        f"got {len(patients)}",
+        f"{N_PATIENTS} seeded patient folders",
+        set(patient_folders) == expected_patients,
+        f"got {sorted(patient_folders)}",
     )
 
+    patients = [
+        patient_folders[name]
+        for name in sorted(expected_patients & patient_folders.keys())
+    ]
     for patient in patients:
         studies = list(gc.listFolder(patient["_id"], parentFolderType="folder"))
         check(
@@ -979,7 +1006,8 @@ def cmd_verify(args) -> None:
     sample_study = gc.listFolder(patients[0]["_id"], parentFolderType="folder")
     sample_study = list(sample_study)[0]
     ct_folder = next(
-        f for f in gc.listFolder(sample_study["_id"], parentFolderType="folder")
+        f
+        for f in gc.listFolder(sample_study["_id"], parentFolderType="folder")
         if f["name"] == "CT"
     )
     items = list(gc.listItem(ct_folder["_id"]))
@@ -1015,9 +1043,7 @@ def cmd_verify(args) -> None:
             f"invalid {bad_views}",
         )
 
-        served = gc.get(
-            f"folder/{roots[prefix]}/volview_config/{VOLVIEW_CONFIG_NAME}"
-        )
+        served = gc.get(f"folder/{roots[prefix]}/volview_config/{VOLVIEW_CONFIG_NAME}")
         check(
             f"{prefix}: disabledViewTypes applied",
             served.get("disabledViewTypes") == local["disabledViewTypes"],
