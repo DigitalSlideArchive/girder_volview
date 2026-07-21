@@ -5,10 +5,12 @@ import:
 
 ```text
 Trial
-└── patients/<patient>/<study>/{CT,PET}/
+├── patients/<patient>/<study>/{CT,PET}/
+└── ultrasound/clip-{01,02,03}.dcm
 
 Trial (Large Image Filter)
-└── patients/<patient>/<study>/{CT,PET}/
+├── patients/<patient>/<study>/{CT,PET}/
+└── ultrasound/clip-{01,02,03}.dcm
 
 Developer
 ├── prostate/{dicom/,5.seg.total-segmentator.nrrd}
@@ -18,7 +20,8 @@ Developer
 
 The trial collections mirror one another: three patients, two studies per
 patient, and CT plus PET in every study. Only the second collection receives
-`.large_image_config.yaml`.
+`.large_image_config.yaml`, in both `patients/` and `ultrasound/`. The Trial and
+Developer ultrasound folders do not use large-image filtering.
 
 For **Open Checked in VolView**, select `prostate/dicom` with its segmentation,
 or select both files in `fetus`. The fetal segmentation is generated test data,
