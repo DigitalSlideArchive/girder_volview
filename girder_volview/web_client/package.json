@@ -24,22 +24,39 @@
         "lint": "eslint . && pug-lint . && stylint"
     },
     "devDependencies": {
-        "@girder/eslint-config": "*",
-        "@girder/pug-lint-config": "*",
-        "eslint": "^5",
-        "eslint-config-semistandard": "^13",
-        "eslint-config-standard": "^12",
-        "eslint-plugin-backbone": "*",
-        "eslint-plugin-import": "*",
-        "eslint-plugin-node": "*",
-        "eslint-plugin-promise": "*",
-        "eslint-plugin-standard": "*",
-        "pug-lint": "^2",
-        "stylint": "^2"
+        "@girder/eslint-config": "3.2.15",
+        "@girder/pug-lint-config": "3.2.15",
+        "eslint": "8.57.1",
+        "eslint-config-semistandard": "17.0.0",
+        "eslint-config-standard": "17.1.0",
+        "eslint-plugin-backbone": "2.1.1",
+        "eslint-plugin-import": "2.29.1",
+        "eslint-plugin-n": "15.7.0",
+        "eslint-plugin-promise": "6.1.1",
+        "pug-lint": "2.7.0",
+        "stylint": "2.0.0"
     },
     "eslintConfig": {
         "extends": "@girder",
-        "root": true
+        "root": true,
+        "globals": {
+            "$": "readonly"
+        },
+        "rules": {
+            "comma-dangle": [
+                "error",
+                "always-multiline"
+            ],
+            "import/exports-last": "off",
+            "quotes": [
+                "error",
+                "double",
+                {
+                    "allowTemplateLiterals": true,
+                    "avoidEscape": true
+                }
+            ]
+        }
     },
     "pugLintConfig": {
         "extends": "@girder/pug-lint-config"

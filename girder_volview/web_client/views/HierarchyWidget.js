@@ -3,6 +3,7 @@ import ItemListWidget from "@girder/large_image/views/itemList";
 import { restRequest } from "@girder/core/rest";
 import { confirm } from "@girder/core/dialog";
 import { wrap } from "@girder/core/utilities/PluginUtils";
+
 import {
     addButton,
     groupingFilterForItem,
@@ -62,29 +63,9 @@ function checkedGroupingFilters(itemListView, resources) {
     return filters.length ? filters : null;
 }
 
-function loadResources(parentModel, resources) {
-    // update lastOpened so manifest endpoint opens checked resource
-    // rather than newest session.volview.zip with matching resource set.
-    const itemId =
-        resources.item && resources.item.length >= 1 && resources.item[0];
-    const folderId =
-        resources.folder && resources.folder.length >= 1 && resources.folder[0];
-    const id = itemId || folderId;
-    const model = (itemId && "item") || (folderId && "folder");
-
-    if (model) {
-        restRequest({
-            url: `${model}/${id}/metadata`,
-            method: "PUT",
-            contentType: "application/json",
-            data: JSON.stringify({ lastOpened: new Date() }),
-            error: null,
-        }).done(() => {
-            openResources(parentModel, resources);
-        });
-    } else {
-        openResources(parentModel, resources);
-    }
+function isSessionItem(item) {
+    const name = item.attributes.name;
+    return name.includes(".volview.zip") || name.includes(".volview.json");
 }
 
 wrap(HierarchyWidget, "render", function (render) {
@@ -92,7 +73,7 @@ wrap(HierarchyWidget, "render", function (render) {
 
     if (
         !this._showActions ||
-        // Can't open/save at root of Collections, for now.
+        // Can't open/save at the root of Collections.
         this.parentModel.attributes._modelType !== "folder"
     ) {
         return;
@@ -113,40 +94,37 @@ wrap(HierarchyWidget, "render", function (render) {
 
         if (resources.item && resources.item.length > 0) {
             const items = resources.item.map((cid) =>
-                this.itemListView.collection.get(cid)
+                this.itemListView.collection.get(cid),
             );
             const volViewZipsNewestFirst = items
-                .filter((item) => item.attributes.name.includes(".volview.zip") || item.attributes.name.includes(".volview.json"))
+                .filter(isSessionItem)
                 .sort(
                     (a, b) =>
                         new Date(b.attributes.created) -
-                        new Date(a.attributes.created)
+                        new Date(a.attributes.created),
                 );
 
             if (volViewZipsNewestFirst.length > 0) {
                 const volViewZip = volViewZipsNewestFirst[0];
+                const volViewResources = { item: [volViewZip.id] };
                 if (
                     items.length >= 2 ||
                     (resources.folder && resources.folder.length >= 1)
                 ) {
-                    // Only newest checked volview.zip item will be opened, so warn.
                     confirm({
-                        text: `Will open newest VolView zip file: ${volViewZip.attributes.name}.`,
+                        text: `Will open newest VolView session: ${volViewZip.attributes.name}.`,
                         yesText: "Open",
                         confirmCallback: () => {
-                            const volViewResources = { item: [volViewZip.id] };
-                            loadResources(this.parentModel, volViewResources);
+                            openResources(this.parentModel, volViewResources);
                         },
                     });
                     return false;
-                } else {
-                    const volViewResources = { item: [volViewZip.id] };
-                    loadResources(this.parentModel, volViewResources);
-                    return false;
                 }
+                openResources(this.parentModel, volViewResources);
+                return false;
             }
         }
-        loadResources(this.parentModel, resources);
+        openResources(this.parentModel, resources);
         return false;
     };
 
@@ -156,7 +134,7 @@ wrap(HierarchyWidget, "render", function (render) {
         const groupedFilters = checkedGroupingFilters(this.itemListView, resources);
         if (groupedFilters) {
             button.innerHTML = openChecked;
-            $(button).attr('href', openCheckedGroupedURL(this.parentModel, groupedFilters));
+            $(button).attr("href", openCheckedGroupedURL(this.parentModel, groupedFilters));
             return;
         }
         const hasResources = (
@@ -164,7 +142,7 @@ wrap(HierarchyWidget, "render", function (render) {
             (resources.folder && resources.folder.length)
         );
         button.innerHTML = hasResources ? openChecked : openFolder;
-        $(button).attr('href', openResourcesURL(this.parentModel, resources));
+        $(button).attr("href", openResourcesURL(this.parentModel, resources));
     };
     updateChecked();
 
@@ -173,7 +151,7 @@ wrap(HierarchyWidget, "render", function (render) {
 
     updateButtonVisibility(
         this.$el.find(".open-in-volview"),
-        this.parentModel.id
+        this.parentModel.id,
     );
 });
 
@@ -187,7 +165,6 @@ wrap(ItemListWidget, "render", function (render) {
         return;
     }
 
-    // check if child folders/items have loadable files
     const id = this.collection.params.folderId;
     const button = this.$el
         .closest(".g-hierarchy-widget")
@@ -195,30 +172,29 @@ wrap(ItemListWidget, "render", function (render) {
     updateButtonVisibility(button, id);
 });
 
-ItemListWidget.registeredApplications['volview'] = {
-    name: 'VolView',
-    // icon:
+ItemListWidget.registeredApplications.volview = {
+    name: "VolView",
     check: (modelType, model, folder) => {
-        if (modelType === 'item') {
-            if (model.get('name').endsWith('volview.zip') || model.get('name').endsWith('volview.json')) {
-                // use this
+        if (modelType === "item") {
+            if (isSessionItem(model)) {
+                // A session.volview.zip/json item opens as a saved session.
             } else {
                 try {
-                    if (!model.get('meta') || !model.get('meta').dicom || model.get('meta').dicom.Modality === 'SM') {
+                    if (!model.get("meta") || !model.get("meta").dicom || model.get("meta").dicom.Modality === "SM") {
                         return false;
                     }
                 } catch (e) {
                     return false;
                 }
             }
-            if (model.get('meta')._grouping) {
-                return {url: openGroupedItemURL(model, folder)};
+            if (model.get("meta")._grouping) {
+                return { url: openGroupedItemURL(model, folder) };
             }
-            return {url: openItemURL(model)};
+            return { url: openItemURL(model) };
         }
-        if (modelType === 'folder') {
+        if (modelType === "folder") {
             // TODO: this needs to mimic what is done in python
-            return {url: openResourcesURL(model, {})};
+            return { url: openResourcesURL(model, {}) };
         }
-    }
+    },
 };
