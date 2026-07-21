@@ -1,0 +1,50 @@
+# VolView app config for the cine-ultrasound folder.
+#
+# Placed in the ultrasound folder so it overrides whatever the trial folder sets.
+# See the trial config for the schema constraints these values must satisfy.
+#
+# A cine clip is 2D + time, so coronal and sagittal panes just reslice along the
+# time axis and show noise. disabledViewTypes can't switch them off (it only
+# accepts '2D', '3D', 'Oblique' -- not individual 2D orientations), so the lever
+# is the layout: this folder opens straight into a single axial pane.
+#
+# You CAN choose which layout opens, but not with a dedicated key -- VolView
+# activates whichever layout is FIRST in the map it receives (configJson.ts
+# applyLayout: `layoutEntries[0][0]` -> switchToNamedLayout).
+#
+# Two things decide what lands first, and neither is the order written here:
+#   1. Girder serializes the config response with keys sorted ALPHABETICALLY, so
+#      authoring order is discarded. The alphabetically first NAME wins -- hence
+#      the leading "1" below.
+#   2. girder_volview merges this over BASE_CONFIG, which contributes its own
+#      "Axial Coronal Sagittal". `__all__: true` clears the base map first so
+#      only the layouts below are offered in the picker.
+
+# No volume to render from a single multiframe clip.
+disabledViewTypes:
+  - '3D'
+  - Oblique
+
+layouts:
+  __all__: true
+  1 Cine (single pane):
+    - - axial
+  # Kept so two clips can be compared side by side.
+  Axial Coronal Sagittal:
+    direction: row
+    items:
+      - axial
+      - direction: column
+        items:
+          - coronal
+          - sagittal
+
+# These clips are 8-bit, so the full range is the right window.
+windowing:
+  width: 255
+  level: 127.5
+
+io:
+  segmentGroupExtension: seg
+  segmentGroupSaveFormat: nii.gz
+  layerExtension: layer

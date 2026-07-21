@@ -1,0 +1,152 @@
+# Clinical-trial hierarchy view: Patient rows -> Study rows -> open in VolView.
+#
+# The S3 import creates one Girder item per .dcm key, so without this file the
+# trial folder renders as a flat wall of thousands of slices. `group` collapses
+# those into one row per patient; `layout.flatten: only` pulls items up from the
+# nested patient/study/CT|PET folders and hides the folders themselves.
+#
+# Grouping keys resolve against item metadata as `meta.dicom.*`, which nothing
+# populates on an S3 import -- `seed.py seed` sets it explicitly.
+
+defaultItemList: patientList
+
+itemList: &plainColumns
+  columns:
+    - type: image
+      value: thumbnail
+      title: Thumbnail
+    - type: record
+      value: name
+      title: Name
+    - type: record
+      value: controls
+      title: Controls
+    - type: record
+      value: size
+      title: Size
+
+itemListDialog: *plainColumns
+
+namedItemLists:
+  patientList:
+    layout:
+      flatten: only
+    group:
+      keys: dicom.PatientID
+      counts:
+        _id: _count.slicescount
+        dicom.SeriesInstanceUID: _count.seriescount
+        dicom.StudyInstanceUID: _count.studiescount
+    navigate:
+      type: itemList
+      name: studyList
+    defaultSort:
+      - type: metadata
+        value: dicom.PatientID
+        dir: up
+    columns:
+      - type: image
+        value: thumbnail
+        title: Thumbnail
+      - type: metadata
+        value: dicom.PatientID
+        title: Patient ID
+        format: text
+      - type: metadata
+        value: dicom.PatientSex
+        title: Sex
+      - type: metadata
+        value: dicom.PatientAge
+        title: Age
+      - type: metadata
+        value: _count.studiescount
+        title: Studies
+        format: count
+      - type: metadata
+        value: _count.seriescount
+        title: Series
+        format: count
+      - type: metadata
+        value: _count.slicescount
+        title: Slices
+        format: count
+      - type: record
+        value: controls
+
+  studyList:
+    layout:
+      flatten: only
+    group:
+      keys:
+        - dicom.StudyInstanceUID
+      counts:
+        _id: _count.slicescount
+        dicom.SeriesInstanceUID: _count.seriescount
+    # Clicking a study row hands the whole study to VolView.
+    navigate:
+      type: open
+      name: volview
+    defaultSort:
+      - type: metadata
+        value: dicom.StudyDate
+        dir: up
+    columns:
+      - type: image
+        value: thumbnail
+        title: Thumbnail
+      - type: metadata
+        value: dicom.PatientID
+        title: Patient ID
+        format: text
+      - type: metadata
+        value: dicom.StudyDate
+        title: Study Date
+      - type: metadata
+        value: dicom.StudyDescription
+        title: Study Description
+      - type: metadata
+        value: dicom.ModalitiesInStudy
+        title: Modalities
+      - type: metadata
+        value: _count.seriescount
+        title: Series
+        format: count
+      - type: metadata
+        value: _count.slicescount
+        title: Slices
+        format: count
+      - type: record
+        value: controls
+
+  # Drill one level further when you want CT and PET as separate rows.
+  seriesList:
+    layout:
+      flatten: only
+    group:
+      keys:
+        - dicom.SeriesInstanceUID
+      counts:
+        _id: _count.slicescount
+    navigate:
+      type: open
+      name: volview
+    columns:
+      - type: image
+        value: thumbnail
+        title: Thumbnail
+      - type: metadata
+        value: dicom.PatientID
+        title: Patient ID
+        format: text
+      - type: metadata
+        value: dicom.Modality
+        title: Modality
+      - type: metadata
+        value: dicom.SeriesDescription
+        title: Series Description
+      - type: metadata
+        value: _count.slicescount
+        title: Slices
+        format: count
+      - type: record
+        value: controls

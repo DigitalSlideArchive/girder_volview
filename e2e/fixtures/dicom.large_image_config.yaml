@@ -1,0 +1,44 @@
+# Item-list config for the compat suite's small DICOM folder: one row per
+# series, filterable on the metadata columns. The compat gestures launch via the
+# folder-header "Open Checked in VolView" button (checkboxes), NOT by clicking a
+# row, so this list intentionally omits `navigate: {type: open}` — that path in
+# large_image throws on the `.large_image_config.yaml` item itself (which has no
+# openable app), leaving the item list stuck on its loading spinner.
+#
+# Grouping keys resolve against item metadata as `meta.dicom.*`, which
+# `seed.py seed-small` sets when it uploads the slices.
+
+defaultItemList: seriesList
+
+namedItemLists:
+  seriesList:
+    # `flatten: only` activates the recurse+group fetch path; without it
+    # large_image leaves a flat folder ungrouped (one row per slice).
+    layout:
+      flatten: only
+    group:
+      keys:
+        - dicom.SeriesInstanceUID
+      counts:
+        _id: _count.slicescount
+    defaultSort:
+      - type: metadata
+        value: dicom.PatientID
+        dir: up
+    columns:
+      - type: metadata
+        value: dicom.PatientID
+        title: Patient ID
+        format: text
+      - type: metadata
+        value: dicom.Modality
+        title: Modality
+      - type: metadata
+        value: dicom.SeriesDescription
+        title: Series Description
+      - type: metadata
+        value: _count.slicescount
+        title: Slices
+        format: count
+      - type: record
+        value: controls
