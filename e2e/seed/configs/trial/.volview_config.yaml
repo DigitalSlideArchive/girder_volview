@@ -46,8 +46,3 @@ layouts:
 windowing:
   width: 400
   level: 40
-
-io:
-  segmentGroupExtension: seg
-  segmentGroupSaveFormat: nii.gz
-  layerExtension: layer

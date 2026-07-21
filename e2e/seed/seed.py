@@ -7,6 +7,7 @@
 #     "girder-client",
 #     "pyyaml",
 #     "requests",
+#     "simpleitk",
 # ]
 # ///
 """
@@ -18,6 +19,7 @@ Pipeline (each step is idempotent and re-runnable):
     uv run seed.py fetch      # download pinned series -> data/    + ATTRIBUTION.md
     uv run seed.py stage      # arrange into bucket layout -> MinIO
     uv run seed.py seed       # assetstore + import + study metadata + configs
+    uv run seed.py reseed     # delete + recreate collections from staged data
     uv run seed.py verify     # assert the whole thing actually works
     uv run seed.py reset      # tear down the Girder side
 
@@ -28,14 +30,18 @@ from IDC's public bucket. See ATTRIBUTION.md for the terms that ride along.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
 import urllib.request
+import zipfile
 from pathlib import Path
 
 HERE = Path(__file__).parent.resolve()
 DATA_DIR = HERE / "data"
+DOWNLOAD_DIR = DATA_DIR / "downloads"
+DEVELOPER_DATA_DIR = DATA_DIR / "developer"
 MANIFEST_PATH = HERE / "manifest" / "series.json"
 STAGED_PATH = DATA_DIR / ".staged.json"
 CONFIGS_DIR = HERE / "configs"
@@ -67,13 +73,52 @@ VALID_LAYOUT_VIEWS = {"axial", "coronal", "sagittal", "volume", "oblique"}
 # NAME, not by the order written in the YAML. Pin the intent so a rename can't
 # silently change which layout users land in.
 EXPECTED_ACTIVE_LAYOUT = {
-    "trial": "Axial Coronal Sagittal",
+    "patients": "Axial Coronal Sagittal",
+    "prostate": "Axial Coronal Sagittal",
     "ultrasound": "1 Cine (single pane)",
 }
 
-COLLECTION_NAME = "VolView Devkit"
+UNFILTERED_COLLECTION_NAME = "Trial"
+FILTERED_COLLECTION_NAME = "Trial (Large Image Filter)"
+DEVELOPER_COLLECTION_NAME = "Developer"
+COLLECTION_NAMES = (
+    UNFILTERED_COLLECTION_NAME,
+    FILTERED_COLLECTION_NAME,
+    DEVELOPER_COLLECTION_NAME,
+)
+TRIAL_COLLECTION_NAMES = (
+    UNFILTERED_COLLECTION_NAME,
+    FILTERED_COLLECTION_NAME,
+)
 ASSETSTORE_NAME = "Devkit MinIO"
 ASSETSTORE_TYPE_S3 = 2  # girder.constants.AssetstoreType.S3
+
+DEVELOPER_DOWNLOADS = {
+    "prostate": {
+        "url": "https://data.kitware.com/api/v1/file/63527c7311dab8142820a339/download",
+        "name": "MRI-PROSTATEx-0004.zip",
+        "sha512": (
+            "4f5c5e8a8230e950ae6dd280f3128ef62ac5d44e5e49c6c1f2d3e07482df4d7b"
+            "e0bf55986f8f397b0f9671c9a9b75fc4fbf4e93fbbc889a701939f3780d3b2b3"
+        ),
+    },
+    "prostate_seg": {
+        "url": "https://data.kitware.com/api/v1/file/692f13ed80eaefe49a4abb72/download",
+        "name": "prostate-total.seg.nii.gz",
+        "sha512": (
+            "bb2919662086e670bf4666f803a27f6ffd95cc5461e3381cb0d4e50df7e62c864"
+            "9ec6a2a2bb6cd726d73542db71831280408251139d8b24dde5e28bd22886459"
+        ),
+    },
+    "fetus": {
+        "url": "https://data.kitware.com/api/v1/file/635679c311dab8142820a4f5/download",
+        "name": "3DUS-Fetus.mha",
+        "sha512": (
+            "93342dfe499ac855a4e51ed9bf16358fe265a17ca08b03f04a0cb43538afc5fdb"
+            "6633d9ef4e629de93845c7a859f91993a452152c788104fcb04652358cd3ead"
+        ),
+    },
+}
 
 # Only these are safe to redistribute. IDC licenses per SERIES, not per
 # collection, so this is filtered on every pick rather than assumed.
@@ -366,6 +411,119 @@ def small_tier_picks(manifest: dict) -> list[dict]:
     return picks
 
 
+def sha512(path: Path) -> str:
+    digest = hashlib.sha512()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def download_verified(source: dict, force: bool = False) -> Path:
+    """Download a pinned example and reject incomplete or changed content."""
+    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    destination = DOWNLOAD_DIR / source["name"]
+    if destination.exists() and not force and sha512(destination) == source["sha512"]:
+        log(f"  {source['name']}: already present")
+        return destination
+
+    partial = destination.with_suffix(destination.suffix + ".part")
+    partial.unlink(missing_ok=True)
+    log(f"  downloading {source['name']}...")
+    try:
+        urllib.request.urlretrieve(source["url"], partial)
+        actual = sha512(partial)
+        if actual != source["sha512"]:
+            die(
+                f"SHA-512 mismatch for {source['name']}: "
+                f"expected {source['sha512']}, got {actual}"
+            )
+        partial.replace(destination)
+    finally:
+        partial.unlink(missing_ok=True)
+    return destination
+
+
+def add_segmentation_metadata(image, segments: list[tuple[int, str, str]]) -> None:
+    """Add the core 3D Slicer segmentation fields understood by VolView."""
+    fields = {
+        "Segmentation_ContainedRepresentationNames": "Binary labelmap|",
+        "Segmentation_MasterRepresentation": "Binary labelmap",
+    }
+    for index, (label, name, color) in enumerate(segments):
+        fields.update(
+            {
+                f"Segment{index}_ID": name.lower().replace(" ", "_"),
+                f"Segment{index}_Name": name,
+                f"Segment{index}_Color": color,
+                f"Segment{index}_LabelValue": str(label),
+                f"Segment{index}_Layer": "0",
+            }
+        )
+    for key, value in fields.items():
+        image.SetMetaData(key, value)
+
+
+def prepare_developer_examples(force: bool = False) -> None:
+    """Fetch VolView's prostate/fetus examples and create associated NRRDs."""
+    import SimpleITK as sitk
+
+    log("\nFetching developer examples...")
+    downloads = {
+        key: download_verified(source, force)
+        for key, source in DEVELOPER_DOWNLOADS.items()
+    }
+
+    prostate_dir = DEVELOPER_DATA_DIR / "prostate"
+    prostate_dicom_dir = prostate_dir / "dicom"
+    fetus_dir = DEVELOPER_DATA_DIR / "fetus"
+    prostate_dicom_dir.mkdir(parents=True, exist_ok=True)
+    fetus_dir.mkdir(parents=True, exist_ok=True)
+
+    with zipfile.ZipFile(downloads["prostate"]) as archive:
+        dicom_members = [
+            member for member in archive.infolist() if member.filename.endswith(".dcm")
+        ]
+        if not dicom_members:
+            die(f"{downloads['prostate'].name} contains no DICOM instances")
+        for member in dicom_members:
+            destination = prostate_dicom_dir / Path(member.filename).name
+            if destination.exists() and not force:
+                continue
+            with archive.open(member) as source, open(destination, "wb") as output:
+                while chunk := source.read(1024 * 1024):
+                    output.write(chunk)
+
+    prostate_seg = prostate_dir / "5.seg.total-segmentator.nrrd"
+    image = sitk.ReadImage(str(downloads["prostate_seg"]))
+    stats = sitk.LabelShapeStatisticsImageFilter()
+    stats.Execute(image)
+    labels = sorted(int(label) for label in stats.GetLabels())
+    palette = ("0.9 0.2 0.2", "0.2 0.7 0.9", "0.3 0.8 0.3", "0.9 0.7 0.2")
+    add_segmentation_metadata(
+        image,
+        [
+            (label, f"Prostate label {label}", palette[index % len(palette)])
+            for index, label in enumerate(labels)
+        ],
+    )
+    sitk.WriteImage(image, str(prostate_seg), True)
+
+    fetus_image = fetus_dir / "fetus.mha"
+    if force or not fetus_image.exists():
+        fetus_image.write_bytes(downloads["fetus"].read_bytes())
+
+    fetus_seg = fetus_dir / "fetus.seg.nrrd"
+    image = sitk.ReadImage(str(fetus_image))
+    segmentation = sitk.Cast(sitk.OtsuThreshold(image, 0, 1), sitk.sitkUInt8)
+    add_segmentation_metadata(segmentation, [(1, "Fetus foreground", "0.95 0.65 0.2")])
+    sitk.WriteImage(segmentation, str(fetus_seg), True)
+
+    log(f"  prostate: {len(list(prostate_dicom_dir.glob('*.dcm')))} DICOM slices")
+    log(f"  prostate segmentation: {prostate_seg.name}")
+    log(f"  fetus image + segmentation: {fetus_image.name}, {fetus_seg.name}")
+
+
 def cmd_fetch(args) -> None:
     from idc_index import IDCClient
 
@@ -408,6 +566,7 @@ def cmd_fetch(args) -> None:
         # three-series subset would shrink the committed citations.
         log("Skipping ATTRIBUTION.md regeneration (--small subset).")
     else:
+        prepare_developer_examples(args.force)
         write_attribution(picks)
 
 
@@ -489,8 +648,23 @@ stored in this repository -- `seed.py fetch` pulls it from IDC's public bucket.
 ## Datasets used
 
 {citations_text}
+- Litjens, G., Debats, O., Barentsz, J., Karssemeijer, N., & Huisman, H.
+  (2017). *SPIE-AAPM PROSTATEx Challenge Data* (Version 2) [Dataset]. The
+  Cancer Imaging Archive. https://doi.org/10.7937/K9TCIA.2017.MURS5CL
 
-DOIs: {", ".join(dois)}
+IDC selection DOIs: {", ".join(dois)}
+
+## VolView developer examples
+
+The prostate subset and fetal ultrasound volume are pinned by SHA-512 and
+downloaded from Kitware's public VolView example-data folder:
+
+- `MRI-PROSTATEx-0004.zip`
+- `prostate-total.seg.nii.gz` (converted locally to `.seg.nrrd`)
+- `3DUS-Fetus.mha`
+
+The fetal segmentation is generated locally with Otsu thresholding; it is not
+a clinical annotation.
 
 ## IDC
 
@@ -602,8 +776,43 @@ def build_staging_plan(manifest: dict, max_slices: int) -> dict:
                     "key": f"ultrasound/clip-{i:02d}.dcm",
                     "local": str(path),
                     "meta": file_metadata(path),
+                    "content_type": "application/dicom",
                 }
             )
+
+    developer_files = {
+        "developer/prostate/5.seg.total-segmentator.nrrd": (
+            DEVELOPER_DATA_DIR / "prostate" / "5.seg.total-segmentator.nrrd",
+            "application/octet-stream",
+        ),
+        "developer/fetus/fetus.mha": (
+            DEVELOPER_DATA_DIR / "fetus" / "fetus.mha",
+            "application/octet-stream",
+        ),
+        "developer/fetus/fetus.seg.nrrd": (
+            DEVELOPER_DATA_DIR / "fetus" / "fetus.seg.nrrd",
+            "application/octet-stream",
+        ),
+    }
+    prostate_dicom = sorted((DEVELOPER_DATA_DIR / "prostate" / "dicom").glob("*.dcm"))
+    if not prostate_dicom:
+        die("Developer examples are missing. Run `seed.py fetch`.")
+    for path in prostate_dicom:
+        developer_files[f"developer/prostate/dicom/{path.name}"] = (
+            path,
+            "application/dicom",
+        )
+    for key, (path, content_type) in developer_files.items():
+        if not path.exists():
+            die(f"Developer example {path} is missing. Run `seed.py fetch`.")
+        objects.append(
+            {
+                "key": key,
+                "local": str(path),
+                "meta": {},
+                "content_type": content_type,
+            }
+        )
 
     return {"bucket": BUCKET, "objects": objects}
 
@@ -640,7 +849,7 @@ def cmd_stage(args) -> None:
             obj["local"],
             BUCKET,
             obj["key"],
-            ExtraArgs={"ContentType": "application/dicom"},
+            ExtraArgs={"ContentType": obj.get("content_type", "application/dicom")},
         )
         uploaded += 1
         if uploaded % 25 == 0:
@@ -695,7 +904,13 @@ def ensure_assetstore(gc) -> dict:
     )
 
 
-def import_prefix(gc, assetstore_id: str, prefix: str, folder_id: str) -> None:
+def import_prefix(
+    gc,
+    assetstore_id: str,
+    prefix: str,
+    folder_id: str,
+    file_include_regex: str = r".*\.dcm$",
+) -> None:
     log(f"Importing s3://{BUCKET}/{prefix} -> folder {folder_id}")
     gc.post(
         f"assetstore/{assetstore_id}/import",
@@ -706,7 +921,7 @@ def import_prefix(gc, assetstore_id: str, prefix: str, folder_id: str) -> None:
             "progress": True,
             # Anchored: Girder matches this with re.match against the basename,
             # not re.search, so a bare r"\.dcm$" silently imports nothing.
-            "fileIncludeRegex": r".*\.dcm$",
+            "fileIncludeRegex": file_include_regex,
         },
     )
 
@@ -821,31 +1036,69 @@ def cmd_seed(args) -> None:
     log(f"Disabling large_image.auto_set during import (was {previous_auto_set!r})")
     set_setting(gc, "large_image.auto_set", False)
 
+    collections = {}
     try:
-        collection = ensure_collection(gc, COLLECTION_NAME)
-        log(f"Collection {COLLECTION_NAME!r}: {collection['_id']}")
-
-        roots = {}
-        for prefix in ("trial", "ultrasound"):
-            folder = ensure_folder(gc, collection["_id"], "collection", prefix)
-            roots[prefix] = folder["_id"]
-
         assetstore = ensure_assetstore(gc)
-        for prefix, folder_id in roots.items():
-            import_prefix(gc, assetstore["_id"], f"{prefix}/", folder_id)
 
-        apply_study_metadata(gc, plan, roots)
+        for collection_name in TRIAL_COLLECTION_NAMES:
+            collection = ensure_collection(gc, collection_name)
+            collections[collection_name] = collection
+            log(f"Collection {collection_name!r}: {collection['_id']}")
+            patients = ensure_folder(gc, collection["_id"], "collection", "patients")
+            import_prefix(gc, assetstore["_id"], "trial/", patients["_id"])
+            apply_study_metadata(gc, plan, {"trial": patients["_id"]})
 
-        log("Uploading config files...")
-        for prefix, folder_id in roots.items():
-            for config in sorted((CONFIGS_DIR / prefix).glob(".*.yaml")):
-                upload_config(gc, folder_id, config)
-                log(f"  {prefix}/{config.name}")
+            trial_config_dir = CONFIGS_DIR / "trial"
+            upload_config(gc, patients["_id"], trial_config_dir / VOLVIEW_CONFIG_NAME)
+            log(f"  {collection_name}/patients/{VOLVIEW_CONFIG_NAME}")
+            if collection_name == FILTERED_COLLECTION_NAME:
+                large_image_config = trial_config_dir / ".large_image_config.yaml"
+                upload_config(gc, patients["_id"], large_image_config)
+                log(f"  {collection_name}/patients/{large_image_config.name}")
+
+        developer = ensure_collection(gc, DEVELOPER_COLLECTION_NAME)
+        collections[DEVELOPER_COLLECTION_NAME] = developer
+        log(f"Collection {DEVELOPER_COLLECTION_NAME!r}: {developer['_id']}")
+        developer_roots = {
+            name: ensure_folder(gc, developer["_id"], "collection", name)["_id"]
+            for name in ("prostate", "fetus", "ultrasound")
+        }
+        image_regex = r".*\.(dcm|mha|nrrd)$"
+        import_prefix(
+            gc,
+            assetstore["_id"],
+            "developer/prostate/",
+            developer_roots["prostate"],
+            image_regex,
+        )
+        import_prefix(
+            gc,
+            assetstore["_id"],
+            "developer/fetus/",
+            developer_roots["fetus"],
+            image_regex,
+        )
+        import_prefix(
+            gc,
+            assetstore["_id"],
+            "ultrasound/",
+            developer_roots["ultrasound"],
+        )
+
+        developer_config = CONFIGS_DIR / "developer" / VOLVIEW_CONFIG_NAME
+        for name in ("prostate", "fetus"):
+            upload_config(gc, developer_roots[name], developer_config)
+            log(f"  {DEVELOPER_COLLECTION_NAME}/{name}/{VOLVIEW_CONFIG_NAME}")
+        for config in sorted((CONFIGS_DIR / "ultrasound").glob(".*.yaml")):
+            upload_config(gc, developer_roots["ultrasound"], config)
+            log(f"  {DEVELOPER_COLLECTION_NAME}/ultrasound/{config.name}")
     finally:
         set_setting(gc, "large_image.auto_set", previous_auto_set)
         log(f"Restored large_image.auto_set to {previous_auto_set!r}")
 
-    log(f"\nSeeded. Open {GIRDER_URL}/#collection/{collection['_id']}")
+    log("\nSeeded collections:")
+    for name, collection in collections.items():
+        log(f"  {name}: {GIRDER_URL}/#collection/{collection['_id']}")
 
 
 def cmd_seed_small(args) -> None:
@@ -935,6 +1188,33 @@ def collect_layout_views(layouts: dict) -> set:
     return views(list(layouts.values()))
 
 
+def find_collection(gc, name: str) -> dict | None:
+    return next((c for c in gc.listCollection() if c["name"] == name), None)
+
+
+def child_folders(gc, parent_id: str) -> dict[str, dict]:
+    return {
+        folder["name"]: folder
+        for folder in gc.listFolder(parent_id, parentFolderType="folder")
+    }
+
+
+def imaging_tree_signature(gc, root_id: str) -> set[tuple[str, ...]]:
+    """Return relative folder and non-config item paths below a folder."""
+    paths: set[tuple[str, ...]] = set()
+
+    def walk(folder_id: str, prefix: tuple[str, ...]) -> None:
+        for item in gc.listItem(folder_id):
+            if not item["name"].startswith("."):
+                paths.add(prefix + (item["name"],))
+        for name, folder in child_folders(gc, folder_id).items():
+            paths.add(prefix + (name,))
+            walk(folder["_id"], prefix + (name,))
+
+    walk(root_id, ())
+    return paths
+
+
 def cmd_verify(args) -> None:
     import requests
     import yaml
@@ -954,127 +1234,212 @@ def cmd_verify(args) -> None:
         die("Preflight failed.")
 
     gc = girder_client()
-    collection = next(
-        (c for c in gc.listCollection() if c["name"] == COLLECTION_NAME), None
-    )
-    if collection is None:
-        die(f"Collection {COLLECTION_NAME!r} not found. Run `seed.py seed`.")
+    collections = {name: find_collection(gc, name) for name in COLLECTION_NAMES}
+    for name, collection in collections.items():
+        check(f"collection {name!r} exists", collection is not None)
+    if any(collection is None for collection in collections.values()):
+        die("Required collections are missing. Run `seed.py seed`.")
 
-    roots = {
-        f["name"]: f["_id"] for f in gc.listFolder(collection["_id"], "collection")
-    }
-
-    log("\nHierarchy")
-    check("trial folder exists", "trial" in roots)
-    check("ultrasound folder exists", "ultrasound" in roots)
-
+    trial_roots = {}
+    sample_ct_folder = None
     expected_patients = {f"patient-{index:02d}" for index in range(1, N_PATIENTS + 1)}
-    patient_folders = {
+    log("\nTrial hierarchies")
+    for collection_name in TRIAL_COLLECTION_NAMES:
+        collection = collections[collection_name]
+        roots = {
+            folder["name"]: folder
+            for folder in gc.listFolder(collection["_id"], "collection")
+        }
+        check(f"{collection_name}: patients root", "patients" in roots)
+        if "patients" not in roots:
+            continue
+        patients_root = roots["patients"]
+        trial_roots[collection_name] = patients_root
+        patients = child_folders(gc, patients_root["_id"])
+        check(
+            f"{collection_name}: {N_PATIENTS} patients",
+            set(patients) == expected_patients,
+            f"got {sorted(patients)}",
+        )
+        for patient_name in sorted(expected_patients & patients.keys()):
+            studies = child_folders(gc, patients[patient_name]["_id"])
+            check(
+                f"{collection_name}/{patient_name}: {N_STUDIES} studies",
+                len(studies) == N_STUDIES,
+                f"got {len(studies)}",
+            )
+            for study_name, study in studies.items():
+                series = child_folders(gc, study["_id"])
+                check(
+                    f"{collection_name}/{patient_name}/{study_name}: CT+PET",
+                    {"CT", "PET"} <= set(series),
+                    f"got {sorted(series)}",
+                )
+                if sample_ct_folder is None and "CT" in series:
+                    sample_ct_folder = series["CT"]
+
+    if len(trial_roots) == len(TRIAL_COLLECTION_NAMES):
+        signatures = {
+            name: imaging_tree_signature(gc, root["_id"])
+            for name, root in trial_roots.items()
+        }
+        check(
+            "trial collections mirror one another",
+            signatures[UNFILTERED_COLLECTION_NAME]
+            == signatures[FILTERED_COLLECTION_NAME],
+            f"{len(signatures[UNFILTERED_COLLECTION_NAME])} vs "
+            f"{len(signatures[FILTERED_COLLECTION_NAME])} paths",
+        )
+
+    log("\nTrial configuration")
+    for collection_name, root in trial_roots.items():
+        names = {item["name"] for item in gc.listItem(root["_id"])}
+        should_filter = collection_name == FILTERED_COLLECTION_NAME
+        expected_state = "present" if should_filter else "absent"
+        check(
+            f"{collection_name}: large-image filter {expected_state}",
+            (".large_image_config.yaml" in names) == should_filter,
+        )
+        check(
+            f"{collection_name}: VolView config present",
+            VOLVIEW_CONFIG_NAME in names,
+        )
+
+    if sample_ct_folder is not None:
+        items = list(gc.listItem(sample_ct_folder["_id"]))
+        check("CT series has items", bool(items), f"{len(items)} items")
+        if items:
+            meta = gc.getItem(items[0]["_id"]).get("meta", {}).get("dicom", {})
+            for tag in ("PatientID", "StudyInstanceUID", "SeriesInstanceUID"):
+                check(f"meta.dicom.{tag}", bool(meta.get(tag)), str(meta.get(tag))[:40])
+
+    log("\nDeveloper examples")
+    developer = collections[DEVELOPER_COLLECTION_NAME]
+    developer_roots = {
         folder["name"]: folder
-        for folder in gc.listFolder(roots["trial"], parentFolderType="folder")
-        if folder["name"].startswith("patient-")
+        for folder in gc.listFolder(developer["_id"], "collection")
     }
     check(
-        f"{N_PATIENTS} seeded patient folders",
-        set(patient_folders) == expected_patients,
-        f"got {sorted(patient_folders)}",
+        "developer sibling folders",
+        {"prostate", "fetus"} <= set(developer_roots),
+        f"got {sorted(developer_roots)}",
     )
-
-    patients = [
-        patient_folders[name]
-        for name in sorted(expected_patients & patient_folders.keys())
-    ]
-    for patient in patients:
-        studies = list(gc.listFolder(patient["_id"], parentFolderType="folder"))
+    prostate = developer_roots.get("prostate")
+    fetus = developer_roots.get("fetus")
+    if prostate:
+        prostate_items = {item["name"]: item for item in gc.listItem(prostate["_id"])}
+        prostate_folders = child_folders(gc, prostate["_id"])
+        check("prostate DICOM folder", "dicom" in prostate_folders)
         check(
-            f"{patient['name']}: {N_STUDIES} studies",
-            len(studies) == N_STUDIES,
-            f"got {len(studies)}",
+            "prostate segmentation",
+            "5.seg.total-segmentator.nrrd" in prostate_items,
         )
-        for study in studies:
-            series = {
-                s["name"]
-                for s in gc.listFolder(study["_id"], parentFolderType="folder")
-            }
+        if "dicom" in prostate_folders:
+            dicom_items = list(gc.listItem(prostate_folders["dicom"]["_id"]))
             check(
-                f"{patient['name']}/{study['name']}: CT+PET",
-                {"CT", "PET"} <= series,
-                f"got {sorted(series)}",
+                "prostate has real DICOM",
+                bool(dicom_items),
+                f"{len(dicom_items)} slices",
+            )
+            seg_item = prostate_items.get("5.seg.total-segmentator.nrrd")
+            if seg_item:
+                checked = gc.get(
+                    f"folder/{prostate['_id']}/volview",
+                    parameters={
+                        "folders": prostate_folders["dicom"]["_id"],
+                        "items": seg_item["_id"],
+                    },
+                )
+                checked_names = {
+                    entry["name"] for entry in checked.get("resources", [])
+                }
+                check(
+                    "prostate Open Checked manifest",
+                    "5.seg.total-segmentator.nrrd" in checked_names
+                    and any(name.endswith(".dcm") for name in checked_names),
+                    f"got {len(checked_names)} resources",
+                )
+    if fetus:
+        fetus_items = {item["name"]: item for item in gc.listItem(fetus["_id"])}
+        check("fetus image", "fetus.mha" in fetus_items)
+        check("fetus segmentation", "fetus.seg.nrrd" in fetus_items)
+        selected = [
+            fetus_items[name]["_id"]
+            for name in ("fetus.mha", "fetus.seg.nrrd")
+            if name in fetus_items
+        ]
+        if len(selected) == 2:
+            checked = gc.get(
+                f"folder/{fetus['_id']}/volview",
+                parameters={"items": ",".join(selected)},
+            )
+            checked_names = {entry["name"] for entry in checked.get("resources", [])}
+            check(
+                "fetus Open Checked manifest",
+                {"fetus.mha", "fetus.seg.nrrd"} <= checked_names,
+                f"got {sorted(checked_names)}",
             )
 
-    log("\nGrouping metadata")
-    sample_study = gc.listFolder(patients[0]["_id"], parentFolderType="folder")
-    sample_study = list(sample_study)[0]
-    ct_folder = next(
-        f
-        for f in gc.listFolder(sample_study["_id"], parentFolderType="folder")
-        if f["name"] == "CT"
-    )
-    items = list(gc.listItem(ct_folder["_id"]))
-    check("CT folder has items", bool(items), f"{len(items)} items")
-    if items:
-        meta = gc.getItem(items[0]["_id"]).get("meta", {}).get("dicom", {})
-        for tag in ("PatientID", "StudyInstanceUID", "SeriesInstanceUID"):
-            check(f"meta.dicom.{tag}", bool(meta.get(tag)), str(meta.get(tag))[:40])
-
-    log("\nConfig items")
-    for prefix in ("trial", "ultrasound"):
-        names = {i["name"] for i in gc.listItem(roots[prefix])}
-        check(f"{prefix}/.large_image_config.yaml", ".large_image_config.yaml" in names)
-        check(f"{prefix}/{VOLVIEW_CONFIG_NAME}", VOLVIEW_CONFIG_NAME in names)
-
-    # Checking that the item exists is not enough: the config resolves by item
-    # name, so a name mismatch leaves the endpoint quietly serving BASE_CONFIG.
-    # Compare what the server actually returns against what we uploaded.
     log("\nServed VolView config")
-    for prefix in ("trial", "ultrasound"):
-        local = yaml.safe_load((CONFIGS_DIR / prefix / VOLVIEW_CONFIG_NAME).read_text())
-
+    ultrasound = developer_roots.get("ultrasound")
+    config_targets = []
+    if FILTERED_COLLECTION_NAME in trial_roots:
+        config_targets.append(
+            (
+                "patients",
+                trial_roots[FILTERED_COLLECTION_NAME]["_id"],
+                CONFIGS_DIR / "trial",
+            )
+        )
+    if prostate:
+        config_targets.append(("prostate", prostate["_id"], CONFIGS_DIR / "developer"))
+    if ultrasound:
+        config_targets.append(
+            ("ultrasound", ultrasound["_id"], CONFIGS_DIR / "ultrasound")
+        )
+    for name, folder_id, config_dir in config_targets:
+        local = yaml.safe_load((config_dir / VOLVIEW_CONFIG_NAME).read_text())
         bad_types = set(local.get("disabledViewTypes", [])) - VALID_DISABLED_VIEW_TYPES
-        check(
-            f"{prefix}: disabledViewTypes are valid",
-            not bad_types,
-            f"invalid {bad_types}",
-        )
+        check(f"{name}: disabledViewTypes valid", not bad_types, f"invalid {bad_types}")
         bad_views = collect_layout_views(local.get("layouts", {})) - VALID_LAYOUT_VIEWS
+        check(f"{name}: layout views valid", not bad_views, f"invalid {bad_views}")
+        served = gc.get(f"folder/{folder_id}/volview_config/{VOLVIEW_CONFIG_NAME}")
         check(
-            f"{prefix}: layout view names are valid",
-            not bad_views,
-            f"invalid {bad_views}",
-        )
-
-        served = gc.get(f"folder/{roots[prefix]}/volview_config/{VOLVIEW_CONFIG_NAME}")
-        check(
-            f"{prefix}: disabledViewTypes applied",
-            served.get("disabledViewTypes") == local["disabledViewTypes"],
+            f"{name}: disabledViewTypes applied",
+            served.get("disabledViewTypes") == local.get("disabledViewTypes"),
             f"served {served.get('disabledViewTypes')}",
         )
-        authored = set(local["layouts"]) - {"__all__"}
+        authored = set(local.get("layouts", {})) - {"__all__"}
         check(
-            f"{prefix}: layouts applied",
+            f"{name}: layouts applied",
             authored <= set(served.get("layouts", {})),
             f"served {sorted(served.get('layouts', {}))}",
         )
-        # First key of the served map is the one VolView switches to.
         active = next(iter(served.get("layouts", {})), None)
         check(
-            f"{prefix}: opens in {EXPECTED_ACTIVE_LAYOUT[prefix]!r}",
-            active == EXPECTED_ACTIVE_LAYOUT[prefix],
+            f"{name}: opens in {EXPECTED_ACTIVE_LAYOUT[name]!r}",
+            active == EXPECTED_ACTIVE_LAYOUT[name],
             f"would open {active!r}",
         )
 
     log("\nVolView manifest")
     token = gc.token
     headers = {"Girder-Token": token}
-    manifest = requests.get(
-        f"{API_ROOT}/folder/{ct_folder['_id']}/volview", headers=headers, timeout=30
+    manifest = (
+        requests.get(
+            f"{API_ROOT}/folder/{sample_ct_folder['_id']}/volview",
+            headers=headers,
+            timeout=30,
+        )
+        if sample_ct_folder
+        else None
     )
     check(
         "folder/:id/volview responds",
-        manifest.status_code == 200,
-        str(manifest.status_code),
+        manifest is not None and manifest.status_code == 200,
+        str(manifest.status_code if manifest else "no CT folder"),
     )
-    if manifest.status_code == 200:
+    if manifest is not None and manifest.status_code == 200:
         resources = manifest.json().get("resources", [])
         check("manifest has resources", bool(resources), f"{len(resources)} entries")
         proxiable = [r for r in resources if "/proxiable/" in r.get("url", "")]
@@ -1094,47 +1459,40 @@ def cmd_verify(args) -> None:
                 f"status {resp.status_code}",
             )
 
-    log("\nUltrasound clips")
-    us_items = list(gc.listItem(roots["ultrasound"]))
-    clips = [i for i in us_items if i["name"].endswith(".dcm")]
-    check(f"{N_CLIPS} clips", len(clips) == N_CLIPS, f"got {len(clips)}")
-    for clip in clips:
-        meta = gc.getItem(clip["_id"]).get("meta", {})
-        frames = meta.get("dicom", {}).get("NumberOfFrames")
-        check(
-            f"{clip['name']} is cine",
-            bool(frames) and int(frames) > 1,
-            f"frames={frames}",
-        )
+    if ultrasound:
+        log("\nUltrasound clips")
+        clips = [
+            item
+            for item in gc.listItem(ultrasound["_id"])
+            if item["name"].endswith(".dcm")
+        ]
+        check(f"{N_CLIPS} clips", len(clips) == N_CLIPS, f"got {len(clips)}")
+        for clip in clips:
+            meta = gc.getItem(clip["_id"]).get("meta", {})
+            frames = meta.get("dicom", {}).get("NumberOfFrames")
+            check(
+                f"{clip['name']} is cine",
+                bool(frames) and int(frames) > 1,
+                f"frames={frames}",
+            )
 
     if failures:
         die(f"{len(failures)} checks failed: {', '.join(failures)}")
-    log(f"\nAll checks passed. Open {GIRDER_URL}/#collection/{collection['_id']}")
+    log("\nAll checks passed.")
 
 
 def cmd_reset(args) -> None:
     gc = girder_client()
 
-    collection = next(
-        (c for c in gc.listCollection() if c["name"] == COLLECTION_NAME), None
-    )
-    if collection:
-        log(f"Deleting collection {COLLECTION_NAME!r}")
-        gc.delete(f"collection/{collection['_id']}")
-    else:
-        log(f"No collection {COLLECTION_NAME!r} to delete")
+    for collection_name in COLLECTION_NAMES:
+        collection = find_collection(gc, collection_name)
+        if collection:
+            log(f"Deleting collection {collection_name!r}")
+            gc.delete(f"collection/{collection['_id']}")
+        else:
+            log(f"No collection {collection_name!r} to delete")
 
-    store = next(
-        (s for s in gc.get("assetstore") if s["name"] == ASSETSTORE_NAME), None
-    )
-    if store:
-        log(f"Deleting assetstore {ASSETSTORE_NAME!r}")
-        try:
-            gc.delete(f"assetstore/{store['_id']}")
-        except Exception as exc:
-            log(f"  could not delete assetstore: {exc}")
-
-    if args.bucket:
+    if getattr(args, "bucket", False):
         log(f"Emptying bucket {BUCKET}")
         s3 = s3_client()
         paginator = s3.get_paginator("list_objects_v2")
@@ -1145,6 +1503,12 @@ def cmd_reset(args) -> None:
         STAGED_PATH.unlink(missing_ok=True)
 
     log("Reset complete.")
+
+
+def cmd_reseed(args) -> None:
+    """Replace the managed Girder collections using the staged MinIO objects."""
+    cmd_reset(argparse.Namespace(bucket=False))
+    cmd_seed(args)
 
 
 def main() -> None:
@@ -1177,6 +1541,9 @@ def main() -> None:
     sub.add_parser(
         "seed", help="Create assetstore, import, set metadata, upload configs"
     )
+    sub.add_parser(
+        "reseed", help="Delete and recreate all three collections from staged data"
+    )
 
     seed_small = sub.add_parser(
         "seed-small",
@@ -1191,7 +1558,7 @@ def main() -> None:
 
     sub.add_parser("verify", help="Assert the seeded hierarchy actually works")
 
-    reset = sub.add_parser("reset", help="Delete the Girder collection and assetstore")
+    reset = sub.add_parser("reset", help="Delete the seeded Girder collections")
     reset.add_argument(
         "--bucket", action="store_true", help="Also empty the MinIO bucket"
     )
@@ -1202,6 +1569,7 @@ def main() -> None:
         "fetch": cmd_fetch,
         "stage": cmd_stage,
         "seed": cmd_seed,
+        "reseed": cmd_reseed,
         "seed-small": cmd_seed_small,
         "verify": cmd_verify,
         "reset": cmd_reset,
