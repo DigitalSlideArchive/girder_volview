@@ -1,5 +1,10 @@
 # Client Configuration file
 
+This covers `.volview_config.yaml`, which configures the VolView client itself.
+To group images and add metadata columns in Girder's file browser, see
+[Customize file browsing](./customize_file_browsing.md), which uses a
+separate `.large_image_config.yaml` file.
+
 Using the client YAML file, anyone can change:
 
 - The default view layout
