@@ -60,31 +60,18 @@ copying only a `dist/` over `node_modules/volview/dist` also works for
 UI-only iteration, but leaves the package's `backend-contract` at the pinned
 version — fine for the browser, wrong for the conformance tests.
 
-Processing (the Analysis/Jobs tab) and remote session save ship in every build
+Processing (the Jobs tab) and remote session save ship in every build
 and no longer need build-time env flags — `VITE_ENABLE_PROCESSING`,
 `VITE_ENABLE_REMOTE_SAVE`, and `VITE_PROCESSING_ALLOWED_ORIGINS` were removed.
 What the deployed client is allowed to contact is decided at runtime by a
 same-origin egress gate; a same-origin deployment (such as DSA) needs no
 configuration, and cross-origin targets are never allowed.
 
-## Radiology CLI task image
-
-The development stack uses the
-[VolView Radiology CLI](https://github.com/PaulHax/volview-radiology-cli) as
-reference infrastructure to drive and test the processing backend. Clone it
-locally and set `CLI_REPO` in this repository's `.env` to that checkout:
-
-```sh
-git clone https://github.com/PaulHax/volview-radiology-cli
-# In girder_volview/.env:
-CLI_REPO=/path/to/volview-radiology-cli
-```
-
-When processing routes are present, `script/deploy` calls
-`script/ensure-radiology-cli`. That script builds the local
-`volview-radiology-cli:latest` image if it is missing, registers it with
-`slicer_cli_web`, and verifies the declared tasks are available. It does not
-pull this image from a registry.
+See [Job processing design](./job-processing.md) for the execution flow and how
+to add a task using the
+[VolView Radiology CLI](https://github.com/PaulHax/volview-radiology-cli) as a
+reference implementation. Image build and registration instructions are in
+[Server administration](./admin.md#radiology-cli-task-image).
 
 ## Updating the VolView client version
 

@@ -483,28 +483,28 @@ def test_provider_config_advertises_explicit_jobs_base_url():
     # Folder-free: no launch folder id leaks into the jobs base.
     assert str(folderId) not in provider["jobsBaseUrl"]
     # The provider id is FOLDER-SCOPED (immutable per launch folder). This bare
-    # dict has no name, so the label falls back to the plain "Analysis".
+    # dict has no name, so the label falls back to the plain "Jobs".
     assert provider["id"] == ("girder-slicer-cli:%s" % folderId)
-    assert provider["label"] == "Analysis"
+    assert provider["label"] == "Jobs"
 
 
 def test_provider_config_id_is_folder_scoped_and_label_carries_folder_name():
     # Two folders open simultaneously must register as two DISTINCT providers, so
     # the id carries the launch folder id and the label carries the folder name
     # (the picker distinguishes them). A folder dict with no name falls back to
-    # the bare "Analysis" label.
+    # the bare "Jobs" label.
     folderId = ObjectId()
     named = config.buildProcessingConfigBlock(
         {"_id": folderId, "name": "Chest CT"}
     )["providers"][0]
     assert named["id"] == ("girder-slicer-cli:%s" % folderId)
-    assert named["label"] == "Analysis — Chest CT"
+    assert named["label"] == "Jobs — Chest CT"
 
     nameless = config.buildProcessingConfigBlock({"_id": folderId})[
         "providers"
     ][0]
     assert nameless["id"] == ("girder-slicer-cli:%s" % folderId)
-    assert nameless["label"] == "Analysis"
+    assert nameless["label"] == "Jobs"
 
 
 def test_provider_config_urls_derive_from_api_root_not_a_literal(monkeypatch):

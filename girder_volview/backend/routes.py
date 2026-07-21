@@ -237,22 +237,31 @@ JOBS_CONTAINER_NAME = "volview-jobs"
 def _jobsContainerFolder(launchFolder, user):
     """Create-or-reuse the launch folder's server-owned ``volview-jobs`` container.
 
-    Reuse requires the ``volviewJobOutputFolder`` marker -- the server-owned
-    identity stamped at creation. Adopting a user's pre-existing folder that
-    merely shares the reserved name would silently hide its contents from launch
-    manifests and turn the container-delete gesture into "delete unrelated user
-    data", so an unmarked collision refuses the submission with a clear 409. The
-    marker is stamped ONLY on a folder this call itself created: ``createFolder``
-    never reuses (name-collision raises ``ValidationException``), so a folder
-    someone else made in the check-create window re-runs the marker check instead
-    of being adopted. Create and stamp are two writes, so an unmarked collision
-    gets a short grace period (a concurrent submission's container between its
-    create and its stamp) before the 409, and a failed stamp removes the created
-    folder rather than leave an unmarked container that would 409 every future
-    submission. After creation its ACL is replaced with the launch folder's
-    exact user and group policy. This removes the implicit ADMIN grant that
-    ``createFolder`` gives its creator while retaining collaborators' inherited
-    access. Each per-job folder inside keeps its submitter-only ACL.
+    Reuse requires the ``volviewJobOutputFolder`` marker, the server-owned
+    identity stamped at creation -- the reserved name alone is not enough:
+
+    * Why a marker: adopting a user's pre-existing folder that merely shares
+      the reserved name would silently hide its contents from launch
+      manifests and turn the container-delete gesture into "delete unrelated
+      user data". An unmarked name collision refuses the submission with a
+      409 instead of being adopted.
+    * Why the marker can be trusted: it is stamped ONLY on a folder this call
+      itself created. ``createFolder`` never reuses an existing folder (a
+      name collision raises ``ValidationException``), so a folder someone
+      else made in the check-create window re-runs the marker check instead
+      of being adopted.
+    * Grace period: create and stamp are two separate writes, so an unmarked
+      collision gets a short grace period -- room for a concurrent
+      submission's own container to land between its create and its stamp --
+      before the 409 fires.
+    * Failed stamp: if the stamp write fails, the just-created folder is
+      removed rather than left behind unmarked, which would 409 every future
+      submission.
+    * ACL: after creation, the container's ACL is replaced with the launch
+      folder's exact user and group policy. This removes the implicit ADMIN
+      grant ``createFolder`` gives its creator while retaining collaborators'
+      inherited access. Each per-job folder inside keeps its own
+      submitter-only ACL.
     """
 
     def findContainer():
