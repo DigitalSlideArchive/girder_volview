@@ -1,3 +1,8 @@
+# The backend-contract is read from the installed `volview` package
+# (node_modules/volview/backend-contract), never vendored. Ignore any local
+# materialization someone points GIRDER_VOLVIEW_CONTRACT_DIR at here.
+/tests/contract/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -48,5 +53,15 @@ coverage.xml
 
 # virtualenv
 .venv
+.venv-ralph/
 venv/
 ENV/
+
+# seed-tool downloaded imaging data and MinIO bucket state (see e2e/seed/README.md)
+/e2e/seed/data/
+/e2e/seed/.minio-data/
+
+# compat harness scratch: baseline checkouts recreated from git history on
+# demand (see docs/compat-e2e.md). Never commit old-version sources or the
+# session zips they produce — both are reproducible from a sha.
+/e2e/.compat/

@@ -1,0 +1,29 @@
+# Which girder_volview checkout the girder container serves.
+#
+# Layered LAST, after the upstream DSA compose files, so this repo owns the one
+# thing it needs to change about the stack without editing a shared checkout.
+# Upstream's with-dive-volview/docker-compose.override.yml hardcodes
+# `../../../girder_volview:/opt/girder_volview`, pinning the container to the
+# main checkout; script/deploy needs to point it at an arbitrary worktree, or at
+# a materialized compat baseline under e2e/.compat/. Keeping that change here
+# means the upstream checkout stays pristine.
+#
+# Compose merges a service's volume list by mount target, so re-declaring
+# /opt/girder_volview replaces the upstream entry rather than adding a second,
+# conflicting mount.
+#
+# GIRDER_VOLVIEW_SRC must be an ABSOLUTE path: a relative one resolves against
+# the compose project directory, not this file. script/deploy sets it on every
+# compose invocation — omitting it on a later `compose ps` would recompute a
+# different config and ask to recreate the container.
+#
+# NOTE: caching girder's npm install across recreates was tried and does not
+# work. `girder build --no-reinstall` needs node_modules in EVERY plugin's
+# web_client, and plugins installed into site-packages (e.g. dive_server) keep
+# theirs in the writable layer, which --force-recreate discards. Persisting only
+# girder's staging node_modules leaves the build failing on `Cannot find module
+# 'webpack'`.
+services:
+  girder:
+    volumes:
+      - ${GIRDER_VOLVIEW_SRC:?GIRDER_VOLVIEW_SRC must be set (script/deploy sets it)}:/opt/girder_volview

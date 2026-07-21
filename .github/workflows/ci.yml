@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  schedule:
+    # Nightly on the default branch.
+    - cron: "0 0 * * *"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: Server tests (tox)
+    runs-on: ubuntu-latest
+    # Maintained DSA test image; unlike girder_test it carries current Python
+    # interpreters and the Girder test toolchain.
+    container: girder/tox-and-node
+    services:
+      mongo:
+        image: mongo:4.0
+        # RAM-backed data dir keeps the per-test drop/reconnect cheap.
+        options: >-
+          --tmpfs /data/db
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install tox
+        run: pip install --no-cache-dir tox
+      - name: Lint (ruff)
+        run: tox -e lint
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the pinned VolView package (carries the backend-contract)
+        # The conformance suite reads the contract from the `volview` package
+        # (node_modules/volview/backend-contract), never a vendored copy. The
+        # pinned package ships prebuilt artifacts, so `--ignore-scripts` is a
+        # plain fast extract, and `--omit=dev` drops the JS-lint devDeps the
+        # web-client job owns. Runs AFTER ruff so the linter never walks
+        # node_modules.
+        working-directory: girder_volview/web_client
+        run: npm ci --ignore-scripts --omit=dev
+      - name: Server tests
+        # `-n auto` parallelizes across cores via pytest-xdist. Safe because
+        # pytest-girder names each test's database uniquely, so workers sharing
+        # one Mongo never collide. The service is reachable at host `mongo`.
+        run: tox -e test -- -n auto --mongo-uri mongodb://mongo:27017
+
+  web-client:
+    name: Web client lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      - name: Install and lint
+        working-directory: girder_volview/web_client
+        run: |
+          npm ci
+          npm run lint
