@@ -1,0 +1,35 @@
+# Build artifacts and vendored root-owned backups are not source.
+exclude = [
+    ".eggs",
+    ".git",
+    ".tox",
+    "__pycache__",
+    "node_modules",
+    "build",
+    ".rootowned-build.bak",
+    ".rootowned-build2.bak",
+]
+
+[lint]
+# E/W = pycodestyle, F = pyflakes, B = flake8-bugbear, Q = flake8-quotes,
+# N = pep8-naming. Docstring rules (D) are deliberately not selected: the
+# codebase does not satisfy them.
+select = ["E", "W", "F", "B", "Q", "N"]
+ignore = [
+    # girder's API surface is intentionally CamelCase / mixedCase.
+    "N802",  # function name should be lowercase
+    "N803",  # argument name should be lowercase
+    "N806",  # variable in function should be lowercase
+    "N812",  # lowercase imported as non-lowercase
+    "N813",  # camelCase imported under a lowercase alias (intentional)
+    "N815",  # mixedCase variable in class scope
+    "N816",  # mixedCase variable in global scope
+]
+
+[lint.flake8-quotes]
+inline-quotes = "double"
+
+[lint.per-file-ignores]
+# Conformance tests deliberately assert against a broad Exception where the
+# precise type is an implementation detail of the validator under test.
+"tests/*" = ["B017"]

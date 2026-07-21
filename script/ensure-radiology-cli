@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+# Idempotently ensure the radiology CLI image is built and its tasks are
+# registered with slicer_cli_web, so a reprovision (or any plain stack-up)
+# never silently drops a task declared by the image manifest.
+#
+# Why this exists: provision.*.yaml only *pulls* listed images and nothing hosts
+# volview-radiology-cli:latest in a registry, so a full stack rebuild empties the
+# radiology tasks until the PUT below is re-run by hand. "The tasks disappeared"
+# reads as a bug. This is the interim durability mechanism: re-register on
+# stack-up. The slicer_cli_web PUT is idempotent, so this script is safe to run
+# repeatedly.
+#
+# Usage:
+#   script/ensure-radiology-cli
+#
+# Env overrides:
+#   GIRDER_URL       default http://localhost:8080
+#   DSA_ADMIN_USER   default admin
+#   DSA_ADMIN_PASS   default password
+#   CLI_IMAGE        default volview-radiology-cli:latest
+#   CLI_REPO         required; the volview-radiology-cli checkout (set in .env)
+#   DEMO_FOLDER      optional folder id used to verify the facade task list;
+#                    defaults to the authenticated user's Public folder
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO=$(cd "$SCRIPT_DIR/.." && pwd)
+
+# Sourced here as well as in script/deploy, because this is also a standalone
+# entry point (start-dsa-volview.sh calls it directly). Without this its own
+# CLI_REPO error told you to create a .env that it then never read. Sourcing
+# twice is harmless; already-exported values from a parent deploy win, since
+# .env assignments are plain and the parent exported the same values.
+if [ -f "$REPO/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$REPO/.env"
+    set +a
+fi
+
+GIRDER_URL=${GIRDER_URL:-http://localhost:8080}
+DSA_ADMIN_USER=${DSA_ADMIN_USER:-admin}
+DSA_ADMIN_PASS=${DSA_ADMIN_PASS:-password}
+CLI_IMAGE=${CLI_IMAGE:-volview-radiology-cli:latest}
+: "${CLI_REPO:?not set — copy .env.example to .env and point CLI_REPO at your volview-radiology-cli checkout}"
+DEMO_FOLDER=${DEMO_FOLDER:-}
+
+# The image manifest is the sole task inventory.
+REQUIRED_TASK_TEXT=$(python3 - "$CLI_REPO/cli_list.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf8") as stream:
+    manifest = json.load(stream)
+if not isinstance(manifest, dict) or not manifest:
+    raise SystemExit("cli_list.json must contain at least one task")
+for name in sorted(manifest):
+    print(name)
+PY
+)
+mapfile -t REQUIRED_TASKS <<< "$REQUIRED_TASK_TEXT"
+
+if docker image inspect "$CLI_IMAGE" >/dev/null 2>&1; then
+    echo "==> [1/4] image $CLI_IMAGE present"
+else
+    echo "==> [1/4] image $CLI_IMAGE missing — building from $CLI_REPO"
+    if [ ! -f "$CLI_REPO/Dockerfile" ]; then
+        echo "    !! no Dockerfile at $CLI_REPO — cannot build $CLI_IMAGE" >&2
+        exit 1
+    fi
+    (cd "$CLI_REPO" && docker build -t "$CLI_IMAGE" .)
+fi
+
+echo "==> [2/4] waiting for Girder at $GIRDER_URL"
+girder_up=
+for _ in $(seq 1 150); do
+    if curl -sf -o /dev/null "$GIRDER_URL/api/v1/system/version"; then
+        girder_up=1
+        break
+    fi
+    sleep 2
+done
+if [ -z "$girder_up" ]; then
+    echo "    !! Girder never came up at $GIRDER_URL" >&2
+    exit 1
+fi
+
+echo "==> [3/4] registering $CLI_IMAGE with slicer_cli_web"
+# Keep both secrets off the command line (argv is visible via `ps`/`/proc` to
+# any local user). We base64-encode the credentials ourselves and hand curl a
+# ready-made `Authorization: Basic` header through a 0600 header file, rather
+# than curl's `--config`/`-u`: the config `user` directive re-parses the value
+# (a quote, backslash, or surrounding whitespace in the password is stripped or
+# truncates it), so such passwords would not round-trip. Building the header
+# passes the password byte-for-byte verbatim, matching the old `-u` behavior.
+# The credential only ever travels through the pipeline's stdin/stdout.
+AUTH_HEADER=$(mktemp)
+trap 'rm -f "$AUTH_HEADER" "${TOKEN_HEADER:-}"' EXIT
+printf 'Authorization: Basic %s\n' \
+    "$(printf '%s:%s' "$DSA_ADMIN_USER" "$DSA_ADMIN_PASS" | base64 | tr -d '\n')" \
+    > "$AUTH_HEADER"
+
+# Tolerant parse: print the token, or nothing (exit 0) on any auth/JSON error,
+# so the `-z "$TOKEN"` guard below fires with a friendly message instead of a
+# raw Python traceback aborting under `set -euo pipefail`.
+TOKEN=$(curl -s -H @"$AUTH_HEADER" "$GIRDER_URL/api/v1/user/authentication" \
+    | python3 -c "import json,sys
+try:
+    print(json.load(sys.stdin)['authToken']['token'])
+except Exception:
+    pass")
+if [ -z "$TOKEN" ]; then
+    echo "    !! failed to authenticate as $DSA_ADMIN_USER at $GIRDER_URL" >&2
+    exit 1
+fi
+
+# Hold the session token in its own 0600 header file and pass it via `-H @file`,
+# so the token never reaches argv either. Both header files cleaned up on exit.
+TOKEN_HEADER=$(mktemp)
+printf 'Girder-Token: %s\n' "$TOKEN" > "$TOKEN_HEADER"
+
+# A database wipe changes every Mongo object id, so the verification scope
+# cannot be a checked-in folder id. Use an explicit override when supplied;
+# otherwise resolve the freshly provisioned administrator's Public folder.
+if [ -z "$DEMO_FOLDER" ]; then
+    USER_ID=$(curl -sf -H @"$TOKEN_HEADER" "$GIRDER_URL/api/v1/user/me" \
+        | python3 -c "import json,sys; print(json.load(sys.stdin)['_id'])") || USER_ID=
+    if [ -n "$USER_ID" ]; then
+        DEMO_FOLDER=$(curl -sf -G -H @"$TOKEN_HEADER" \
+            --data-urlencode "parentType=user" \
+            --data-urlencode "parentId=$USER_ID" \
+            --data-urlencode "name=Public" \
+            --data-urlencode "limit=1" \
+            "$GIRDER_URL/api/v1/folder" \
+            | python3 -c "import json,sys; rows=json.load(sys.stdin); print(rows[0]['_id'] if rows else '')") \
+            || DEMO_FOLDER=
+    fi
+    if [ -z "$DEMO_FOLDER" ]; then
+        echo "    !! could not resolve a folder for task-list verification" >&2
+        exit 1
+    fi
+fi
+
+# -f so an HTTP error body (e.g. access denied) becomes a non-zero exit instead
+# of garbage flowing into the PUT URL below.
+TASK_FOLDER=$(curl -sf -H @"$TOKEN_HEADER" \
+    "$GIRDER_URL/api/v1/system/setting?key=slicer_cli_web.task_folder" | tr -d '"') || TASK_FOLDER=
+if [ -z "$TASK_FOLDER" ] || [ "$TASK_FOLDER" = "null" ]; then
+    echo "    !! slicer_cli_web.task_folder is unset — slicer_cli_web not provisioned?" >&2
+    exit 1
+fi
+
+if ! curl -sf -X PUT -H @"$TOKEN_HEADER" -H "Content-Length: 0" \
+    "$GIRDER_URL/api/v1/slicer_cli_web/docker_image?name=$CLI_IMAGE&pull=false&folder=$TASK_FOLDER" \
+    >/dev/null; then
+    echo "    !! registration PUT for $CLI_IMAGE was rejected by slicer_cli_web" >&2
+    exit 1
+fi
+
+echo "==> [4/4] verifying radiology tasks are registered"
+# Exit codes: 0 = all required tasks present; 2 = task list reachable but a task
+# is still missing (keep polling — registration is async); 3 = the endpoint did
+# not return a task list (bad DEMO_FOLDER / access error — retrying won't help).
+tasks_present() {
+    local json
+    json=$(curl -s -H @"$TOKEN_HEADER" \
+        "$GIRDER_URL/api/v1/folder/$DEMO_FOLDER/volview_processing/tasks")
+    REQUIRED="${REQUIRED_TASKS[*]}" TASKS_JSON="$json" python3 - <<'PY'
+import json
+import os
+import sys
+
+try:
+    tasks = json.loads(os.environ["TASKS_JSON"])
+except Exception:
+    sys.exit(3)
+if not isinstance(tasks, list):
+    sys.exit(3)
+names = {task.get("title") or task.get("name") for task in tasks}
+required = set(os.environ["REQUIRED"].split())
+missing = sorted(required - names)
+if missing:
+    print("missing: " + ", ".join(missing), file=sys.stderr)
+    sys.exit(2)
+print(f"{len(tasks)} tasks; radiology CLIs present: " + ", ".join(sorted(required)))
+PY
+}
+
+registered=
+endpoint_error=
+for _ in $(seq 1 60); do
+    tasks_present && { registered=1; break; }
+    rc=$?
+    [ "$rc" -eq 3 ] && endpoint_error=1
+    sleep 2
+done
+if [ -z "$registered" ]; then
+    if [ -n "$endpoint_error" ]; then
+        echo "    !! task list at $GIRDER_URL/api/v1/folder/$DEMO_FOLDER/volview_processing/tasks" \
+             "was not readable (check DEMO_FOLDER=$DEMO_FOLDER exists and is accessible)" >&2
+    else
+        echo "    !! radiology tasks (${REQUIRED_TASKS[*]}) did not register within timeout" >&2
+    fi
+    exit 1
+fi
+
+echo "==> Done — radiology CLIs registered and verified"
