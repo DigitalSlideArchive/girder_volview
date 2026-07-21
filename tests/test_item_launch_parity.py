@@ -254,11 +254,12 @@ def test_run_task_under_item_launch_stamps_and_outputs_to_parent_folder(
 
 
 @pytest.mark.plugin("volview")
-def test_stage_under_item_launch_lands_in_parent_folder(
+def test_stage_under_item_launch_lands_in_jobs_container(
     server, owner, parentFolder, launchItem
 ):
     import json
     from girder.models.file import File
+    from girder.models.folder import Folder
     from girder.models.item import Item
     from girder_volview.utils import makeFileDownloadUrl
 
@@ -303,7 +304,17 @@ def test_stage_under_item_launch_lands_in_parent_folder(
 
     file_id = inputs._fileIdFromMintedUri(resp.json["uris"][0])
     staged_item = Item().load(File().load(file_id, force=True)["itemId"], force=True)
-    # Launch-context-scoped staging: the transient item is a child of the item's
-    # parent folder, and is tagged transient like any other staged input.
-    assert str(staged_item["folderId"]) == str(parentFolder["_id"])
+    jobs_folder = Folder().findOne(
+        {
+            "parentId": parentFolder["_id"],
+            "parentCollection": "folder",
+            "name": routes.JOBS_CONTAINER_NAME,
+        }
+    )
+    # Item launches derive their launch context from the item's parent, then put
+    # transient working data in that context's jobs container rather than next
+    # to the launched item.
+    assert jobs_folder is not None
+    assert str(staged_item["folderId"]) == str(jobs_folder["_id"])
+    assert str(staged_item["folderId"]) != str(parentFolder["_id"])
     assert staged_item["meta"]["volviewTransient"] is True

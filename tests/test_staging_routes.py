@@ -153,6 +153,8 @@ def _itemForUri(uri):
 
 @pytest.mark.plugin("volview")
 def test_stage_returns_minted_uri_that_resolves(server, owner, ownerFolder):
+    from girder.models.folder import Folder
+
     resp = _stage(server, ownerFolder, owner, b"seg-bytes", name="seg.seg.nrrd")
 
     assert resp.output_status.startswith(b"200")
@@ -172,8 +174,20 @@ def test_stage_returns_minted_uri_that_resolves(server, owner, ownerFolder):
     )
     assert params["inputVolume"] == fileId
 
-    # The staged item is tagged transient (invisible to source listings / history).
-    assert _itemForUri(uris[0])["meta"]["volviewTransient"] is True
+    # The staged item is tagged transient and kept in the server-owned jobs
+    # container rather than appearing beside the user's source image.
+    stagedItem = _itemForUri(uris[0])
+    jobsFolder = Folder().findOne(
+        {
+            "parentId": ownerFolder["_id"],
+            "parentCollection": "folder",
+            "name": routes.JOBS_CONTAINER_NAME,
+        }
+    )
+    assert jobsFolder is not None
+    assert str(stagedItem["folderId"]) == str(jobsFolder["_id"])
+    assert str(stagedItem["folderId"]) != str(ownerFolder["_id"])
+    assert stagedItem["meta"]["volviewTransient"] is True
 
 
 @pytest.mark.plugin("volview")
@@ -237,7 +251,15 @@ def test_stage_tag_failure_leaves_no_untagged_item(
     )
 
     assert resp.output_status.startswith(b"500")
-    names = [item["name"] for item in Folder().childItems(ownerFolder)]
+    jobsFolder = Folder().findOne(
+        {
+            "parentId": ownerFolder["_id"],
+            "parentCollection": "folder",
+            "name": routes.JOBS_CONTAINER_NAME,
+        }
+    )
+    assert jobsFolder is not None
+    names = [item["name"] for item in Folder().childItems(jobsFolder)]
     assert "orphan.seg.nrrd" not in names
 
 
