@@ -1,21 +1,18 @@
 import { Page, expect } from '@playwright/test';
 import { CONFIG } from './config';
-import { isManifestGet } from './manifest';
+import { isManifestGet, requireManifestJson } from './manifest';
 
 // Drivers for the real Girder web UI: the large_image item list's filter box
 // and checkboxes, and the plugin's Open-in-VolView affordances. All browser
 // scenarios launch through these product paths, so open.js always builds the
 // URL under test.
 
-// A VolView popup plus the manifest its boot fetched (undefined if none was
-// observed — e.g. an intercepted non-JSON response).
+// A VolView popup plus the valid manifest its boot fetched.
 export type VolViewLaunch = { popup: Page; manifest: Promise<any> };
 
-function watchManifest(popup: Page): Promise<any> {
-  return popup
-    .waitForResponse(isManifestGet, { timeout: 90_000 })
-    .then((resp) => resp.json())
-    .catch(() => undefined);
+async function watchManifest(popup: Page): Promise<any> {
+  const response = await popup.waitForResponse(isManifestGet, { timeout: 90_000 });
+  return requireManifestJson(response);
 }
 
 async function toLaunch(popupPromise: Promise<Page>): Promise<VolViewLaunch> {

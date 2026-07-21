@@ -83,7 +83,6 @@ function expectZipRoundTrip(fresh: ZipSummary, gesture: CapturedGesture): void {
 
 async function expectResumedSession(launch: VolViewLaunch, sessionItemName?: string): Promise<void> {
   const m = await launch.manifest;
-  expect(m, 'no manifest captured on launch').toBeTruthy();
   expect(
     isSessionManifest(m),
     `branch must resume the main-era session: ${resourceNames(m)}`
@@ -122,9 +121,7 @@ async function resaveAndReload(
 
   const m = await reloadCapturingManifest(popup);
   expect(urlsParam(popup), 'F5 after the branch save must stay on its resumeUrl').toBe(resumeUrl);
-  if (m) {
-    expect(isSessionManifest(m), 'F5 must resume the branch save').toBeTruthy();
-  }
+  expect(isSessionManifest(m), 'F5 must resume the branch save').toBeTruthy();
   await assertContentRestored(popup, gesture);
 }
 

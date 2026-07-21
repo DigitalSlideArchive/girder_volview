@@ -1,4 +1,4 @@
-import { Page, expect } from '@playwright/test';
+import { Page, expect, Response } from '@playwright/test';
 import { waitForVolViewReady } from './volview';
 
 // Manifest interception shared by the lifecycle and compat suites: capture the
@@ -17,27 +17,26 @@ export const isManifestGet = (response: { request: () => { method: () => string 
   response.request().method() === 'GET' &&
   /\/(item|folder)\/[^/]+\/volview$/.test(new URL(response.url()).pathname);
 
+export async function requireManifestJson(response: Response): Promise<any> {
+  const path = new URL(response.url()).pathname;
+  expect(response.ok(), `manifest ${path} returned HTTP ${response.status()}`).toBeTruthy();
+  try {
+    return await response.json();
+  } catch {
+    throw new Error(`manifest ${path} did not return valid JSON`);
+  }
+}
+
 export async function captureManifest(page: Page, navigate: () => Promise<unknown>): Promise<any> {
   const manifestResp = page.waitForResponse(isManifestGet, { timeout: 60_000 });
   await navigate();
-  const resp = await manifestResp.catch(() => undefined);
   // Status BEFORE the readiness wait, on purpose: a failed manifest means the
   // viewer never gets data, so waiting first turns a plain HTTP error into a
   // 90s "viewer never became ready" timeout that names nothing. Checked here
   // rather than in each caller so every launch and F5 gets it.
-  if (resp) {
-    expect(
-      resp.ok(),
-      `manifest ${new URL(resp.url()).pathname} returned HTTP ${resp.status()}`
-    ).toBeTruthy();
-  }
+  const manifest = await requireManifestJson(await manifestResp);
   await waitForVolViewReady(page);
-  if (!resp) return undefined;
-  try {
-    return await resp.json();
-  } catch {
-    return undefined;
-  }
+  return manifest;
 }
 
 export const gotoCapturingManifest = (page: Page, url: string) =>

@@ -54,7 +54,7 @@ test.describe('compat capture: devkit study drill-down', () => {
     await gotoFolder(page, folderId);
     const launch = await drillRowNav(page, rowTexts);
     const m = await launch.manifest;
-    if (m) expect(isSessionManifest(m), 'devkit study launch must be fresh').toBeFalsy();
+    expect(isSessionManifest(m), 'devkit study launch must be fresh').toBeFalsy();
     await waitForVolViewReady(launch.popup);
     await shot(launch.popup, info, 'capture-devkit-study-loaded');
 

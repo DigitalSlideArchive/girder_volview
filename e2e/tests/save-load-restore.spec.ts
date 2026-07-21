@@ -113,7 +113,7 @@ test.describe('save/load/restore F5 lifecycle', () => {
       const m2 = await reloadCapturingManifest(view);
       await shot(view, info, `${gesture}-2-f5-stays-fresh`);
       expect(urlsParam(view), 'F5-before-save must not repoint').toBe(freshManifest);
-      if (m2) expect(isSessionManifest(m2), 'F5-before-save pulled in a session').toBeFalsy();
+      expect(isSessionManifest(m2), 'F5-before-save pulled in a session').toBeFalsy();
 
       await placeRuler(view);
       const savedRulers = await readRulerMeasurements(view);
@@ -131,7 +131,7 @@ test.describe('save/load/restore F5 lifecycle', () => {
       const m4 = await reloadCapturingManifest(view);
       await shot(view, info, `${gesture}-4-f5-resumes-save`);
       expect(urlsParam(view), 'F5-after-save must stay on the resumeUrl').toBe(resumeUrl1);
-      if (m4) expect(isSessionManifest(m4), 'F5-after-save did not load the session').toBeTruthy();
+      expect(isSessionManifest(m4), 'F5-after-save did not load the session').toBeTruthy();
       expect(await readRulerMeasurements(view), 'F5-after-save lost the saved ruler').toEqual(
         savedRulers
       );
@@ -186,7 +186,7 @@ test.describe('save/load/restore F5 lifecycle', () => {
     const manifest = await reloadCapturingManifest(restart.view);
     await shot(restart.view, info, 'restart-3-f5-resumes-new-save');
     expect(urlsParam(restart.view)).toBe(newResume);
-    if (manifest) expect(isSessionManifest(manifest)).toBeTruthy();
+    expect(isSessionManifest(manifest)).toBeTruthy();
   });
 
   test('bare folder-open resumes the newest folder-scoped save', async ({ page, context }, info) => {

@@ -54,12 +54,10 @@ function requireState(): CompatState {
 
 async function expectFresh(launch: VolViewLaunch): Promise<void> {
   const m = await launch.manifest;
-  if (m) {
-    expect(
-      isSessionManifest(m),
-      `capture launch must load raw images, not a session: ${resourceNames(m)}`
-    ).toBeFalsy();
-  }
+  expect(
+    isSessionManifest(m),
+    `capture launch must load raw images, not a session: ${resourceNames(m)}`
+  ).toBeFalsy();
 }
 
 // Save, then identify the session item the folder-scoped save minted.
