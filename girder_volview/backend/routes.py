@@ -781,10 +781,16 @@ def stageInput(self, folder, file, descriptor):
     # bytes so a malformed, foreign, unauthorized, or transient reference never
     # leaves an orphan upload.
     name = inputs.validateStagedDescriptor(descriptor, user)
+    # Keep browser-generated working data out of the launch folder. The shared,
+    # server-owned jobs container is already excluded from VolView's launch
+    # manifest and carries the launch folder's collaborator ACL. Submission will
+    # still copy this original into its private per-job folder before publishing
+    # the task.
+    stagingFolder = _jobsContainerFolder(folder, user)
     # Job-end cleanup never sees an upload that was never submitted, so age out
-    # this folder's orphans before adding another.
-    inputs._sweepOrphanTransients(folder)
-    fileDoc = inputs._streamMultipartFileIntoItem(folder, user, file, name)
+    # this jobs container's staged orphans before adding another.
+    inputs._sweepOrphanTransients(stagingFolder)
+    fileDoc = inputs._streamMultipartFileIntoItem(stagingFolder, user, file, name)
     try:
         inputs._tagItemTransient(fileDoc)
     except Exception:

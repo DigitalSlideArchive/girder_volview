@@ -29,7 +29,9 @@ When a user submits a task, the following happens:
    shapes understood by VolView.
 3. VolView submits the selected task ID and parameter values. Inputs already in
    Girder are represented by file handles; client-generated data is first
-   staged into Girder through the processing API.
+   staged into the launch folder's server-owned `volview-jobs` container through
+   the processing API, keeping temporary working items out of the source-data
+   folder.
 4. Girder VolView authenticates the user, checks folder access, confirms that
    the task is still in VolView's allowed scope, and validates every submitted
    value against the CLI declaration. Reserved credentials, undeclared

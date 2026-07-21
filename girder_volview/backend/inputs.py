@@ -167,9 +167,10 @@ def validateStagedReferenceImage(referenceImage, user):
             )
 
 
-# ``stageInput`` (in ``routes.py``) lands client-held bytes in a fresh item
-# tagged transient and mints a proxiable download URI for them; from there a
-# staged input resolves through the same own-scheme path as any other input.
+# ``stageInput`` (in ``routes.py``) lands client-held bytes in a fresh item in
+# the launch folder's server-owned jobs container, tags it transient, and mints
+# a proxiable download URI for it; from there a staged input resolves through
+# the same own-scheme path as any other input.
 # Ownership is per-job by construction (``copyStagedInputsIntoJobFolder``), so
 # no job references a shared staged original. Cleanup is therefore split: the
 # job deletes its own copies at terminal state, and the TTL sweep below ages
@@ -365,9 +366,10 @@ def _sweepOrphanTransients(folder, now=None):
 def _streamMultipartFileIntoItem(folder, user, part, name):
     """Stream one parsed multipart file part into a fresh item under ``folder``.
 
-    ``folder`` is the WRITE-authorized document the ``stageInput`` route already
-    loaded via its ``modelParam(level=AccessType.WRITE)`` decorator — the single
-    authorization boundary, deliberately not re-checked here.
+    ``folder`` is the server-owned jobs container derived from the launch folder
+    that ``stageInput`` already loaded with WRITE access. Its ACL mirrors that
+    launch folder, so this transport helper deliberately does not add another
+    authorization boundary.
     """
     stream = getattr(part, "file", None)
     if stream is None:
