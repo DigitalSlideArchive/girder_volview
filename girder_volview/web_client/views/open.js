@@ -22,7 +22,7 @@ const volViewPath = `static/built/plugins/volview/index.html`;
 // folder-open, which resumes the folder's newest session.volview.zip. `save=`
 // returns a `resumeUrl` the client repoints `urls=` at, so a later F5 reloads
 // the last save. `config=` delivers the folder config that registers the
-// processing provider; without it the Analysis tab never appears.
+// processing provider; without it the Jobs tab never appears.
 
 function configParam(folderId) {
     const configUrl = `/${getApiRoot()}/folder/${folderId}/volview_config/.volview_config.yaml`;

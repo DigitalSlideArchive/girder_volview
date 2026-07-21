@@ -1,5 +1,31 @@
 # Server administration
 
+## Job processing
+
+See [Job processing design](./job-processing.md) for the processing
+architecture, job execution flow, Slicer CLI registration guidance, and the
+category scoping that keeps VolView tasks separate from HistomicsUI and
+DIVE-DSA tasks in a shared `slicer_cli_web` deployment.
+
+### Radiology CLI task image
+
+The development stack uses the
+[VolView Radiology CLI](https://github.com/PaulHax/volview-radiology-cli) as
+reference infrastructure to drive and test the processing backend. Clone it
+locally and set `CLI_REPO` in this repository's `.env` to that checkout:
+
+```sh
+git clone https://github.com/PaulHax/volview-radiology-cli
+# In girder_volview/.env:
+CLI_REPO=/path/to/volview-radiology-cli
+```
+
+When processing routes are present, `script/deploy` calls
+`script/ensure-radiology-cli`. That script builds the local
+`volview-radiology-cli:latest` image if it is missing, registers it with
+`slicer_cli_web`, and verifies the declared tasks are available. It does not
+pull this image from a registry.
+
 ## Speedup S3 file downloading by disabling proxying
 
 The VolView plugin proxies request to download files from S3 by default.

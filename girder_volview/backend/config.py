@@ -33,7 +33,7 @@ def buildProcessingConfigBlock(folder):
     # providers (the client keys every job by (providerId, jobId)); a bare
     # "girder-slicer-cli" would make both folders share one mutable identity. The
     # label carries the folder name so the picker distinguishes them (fall back to
-    # bare "Analysis" when a folder document has no name).
+    # bare "Jobs" when a folder document has no name).
     #
     # Both URLs are origin-relative and keyed off getApiRoot() -- the SAME mount
     # utils.makeFileDownloadUrl and inputs._fileIdFromMintedUri use. Hardcoding
@@ -46,7 +46,7 @@ def buildProcessingConfigBlock(folder):
         "providers": [
             {
                 "id": processingProviderId(folder["_id"]),
-                "label": "Analysis — %s" % folderName if folderName else "Analysis",
+                "label": "Jobs — %s" % folderName if folderName else "Jobs",
                 "baseUrl": (
                     f"/{getApiRoot()}/folder/{folder['_id']}/{PROCESSING_ROUTE_NAME}"
                 ),
