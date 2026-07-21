@@ -7,7 +7,14 @@ architecture, job execution flow, Slicer CLI registration guidance, and the
 category scoping that keeps VolView tasks separate from HistomicsUI and
 DIVE-DSA tasks in a shared `slicer_cli_web` deployment.
 
-### Radiology CLI task image
+### Production task images
+
+Publish custom task images to a container registry and list immutable versions
+under `slicer-cli-image` in the DSA provision YAML. See
+[Building and deploying custom Slicer CLIs](./custom-slicer-clis.md#publish-and-install-the-image-in-dsa)
+for the complete workflow, including private registries.
+
+### Local reference image
 
 The development stack uses the
 [VolView Radiology CLI](https://github.com/PaulHax/volview-radiology-cli) as

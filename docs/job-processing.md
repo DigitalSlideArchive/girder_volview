@@ -44,9 +44,12 @@ When a user submits a task, the following happens:
    is created with its launch context, submitted parameters, declared outputs,
    transient inputs, and owned output-folder ID before the task is published to
    Girder Worker.
-7. Girder Worker starts the registered container. The CLI fetches its inputs
-   from Girder using a short-lived, scoped token, performs the operation, and
-   uploads its declared outputs back to the private output folder.
+7. Girder Worker starts the registered container. Normal Slicer CLI Web image
+   inputs are downloaded or mounted as worker-local paths. Inputs declared with
+   `reference="_girder_id_"` instead reach the CLI as Girder file IDs; the CLI
+   can fetch them with the short-lived, scoped token or relay them to an
+   external workflow service. The CLI performs the operation and uploads its
+   declared outputs back to the private output folder.
 8. As each upload is finalized, Girder VolView associates the file with the job
    using the job-owned folder and the worker's declared output reference. It
    does not correlate results by filename, so concurrent jobs producing the
@@ -62,29 +65,80 @@ When a user submits a task, the following happens:
 
 ## Adding a Slicer CLI
 
-Use the
-[VolView Radiology CLI repository](https://github.com/PaulHax/volview-radiology-cli)
-as the reference implementation. A new operation needs a Slicer Execution Model
-XML description, an executable that follows that description, and an entry in
-the image's `cli_list.json`. Build and register the image as described in
-[development.md](./development.md#radiology-cli-task-image); Girder VolView
-derives the task form and output handling from the XML rather than requiring
-task-specific backend code.
+See [Building and deploying custom Slicer CLIs](./custom-slicer-clis.md) for a
+worked recipe based on the VolView Radiology CLI, including DICOM inputs,
+VolView result types, external-compute adapters, image publication, and durable
+installation in a DSA deployment.
 
-Choose a unique Docker image name and unique CLI executable/task names. Do not
-reuse an image or task identity already registered by HistomicsUI or DIVE-DSA:
-all three applications can share the same `slicer_cli_web` task folder, and
-registration must not replace another application's entries.
+## How image inputs become CLI files
 
-The CLI XML must also declare a category intended for VolView. By default,
-Girder VolView admits `Radiology`, `Segmentation`, and `Filtering`, matched
-case-insensitively. The allowed set can be changed with
-`VOLVIEW_PROCESSING_ALLOWED_CATEGORIES`. HistomicsUI's `HistomicsTK` pathology
-CLIs, DIVE-DSA CLIs in other categories, uncategorized CLIs, and malformed
-descriptions are excluded from VolView's task list. The same category check is
-performed again for task-spec requests and job submission, so an out-of-scope
-task cannot be invoked through VolView by guessing its ID.
+VolView does not upload a reconstructed volume when the selected image already
+comes from Girder. It submits an input descriptor containing the image's source
+file handles. A DICOM series has one URI per slice; a single-file NRRD, NIfTI,
+MHA, or multiframe DICOM normally has one:
 
-These rules provide two separate protections: unique image/task identities
-avoid collisions in the shared registration catalog, while category scoping
-keeps each application's CLIs out of the other application's user interface.
+```json
+{
+  "type": "image",
+  "format": "dicom-series",
+  "uris": [
+    "/api/v1/file/<slice-1-id>/proxiable/1.dcm",
+    "/api/v1/file/<slice-2-id>/proxiable/2.dcm"
+  ]
+}
+```
+
+Girder VolView then prepares the container argument:
+
+1. The [input resolver](../girder_volview/backend/inputs.py) accepts only file
+   handles minted by this Girder server, recovers every file ID, and checks the
+   submitting user's read access. A DICOM series is authorized in batched
+   queries rather than one query per slice.
+2. The [submission translator](../girder_volview/backend/submit.py) preserves
+   the URI list and joins the resolved IDs into one argument:
+
+   ```text
+   --inputVolume <slice-1-id>,<slice-2-id>,<slice-3-id>
+   ```
+
+3. Declare the input with `reference="_girder_id_"` to preserve that argument:
+
+   ```xml
+   <image reference="_girder_id_">
+     <name>inputVolume</name>
+     <channel>input</channel>
+   </image>
+   ```
+
+   This special reference tells
+   [`slicer_cli_web`](https://github.com/girder/slicer_cli_web/blob/master/slicer_cli_web/cli_utils.py)
+   not to treat the value as one Girder file and replace it with a worker-local
+   path. Without it, the normal Slicer CLI Web `<image>` binding accepts one
+   file ID and uses a Girder Worker transform to download or mount that file.
+4. Slicer CLI Web leaves the comma-separated value intact and injects the
+   Girder API URL and the job's short-lived token.
+5. The CLI decides how to resolve the IDs. It can download the files itself or
+   relay the IDs and credentials to an external workflow service. A CLI that
+   assembles DICOM locally must group and order slices from DICOM metadata, not
+   from filenames, URI order, or Girder-ID order.
+
+### Worked example
+
+Administrators build and publish their own CLI images. The VolView Radiology
+CLI is example and test infrastructure, not a required library or base image.
+Its merged [region-of-interest report PR](https://github.com/PaulHax/volview-radiology-cli/pull/4)
+is a compact example of adding one task:
+
+- [`RegionOfInterestReport.xml`](https://github.com/PaulHax/volview-radiology-cli/blob/main/RegionOfInterestReport/RegionOfInterestReport.xml)
+  declares the labelmap input, CSV file output, Girder parameters, and task
+  options.
+- [`RegionOfInterestReport.py`](https://github.com/PaulHax/volview-radiology-cli/blob/main/RegionOfInterestReport/RegionOfInterestReport.py)
+  implements the executable entry point and writes the declared output path.
+- [`cli_list.json`](https://github.com/PaulHax/volview-radiology-cli/blob/main/cli_list.json)
+  registers the executable for container discovery.
+- [`test_roi_report.py`](https://github.com/PaulHax/volview-radiology-cli/blob/main/tests/test_roi_report.py)
+  and [`test_roi_report_itk.py`](https://github.com/PaulHax/volview-radiology-cli/blob/main/tests/test_roi_report_itk.py)
+  exercise its report behavior.
+
+Use the same XML, executable, registration, and test structure when creating a
+new task in your own image.

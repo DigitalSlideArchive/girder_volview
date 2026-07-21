@@ -68,10 +68,10 @@ same-origin egress gate; a same-origin deployment (such as DSA) needs no
 configuration, and cross-origin targets are never allowed.
 
 See [Job processing design](./job-processing.md) for the execution flow and how
-to add a task using the
-[VolView Radiology CLI](https://github.com/PaulHax/volview-radiology-cli) as a
-reference implementation. Image build and registration instructions are in
-[Server administration](./admin.md#radiology-cli-task-image).
+Girder VolView integrates with Slicer CLI Web. The client-facing recipe is in
+[Building and deploying custom Slicer CLIs](./custom-slicer-clis.md). Local
+reference-image registration is in
+[Server administration](./admin.md#local-reference-image).
 
 ## Updating the VolView client version
 
