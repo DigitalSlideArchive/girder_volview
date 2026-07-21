@@ -1,0 +1,90 @@
+# Cine-ultrasound hierarchy view: one row per clip -> open in VolView.
+#
+# Grouped by SOPInstanceUID, NOT SeriesInstanceUID: each clip is one multiframe
+# instance and the clips all belong to the same series, so grouping by series
+# would collapse every clip into a single row.
+
+defaultItemList: clipList
+
+itemList: &plainColumns
+  columns:
+    - type: image
+      value: thumbnail
+      title: Thumbnail
+    - type: record
+      value: name
+      title: Name
+    - type: record
+      value: controls
+      title: Controls
+    - type: record
+      value: size
+      title: Size
+
+itemListDialog: *plainColumns
+
+namedItemLists:
+  clipList:
+    layout:
+      flatten: only
+    group:
+      keys:
+        - dicom.SOPInstanceUID
+      counts:
+        _id: _count.slicescount
+    navigate:
+      type: open
+      name: volview
+    defaultSort:
+      - type: metadata
+        value: dicom.PatientID
+        dir: up
+    columns:
+      - type: image
+        value: thumbnail
+        title: Thumbnail
+      - type: metadata
+        value: dicom.PatientID
+        title: Patient ID
+        format: text
+      - type: metadata
+        value: dicom.NumberOfFrames
+        title: Frames
+      - type: metadata
+        value: dicom.ManufacturerModelName
+        title: Scanner
+      - type: metadata
+        value: dicom.Manufacturer
+        title: Manufacturer
+      - type: metadata
+        value: dicom.StudyDate
+        title: Study Date
+      - type: record
+        value: controls
+
+  # Roll the clips up by patient when a patient has several.
+  patientList:
+    layout:
+      flatten: only
+    group:
+      keys: dicom.PatientID
+      counts:
+        _id: _count.slicescount
+        dicom.SeriesInstanceUID: _count.seriescount
+    navigate:
+      type: itemList
+      name: clipList
+    columns:
+      - type: image
+        value: thumbnail
+        title: Thumbnail
+      - type: metadata
+        value: dicom.PatientID
+        title: Patient ID
+        format: text
+      - type: metadata
+        value: _count.seriescount
+        title: Clips
+        format: count
+      - type: record
+        value: controls

@@ -1,0 +1,53 @@
+# VolView app config for the trial folder (CT / PET volumes).
+#
+# Merged on top of girder_volview's BASE_CONFIG and inherited by every folder
+# beneath this one. `seed.py seed` publishes it under two item names --
+# .volview_config.yaml and config.json -- because the folder manifest and the
+# "open in VolView" link ask for different ones.
+#
+# Values here are constrained by VolView's zod schema (src/io/import/configJson.ts
+# and src/utils/layoutParsing.ts); invalid values are dropped rather than warned
+# about, so a plausible-looking guess silently does nothing:
+#   disabledViewTypes: only '2D', '3D', 'Oblique'
+#   layout view names: only axial, coronal, sagittal, volume, oblique (lowercase)
+# There is no key for choosing which layout starts active -- a config can offer
+# layouts, not select one.
+
+# CT and PET are real volumes, so re-enable the 3D view that BASE_CONFIG
+# disables (it turns off both '3D' and 'Oblique').
+disabledViewTypes:
+  - Oblique
+
+layouts:
+  Axial Coronal Sagittal:
+    direction: row
+    items:
+      - axial
+      - direction: column
+        items:
+          - coronal
+          - sagittal
+  Quad View:
+    direction: column
+    items:
+      - direction: row
+        items:
+          - axial
+          - coronal
+      - direction: row
+        items:
+          - sagittal
+          - volume
+  Axial Only:
+    - - axial
+
+# Soft-tissue window, so the chest CT opens usefully framed instead of at the
+# full HU range.
+windowing:
+  width: 400
+  level: 40
+
+io:
+  segmentGroupExtension: seg
+  segmentGroupSaveFormat: nii.gz
+  layerExtension: layer

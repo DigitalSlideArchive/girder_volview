@@ -1,0 +1,26 @@
+{
+  "name": "girder-volview-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser e2e for girder_volview + VolView.",
+  "scripts": {
+    "test": "bash scripts/compat.sh",
+    "typecheck": "tsc --noEmit",
+    "list": "playwright test --list",
+    "install-browser": "playwright install chromium",
+    "report": "playwright show-report",
+    "compat": "bash scripts/compat.sh",
+    "compat:capture": "bash scripts/compat.sh --phase capture",
+    "compat:verify": "bash scripts/compat.sh --phase verify",
+    "compat:verify-fast": "bash scripts/compat.sh --phase verify --skip-deploy --keep",
+    "current": "bash scripts/compat.sh --phase current --skip-deploy",
+    "compat:clean": "bash ../script/clean-compat"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "@types/adm-zip": "^0.5.8",
+    "@types/node": "^20.0.0",
+    "adm-zip": "^0.6.0",
+    "typescript": "^5.6.0"
+  }
+}

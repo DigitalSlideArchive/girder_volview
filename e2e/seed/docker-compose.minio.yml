@@ -1,0 +1,28 @@
+# MinIO stands in for S3 so we can exercise Girder's assetstore *import* path
+# rather than plain upload.
+#
+# Bring it up into the EXISTING compose project so it lands on the same network
+# as girder -- otherwise girder cannot resolve the `minio` hostname:
+#
+#     docker compose -p dsa-plus -f docker-compose.minio.yml up -d
+#
+# Girder reaches it at http://minio:9000 (service name on the compose network).
+# From the host: API on :9000, web console on :9001.
+
+services:
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - ./.minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20

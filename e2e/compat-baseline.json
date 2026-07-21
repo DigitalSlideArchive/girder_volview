@@ -1,0 +1,32 @@
+{
+  "_comment": [
+    "The version pair the compat suite reads old sessions from. Nothing here is",
+    "a copy of old code — it is a pointer. e2e/scripts/materialize-baseline.sh",
+    "recreates the baseline girder_volview tree from git history on demand into",
+    "the gitignored e2e/.compat/, and the sessions it produces are regenerated",
+    "every run rather than committed.",
+    "",
+    "Pinned rather than floating so a red compat run is bisectable: 'did main",
+    "move, or did I break it?' has an answer. Run with COMPAT_BASELINE_REF=<ref>",
+    "to override for a one-off freshness check against a moving branch."
+  ],
+
+  "girder": {
+    "ref": "origin/main",
+    "sha": "061b20af647a6b36787ee3b3d63edac928e948b1",
+    "_comment": "Resolved from `ref` at pin time. materialize-baseline.sh exports THIS sha."
+  },
+
+  "volview": {
+    "repo": "https://github.com/PaulHax/VolView.git",
+    "sha": "9557e2658c4a6b428c430adb7b100d143096274b",
+    "npmVersion": "4.4.2-dev.9557e2658c4a6b428c430adb7b100d143096274b.0",
+    "_comment": [
+      "The client paired with the baseline backend. This is also the version",
+      "girder_volview/web_client/package.json pins today, so it is published and",
+      "an npm install can stand in for a VolView worktree if one is not available.",
+      "Recording it here is what lets a machine other than the author's (or CI)",
+      "reproduce the pairing at all — VOLVIEW_ROOT branch names cannot travel."
+    ]
+  }
+}
