@@ -27,13 +27,13 @@ content per gesture.
 
 ## What the harness proves
 
-| Gesture                   | Launch (real girder UI, on the baseline)                    | Content saved                 | Verified on the branch                                                                                         |
-| ------------------------- | ----------------------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `single-item`             | item page → Open in VolView                                 | ruler                         | item manifest serves the session; measurements exact; re-save                                                  |
-| `checked-nrrd`            | check 2 NRRD rows → Open Checked                            | ruler + painted segment group | bare-folder open resumes it; checking the session row opens exactly it; groups + measurements survive; re-save |
-| `filtered-dicom`          | filter box narrows to one patient → check series row → Open | ruler                         | replaying the same filter gesture resumes the matching `session.<filter>.volview.zip`                          |
-| `study-layered`           | check CT + PET series rows of one study → Open              | PET layered over CT + ruler   | replay resumes; the layer survives restore and re-save                                                         |
-| `devkit-study` (optional) | patient → study drill-down in the devkit collection         | PET layer + ruler             | replay resumes; skipped unless `seed.py seed` has run                                                          |
+| Gesture                      | Launch (real girder UI, on the baseline)                    | Content saved                 | Verified on the branch                                                                                         |
+| ---------------------------- | ----------------------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `single-item`                | item page → Open in VolView                                 | ruler                         | item manifest serves the session; measurements exact; re-save                                                  |
+| `checked-nrrd`               | check 2 NRRD rows → Open Checked                            | ruler + painted segment group | bare-folder open resumes it; checking the session row opens exactly it; groups + measurements survive; re-save |
+| `filtered-dicom`             | filter box narrows to one patient → check series row → Open | ruler                         | replaying the same filter gesture resumes the matching `session.<filter>.volview.zip`                          |
+| `study-layered`              | check CT + PET series rows of one study → Open              | PET layered over CT + ruler   | replay resumes; the layer survives restore and re-save                                                         |
+| `study-drilldown`            | patient → study drill-down in an isolated small-tier folder | PET layer + ruler             | replay resumes                                                                                                 |
 
 Content checks are semantic, not pixel-based: ruler measurement text must match
 exactly, segment-group names must survive, and the re-saved manifest must keep
@@ -130,9 +130,9 @@ meaning a previous capture was never verified or torn down. Either finish it
 (`npm run compat:verify`) or delete the state file and the
 `girder-volview-compat-<runId>` folder it names.
 
-Optional full-devkit tier: seed the "VolView Devkit" collection first; the
-`devkit-study` gesture then runs automatically and cleans up the session items
-it mints.
+The harness provisions the `study-drilldown` hierarchy from the same small-tier
+DICOM cache as its other grouped fixtures. It does not require the manual MinIO
+seed; the run folder and the session items it mints are removed at teardown.
 
 ## Guards
 

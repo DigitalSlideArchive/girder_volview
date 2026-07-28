@@ -15,6 +15,12 @@ import { CompatState, FixtureFolder, FixtureId } from './compat-state';
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const SEED_CLI = path.resolve(__dirname, '..', 'seed', 'seed.py');
 const DICOM_LI_CONFIG = path.resolve(__dirname, '..', 'fixtures', 'dicom.large_image_config.yaml');
+const DICOM_DRILLDOWN_CONFIG = path.resolve(
+  __dirname,
+  '..',
+  'fixtures',
+  'dicom.study-drilldown.large_image_config.yaml'
+);
 
 function seedSmallDicom(folderId: string): void {
   // eslint-disable-next-line no-console
@@ -40,27 +46,6 @@ async function listItems(
     headers: { 'Girder-Token': token },
   });
   return readJson(res, `list items of ${folderId}`);
-}
-
-// Probe for the optional devkit tier: the trial folder of the "VolView Devkit"
-// collection, when the full devkit has been seeded.
-export async function findDevkitTrialFolder(
-  request: APIRequestContext,
-  token: string
-): Promise<string | undefined> {
-  const collRes = await request.get(
-    apiUrl(`/collection?text=${encodeURIComponent('VolView Devkit')}&limit=10`),
-    { headers: { 'Girder-Token': token } }
-  );
-  const collections: Array<{ _id: string; name: string }> = await collRes.json();
-  const devkit = collections.find?.((c) => c.name === 'VolView Devkit');
-  if (!devkit) return undefined;
-  const folderRes = await request.get(
-    apiUrl(`/folder?parentType=collection&parentId=${devkit._id}&name=trial`),
-    { headers: { 'Girder-Token': token } }
-  );
-  const folders: Array<{ _id: string }> = await folderRes.json();
-  return folders?.[0]?._id;
 }
 
 export async function provisionCompat(
@@ -101,7 +86,7 @@ export async function provisionCompat(
     };
   }
 
-  async function dicomFixture(id: FixtureId): Promise<void> {
+  async function dicomFixture(id: FixtureId, config = DICOM_LI_CONFIG): Promise<void> {
     const folderId = await createFolderUnder(request, token, 'folder', runRootFolderId, id);
     // large_image's grouped recursive endpoint assumes a flattened folder has
     // at least one descendant. Keep the config and resulting session items at
@@ -114,7 +99,7 @@ export async function provisionCompat(
       token,
       folderId,
       '.large_image_config.yaml',
-      fs.readFileSync(DICOM_LI_CONFIG)
+      fs.readFileSync(config)
     );
     const dicomItems = await listItems(request, token, dataFolderId);
     const images = dicomItems.filter((item) => item.name.endsWith('.dcm'));
@@ -130,6 +115,7 @@ export async function provisionCompat(
   await nrrdFixture('checked-nrrd', 2);
   await dicomFixture('filtered-dicom');
   await dicomFixture('study-layered');
+  await dicomFixture('study-drilldown', DICOM_DRILLDOWN_CONFIG);
 
   await nrrdFixture('lifecycle-single', 1);
   await nrrdFixture('lifecycle-checked', 2);
@@ -144,8 +130,6 @@ export async function provisionCompat(
   await nrrdFixture('jobs-staged', 1);
   await nrrdFixture('jobs-failure', 1);
 
-  const devkitTrialFolderId = await findDevkitTrialFolder(request, token);
-
   return {
     createdAt: new Date().toISOString(),
     sourceGirderSha: deployed.sourceGirderSha,
@@ -155,7 +139,6 @@ export async function provisionCompat(
     token,
     provisioned: true,
     dicomSeeded: true,
-    devkitTrialFolderId,
     gestures: [],
   };
   }
