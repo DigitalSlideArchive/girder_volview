@@ -757,19 +757,27 @@ def cancelJob(self, jobId):
 @access.public(cookie=True, scope=TokenScope.DATA_WRITE)
 @boundHandler
 @autoDescribeRoute(
-    Description("Stage a parent-bound labelmap as a transient processing input.")
+    Description(
+        "Stage a parent-bound labelmap or annotations file as a transient "
+        "processing input."
+    )
     .notes(
-        "Accepts multipart labelmap bytes plus a neutral reference-image InputValue. "
+        "Accepts multipart resource bytes plus a neutral reference-image InputValue. "
         "The backend validates and resolves that opaque relationship against durable "
         "reference files before minting the staged URI. The created item is tagged "
         "transient, deleted when its job reaches a terminal state, or swept if "
         "never submitted."
     )
     .modelParam("folderId", model=Folder, level=AccessType.WRITE)
-    .param("file", "The labelmap bytes.", paramType="formData", dataType="file")
+    .param(
+        "file",
+        "The staged resource bytes (labelmap or annotations JSON).",
+        paramType="formData",
+        dataType="file",
+    )
     .jsonParam(
         "descriptor",
-        "Typed labelmap resource descriptor.",
+        "Typed staged resource descriptor (labelmap or annotations).",
         paramType="formData",
         requireObject=True,
     )

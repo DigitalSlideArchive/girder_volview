@@ -243,3 +243,94 @@ def test_template_default_is_skipped_for_every_widget_type(widget_type):
 
     default_el = ET.fromstring("<default>{{some_template}}</default>")
     assert _parse_default(widget_type, default_el) is None
+
+
+# The output descriptor is what ``results.py`` reads (via the recorded
+# ``volviewOutputSpecs``) to type a finished job's files, so an annotations
+# output must carry its declaration through ``parse_cli`` intact -- lowercased,
+# comma list preserved -- and satisfy the shared ``declares_annotations``
+# predicate on the far side.
+declares_annotations = _spec.declares_annotations
+
+
+def test_annotations_file_output_descriptor_carries_its_extension():
+    xml = _xml(
+        "Radiology", _output_param("file", "outVectors", ext=".annotations.json")
+    )
+    outputs = parse_cli(xml)["outputs"]
+    assert outputs == [
+        {
+            "name": "outVectors",
+            "tag": "file",
+            "isLabel": False,
+            "fileExtensions": ".annotations.json",
+        },
+    ]
+    assert declares_annotations(outputs[0]["fileExtensions"]) is True
+
+
+def test_annotations_output_declaration_survives_lowercasing_and_comma_lists():
+    xml = _xml(
+        "Radiology",
+        _output_param("file", "outVectors", ext=".NRRD,.Annotations.JSON"),
+    )
+    outputs = parse_cli(xml)["outputs"]
+    # parse_cli lowercases; the predicate splits the comma list either way.
+    assert outputs[0]["fileExtensions"] == ".nrrd,.annotations.json"
+    assert declares_annotations(outputs[0]["fileExtensions"]) is True
+
+
+def test_dotless_annotations_declaration_classifies_like_the_dotted_one():
+    # A CLI may declare "annotations.json" without the leading dot. Submit
+    # prepends the missing dot before the extension names the output file, so
+    # classification normalizes the same way -- otherwise one declaration names
+    # an annotations file while being typed as an opaque one.
+    xml = _xml("Radiology", _output_param("file", "outVectors", ext="annotations.json"))
+    outputs = parse_cli(xml)["outputs"]
+    assert outputs[0]["fileExtensions"] == "annotations.json"
+    assert declares_annotations(outputs[0]["fileExtensions"]) is True
+    # Same declaration on the input side, where the predicate decides whether the
+    # <file> param becomes an annotations sourceRef instead of an unknown kind.
+    xml = _xml(
+        "Radiology",
+        _output_param(
+            "file", "inVectors", channel="input", ext=".json, annotations.json"
+        ),
+    )
+    params = {p["id"]: p for p in parse_cli(xml)["params"]}
+    assert declares_annotations(params["inVectors"]["fileExtensions"]) is True
+
+
+def test_plain_file_output_descriptor_does_not_declare_annotations():
+    xml = _xml("Radiology", _output_param("file", "report", ext=".json"))
+    outputs = parse_cli(xml)["outputs"]
+    assert outputs[0]["fileExtensions"] == ".json"
+    assert declares_annotations(outputs[0]["fileExtensions"]) is False
+    # A file output with no declaration at all is likewise not annotations.
+    assert declares_annotations("") is False
+
+
+def test_annotations_cli_params_surface_carries_raw_file_extensions():
+    # ``_parse_param`` keeps ``fileExtensions`` RAW (un-lowercased); the spec
+    # translator relies on ``declares_annotations`` lowercasing it, so the raw
+    # value must reach the params surface unchanged.
+    xml = (_CLI_XML_DIR / "annotations-measure.xml").read_text()
+    params = {p["id"]: p for p in parse_cli(xml)["params"]}
+    assert params["inputAnnotations"]["tag"] == "file"
+    assert params["inputAnnotations"]["channel"] == "input"
+    assert params["inputAnnotations"]["fileExtensions"] == ".annotations.json"
+    assert params["outputAnnotations"]["channel"] == "output"
+
+
+def test_real_annotations_cli_xml_category_and_outputs():
+    xml = (_CLI_XML_DIR / "annotations-measure.xml").read_text()
+    parsed = parse_cli(xml)
+    assert parsed["category"] == "Radiology"
+    assert parsed["outputs"] == [
+        {
+            "name": "outputAnnotations",
+            "tag": "file",
+            "isLabel": False,
+            "fileExtensions": ".annotations.json",
+        },
+    ]

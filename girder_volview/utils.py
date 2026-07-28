@@ -1,4 +1,5 @@
 import json
+import re
 
 from datetime import datetime, timezone
 from girder import logger
@@ -58,6 +59,25 @@ PREFERRED_FILTER_SUFFIXES = (
 def safeNameComponent(value):
     safe = "".join(ch if ch.isalnum() or ch in ".-_" else "_" for ch in str(value))
     return safe.strip("._")[:SAFE_NAME_MAX]
+
+
+# Control characters carry no name information but do carry meaning to a shell,
+# a log, or a filesystem, so they are dropped rather than escaped.
+_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def safeNameToken(token, fallback):
+    """Collapse a name component to a single separator-free path token.
+
+    Used for staged input names and generated CLI output names before either is
+    joined to a path. Keeps the last path segment, drops control characters, and
+    strips edge dots/spaces -- the same characters the submit boundary's declared
+    output-extension pattern rejects, so the two sanitizers agree.
+    """
+    token = str(token or "").replace("\\", "/").rsplit("/", 1)[-1]
+    token = _CONTROL_CHARACTERS.sub("", token)
+    token = token.strip(". ")
+    return token or fallback
 
 
 def _filterKeyPriority(key):

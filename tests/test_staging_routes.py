@@ -76,15 +76,9 @@ def _durable_reference(folder, user):
     )
 
 
-def _multipart_stage_body(content, name, reference_uri):
+def _multipart_stage_body(content, name, descriptor):
     boundary = "volview-stage-boundary"
-    descriptor = json.dumps(
-        {
-            "type": "labelmap",
-            "name": name,
-            "referenceImage": {"type": "image", "uris": [reference_uri]},
-        }
-    ).encode("utf8")
+    descriptor = json.dumps(descriptor).encode("utf8")
     body = b"".join(
         [
             ("--%s\r\n" % boundary).encode(),
@@ -112,13 +106,21 @@ def _stage(
     name="staged.bin",
     isJson=True,
     reference_uri=None,
+    descriptorType="labelmap",
+    descriptor=None,
 ):
+    """POST one staged resource. ``descriptorType`` swaps only the type tag (the
+    descriptor shape is shared by every staged type); ``descriptor`` replaces the
+    whole object for malformed-descriptor cases."""
     reference = None if reference_uri else _durable_reference(folder, user)
-    body, content_type = _multipart_stage_body(
-        content,
-        name,
-        reference_uri or makeFileDownloadUrl(reference),
-    )
+    resolved_reference = reference_uri or makeFileDownloadUrl(reference)
+    if descriptor is None:
+        descriptor = {
+            "type": descriptorType,
+            "name": name,
+            "referenceImage": {"type": "image", "uris": [resolved_reference]},
+        }
+    body, content_type = _multipart_stage_body(content, name, descriptor)
     return server.request(
         path=STAGE_PATH % folder["_id"],
         method="POST",
@@ -403,3 +405,328 @@ def test_orphan_older_than_ttl_swept_on_next_stage(server, owner, ownerFolder):
     assert Item().load(oldItem["_id"], force=True) is None  # swept
     assert Item().load(youngItem["_id"], force=True) is not None  # within TTL
     assert Item().load(newItem["_id"], force=True) is not None  # just staged
+
+
+# --------------------------------------------------------------------------
+# Staged vector annotations
+# --------------------------------------------------------------------------
+# Annotations join ``labelmap`` in ``inputs._STAGEABLE_TYPES``: one descriptor
+# shape, one validator, one transport. Everything downstream of the descriptor
+# check -- the upload, the transient tag, the jobs container, the minted URI, the
+# per-job copy and the terminal cleanup -- stays type-blind, so these tests pin
+# that the ONLY behavioral difference is which type tags are accepted.
+
+_ANNOTATIONS_BYTES = json.dumps(
+    {
+        "schemaVersion": 1,
+        "space": "LPS",
+        "labels": {"rulers": {"lesion": {"color": "#ff0000"}}},
+        "tools": {
+            "rulers": [
+                {
+                    "firstPoint": [0, 0, 0],
+                    "secondPoint": [1, 1, 0],
+                    "frameOfReference": {
+                        "planeNormal": [0, 0, 1],
+                        "planeOrigin": [0, 0, 0],
+                    },
+                    "labelName": "lesion",
+                }
+            ]
+        },
+    }
+).encode("utf8")
+
+
+@pytest.mark.plugin("volview")
+def test_stage_accepts_an_annotations_descriptor(server, owner, ownerFolder):
+    from girder.models.folder import Folder
+
+    resp = _stage(
+        server,
+        ownerFolder,
+        owner,
+        _ANNOTATIONS_BYTES,
+        name="chest-ct.annotations.json",
+        descriptorType="annotations",
+    )
+
+    assert resp.output_status.startswith(b"200")
+    uris = resp.json["uris"]
+    assert len(uris) == 1
+    assert uris[0].startswith("/api/v1/file/")
+
+    # Same lifecycle as a staged labelmap: transient-tagged, in the server-owned
+    # jobs container, resolvable through the one own-scheme path.
+    stagedItem = _itemForUri(uris[0])
+    jobsFolder = Folder().findOne(
+        {
+            "parentId": ownerFolder["_id"],
+            "parentCollection": "folder",
+            "name": routes.JOBS_CONTAINER_NAME,
+        }
+    )
+    assert str(stagedItem["folderId"]) == str(jobsFolder["_id"])
+    assert stagedItem["meta"]["volviewTransient"] is True
+    assert inputs._fileIdFromMintedUri(uris[0]) is not None
+
+
+@pytest.mark.plugin("volview")
+def test_staged_annotations_bytes_are_stored_verbatim(server, owner, ownerFolder):
+    # The backend never parses the annotations file -- it is opaque transport,
+    # exactly like labelmap bytes. Round-tripping the stored bytes proves no
+    # server-side interpretation or rewriting happens.
+    from girder.models.file import File
+
+    uri = _stage(
+        server,
+        ownerFolder,
+        owner,
+        _ANNOTATIONS_BYTES,
+        name="chest-ct.annotations.json",
+        descriptorType="annotations",
+    ).json["uris"][0]
+    fileDoc = File().load(inputs._fileIdFromMintedUri(uri), force=True)
+    assert b"".join(File().download(fileDoc, headers=False)()) == _ANNOTATIONS_BYTES
+
+
+@pytest.mark.plugin("volview")
+def test_stage_rejects_a_type_outside_the_stageable_set(server, owner, ownerFolder):
+    # The type discriminator is closed: an unlisted staged type is a 400 and
+    # never lands bytes, mirroring the contract's discriminated union.
+    from girder.models.folder import Folder
+
+    resp = _stage(
+        server,
+        ownerFolder,
+        owner,
+        b"{}",
+        name="landmarks.json",
+        descriptorType="pointset",
+        isJson=False,
+    )
+    assert resp.output_status.startswith(b"400")
+    jobsFolder = Folder().findOne(
+        {
+            "parentId": ownerFolder["_id"],
+            "parentCollection": "folder",
+            "name": routes.JOBS_CONTAINER_NAME,
+        }
+    )
+    names = (
+        []
+        if jobsFolder is None
+        else [item["name"] for item in Folder().childItems(jobsFolder)]
+    )
+    assert "landmarks.json" not in names
+
+
+@pytest.mark.plugin("volview")
+def test_stage_rejects_an_annotations_descriptor_with_extra_keys(
+    server, owner, ownerFolder
+):
+    # The key set is exact for every staged type; a smuggled extra key is a 400
+    # rather than a silently ignored field.
+    reference = _durable_reference(ownerFolder, owner)
+    resp = _stage(
+        server,
+        ownerFolder,
+        owner,
+        _ANNOTATIONS_BYTES,
+        name="extra.annotations.json",
+        descriptor={
+            "type": "annotations",
+            "name": "extra.annotations.json",
+            "referenceImage": {
+                "type": "image",
+                "uris": [makeFileDownloadUrl(reference)],
+            },
+            "labels": {},
+        },
+        isJson=False,
+    )
+    assert resp.output_status.startswith(b"400")
+
+
+@pytest.mark.plugin("volview")
+def test_stage_rejects_an_annotations_descriptor_with_no_name(
+    server, owner, ownerFolder
+):
+    resp = _stage(
+        server,
+        ownerFolder,
+        owner,
+        _ANNOTATIONS_BYTES,
+        name="",
+        descriptorType="annotations",
+        isJson=False,
+    )
+    assert resp.output_status.startswith(b"400")
+
+
+@pytest.mark.plugin("volview")
+def test_stage_collapses_a_traversal_name_to_a_basename(server, owner, ownerFolder):
+    # The descriptor name becomes the Girder file name, and a task container
+    # path-JOINS that name to build its download destination, so a staged name
+    # carrying separators must land as a single path token -- never as a
+    # relative path that escapes the container's input directory.
+    resp = _stage(
+        server,
+        ownerFolder,
+        owner,
+        _ANNOTATIONS_BYTES,
+        name="../../../../etc/cron.d/pwn.annotations.json",
+        descriptorType="annotations",
+    )
+
+    assert resp.output_status.startswith(b"200")
+    stagedItem = _itemForUri(resp.json["uris"][0])
+    assert stagedItem["name"] == "pwn.annotations.json"
+
+
+@pytest.mark.plugin("volview")
+def test_stage_rejects_a_name_that_is_nothing_but_separators(
+    server, owner, ownerFolder
+):
+    # Nothing safe is left after collapsing, so this is rejected exactly like an
+    # empty name rather than falling back to a server-invented one.
+    resp = _stage(
+        server,
+        ownerFolder,
+        owner,
+        _ANNOTATIONS_BYTES,
+        name="../../",
+        descriptorType="annotations",
+        isJson=False,
+    )
+    assert resp.output_status.startswith(b"400")
+
+
+@pytest.mark.plugin("volview")
+def test_stage_collapses_a_traversal_labelmap_name_too(server, owner, ownerFolder):
+    # Name sanitizing lives in the shared descriptor validator, so every staged
+    # type inherits it -- the labelmap path is not a hole.
+    resp = _stage(
+        server,
+        ownerFolder,
+        owner,
+        b"seg-bytes",
+        name="..\\..\\seg.seg.nrrd",
+        descriptorType="labelmap",
+    )
+
+    assert resp.output_status.startswith(b"200")
+    assert _itemForUri(resp.json["uris"][0])["name"] == "seg.seg.nrrd"
+
+
+@pytest.mark.plugin("volview")
+def test_annotations_reference_image_matrix_is_shared_verbatim(
+    server, owner, ownerFolder
+):
+    # ``validateStagedReferenceImage`` is shared by every staged type, so the
+    # annotations path inherits the whole reference matrix: foreign uri,
+    # non-image reference, empty uris, and a transient reference all 400.
+    transient_uri = _stage(
+        server,
+        ownerFolder,
+        owner,
+        _ANNOTATIONS_BYTES,
+        name="first.annotations.json",
+        descriptorType="annotations",
+    ).json["uris"][0]
+
+    foreign = _stage(
+        server,
+        ownerFolder,
+        owner,
+        _ANNOTATIONS_BYTES,
+        name="a.annotations.json",
+        descriptorType="annotations",
+        reference_uri="https://foreign/image",
+        isJson=False,
+    )
+    assert foreign.output_status.startswith(b"400")
+
+    onTransient = _stage(
+        server,
+        ownerFolder,
+        owner,
+        _ANNOTATIONS_BYTES,
+        name="b.annotations.json",
+        descriptorType="annotations",
+        reference_uri=transient_uri,
+        isJson=False,
+    )
+    assert onTransient.output_status.startswith(b"400")
+
+    durable = makeFileDownloadUrl(_durable_reference(ownerFolder, owner))
+    for badReference in (
+        {"type": "labelmap", "uris": [durable]},  # reference must be an image
+        {"type": "image", "uris": []},  # a reference with no uris is no value
+        {"type": "image"},  # missing uris entirely
+    ):
+        resp = _stage(
+            server,
+            ownerFolder,
+            owner,
+            _ANNOTATIONS_BYTES,
+            descriptor={
+                "type": "annotations",
+                "name": "c.annotations.json",
+                "referenceImage": badReference,
+            },
+            isJson=False,
+        )
+        assert resp.output_status.startswith(b"400"), badReference
+
+    # ...and a durable image reference is accepted, closing the matrix.
+    ok = _stage(
+        server,
+        ownerFolder,
+        owner,
+        _ANNOTATIONS_BYTES,
+        name="d.annotations.json",
+        descriptorType="annotations",
+    )
+    assert ok.output_status.startswith(b"200")
+
+
+@pytest.mark.plugin("volview")
+def test_staged_annotations_copied_per_job_and_deleted_at_terminal(
+    server, owner, ownerFolder, realJobStub
+):
+    # The per-job copy + terminal cleanup are decided by the transient MARKER,
+    # never by the staged type, so an annotations input follows the labelmap
+    # lifecycle exactly.
+    from girder.models.item import Item
+    from girder_jobs.constants import JobStatus
+    from girder_jobs.models.job import Job
+
+    uri = _stage(
+        server,
+        ownerFolder,
+        owner,
+        _ANNOTATIONS_BYTES,
+        name="rois.annotations.json",
+        descriptorType="annotations",
+    ).json["uris"][0]
+    stagedItem = _itemForUri(uri)
+
+    resp = _run(
+        server,
+        ownerFolder,
+        owner,
+        {"inputVolume": {"type": "annotations", "uris": [uri]}},
+    )
+    assert resp.output_status.startswith(b"200")
+
+    job = Job().load(resp.json["jobId"], force=True)
+    copies = job.get("volviewTransient", [])
+    assert len(copies) == 1 and copies[0] != str(stagedItem["_id"])
+
+    Job().updateJob(job, status=JobStatus.QUEUED)
+    Job().updateJob(job, status=JobStatus.RUNNING)
+    Job().updateJob(job, status=JobStatus.SUCCESS)
+
+    assert Item().load(copies[0], force=True) is None
+    assert Item().load(stagedItem["_id"], force=True) is not None

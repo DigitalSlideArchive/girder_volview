@@ -4,7 +4,9 @@ Results cross the wire as declarative *intents* the client's single applier
 applies — never a ``role`` the client switches on. ``_collectJobResults`` builds
 each output's intent via ``_intentForOutput``; a labelmap's segment names/colors
 travel inside the ``.seg.nrrd`` file as embedded metadata the client reads, so
-the backend sets no ``segments`` payload.
+the backend sets no ``segments`` payload. An annotations file output is typed by
+its declared ``fileExtensions`` alone -- the backend never sniffs content -- and
+its label styles likewise ride inside the file.
 
 This suite exercises the pure intent builder and validates BOTH the backend's
 emitted intents and the shared golden fixtures against the same generated JSON
@@ -24,8 +26,25 @@ _PROVIDER_ID = "girder-slicer-cli:folder-abc123"
 _JOB_ID = "job-abc123"
 
 
-def _out(tag, isLabel, name="outputLabelmap"):
-    return {"name": name, "tag": tag, "isLabel": isLabel, "fileExtensions": ""}
+def _out(tag, isLabel, name="outputLabelmap", fileExtensions=""):
+    # One recorded ``volviewOutputSpecs`` entry (``outputs.py``); ``parse_cli``
+    # has already lowercased ``fileExtensions``.
+    return {
+        "name": name,
+        "tag": tag,
+        "isLabel": isLabel,
+        "fileExtensions": fileExtensions,
+    }
+
+
+_ANNOTATIONS_URL = (
+    "/api/v1/file/6600000000000000000000e4/proxiable/rois.annotations.json"
+)
+_ANNOTATIONS_NAME = "rois.annotations.json"
+
+
+def _annotationsOut(name="outputAnnotations"):
+    return _out("file", False, name=name, fileExtensions=".annotations.json")
 
 
 def _intent_validator():
@@ -69,6 +88,147 @@ def test_non_image_file_has_no_state_intent():
     )
     assert intent == {"url": _URL, "name": _NAME}
     assert "intent" not in intent
+
+
+def test_plain_file_extension_has_no_state_intent():
+    # A file output declaring an ordinary extension stays an ordinary result.
+    intent = _intentForOutput(
+        _out("file", False, name="report", fileExtensions=".csv"),
+        "/api/v1/file/6600000000000000000000e5/proxiable/report.csv",
+        "report.csv",
+        _PROVIDER_ID,
+        _JOB_ID,
+    )
+    assert intent == {
+        "url": "/api/v1/file/6600000000000000000000e5/proxiable/report.csv",
+        "name": "report.csv",
+    }
+    assert "intent" not in intent
+
+
+def test_annotations_file_maps_to_add_annotations():
+    intent = _intentForOutput(
+        _annotationsOut(),
+        _ANNOTATIONS_URL,
+        _ANNOTATIONS_NAME,
+        _PROVIDER_ID,
+        _JOB_ID,
+    )
+    assert intent["intent"] == "add-annotations"
+    assert intent["url"] == _ANNOTATIONS_URL
+    assert intent["name"] == _ANNOTATIONS_NAME
+
+
+def test_annotations_intent_carries_source_tag():
+    intent = _intentForOutput(
+        _annotationsOut(name="derivedRois"),
+        _ANNOTATIONS_URL,
+        _ANNOTATIONS_NAME,
+        _PROVIDER_ID,
+        _JOB_ID,
+    )
+    assert intent["source"] == {
+        "providerId": _PROVIDER_ID,
+        "jobId": _JOB_ID,
+        "outputId": "derivedRois",
+    }
+
+
+def test_annotations_source_ids_are_stringified():
+    from bson.objectid import ObjectId
+
+    oid = ObjectId("6600000000000000000000ff")
+    intent = _intentForOutput(
+        _annotationsOut(), _ANNOTATIONS_URL, _ANNOTATIONS_NAME, oid, oid
+    )
+    assert intent["source"]["providerId"] == str(oid)
+    assert intent["source"]["jobId"] == str(oid)
+    assert isinstance(intent["source"]["providerId"], str)
+    assert isinstance(intent["source"]["jobId"], str)
+
+
+def test_annotations_extension_is_matched_within_a_comma_list():
+    # `fileExtensions` is a comma-separated declaration; membership decides.
+    intent = _intentForOutput(
+        _out(
+            "file",
+            False,
+            name="outputAnnotations",
+            fileExtensions=".json,.annotations.json",
+        ),
+        _ANNOTATIONS_URL,
+        _ANNOTATIONS_NAME,
+        _PROVIDER_ID,
+        _JOB_ID,
+    )
+    assert intent["intent"] == "add-annotations"
+
+
+def test_dotless_annotations_declaration_still_maps_to_add_annotations():
+    # Submit prepends the missing leading dot before the declaration names the
+    # output file, so a dotless declaration produces an annotations-named file;
+    # classification must agree or that file arrives typed as an opaque result.
+    intent = _intentForOutput(
+        _out(
+            "file",
+            False,
+            name="outputAnnotations",
+            fileExtensions="annotations.json",
+        ),
+        _ANNOTATIONS_URL,
+        _ANNOTATIONS_NAME,
+        _PROVIDER_ID,
+        _JOB_ID,
+    )
+    assert intent["intent"] == "add-annotations"
+
+
+def test_labelmap_wins_over_annotations_extension():
+    # Branch order is isLabel -> annotations: an `<image type="label">` output
+    # stays a segment group whatever its declared extensions claim.
+    intent = _intentForOutput(
+        _out(
+            "image",
+            True,
+            name="outputLabelmap",
+            fileExtensions=".annotations.json",
+        ),
+        _URL,
+        _NAME,
+        _PROVIDER_ID,
+        _JOB_ID,
+    )
+    assert intent["intent"] == "add-segment-group"
+
+
+def test_image_output_declaring_annotations_stays_a_base_image():
+    # Only a `<file>` output can be annotations; an image output is an image.
+    intent = _intentForOutput(
+        _out(
+            "image",
+            False,
+            name="outputVolume",
+            fileExtensions=".annotations.json",
+        ),
+        _URL,
+        _NAME,
+        _PROVIDER_ID,
+        _JOB_ID,
+    )
+    assert intent == {"intent": "add-base-image", "url": _URL, "name": _NAME}
+
+
+def test_annotations_intent_carries_no_segments_or_labels():
+    # Label styles ride inside the annotations file, like a labelmap's segment
+    # metadata; the intent carries no payload beyond the file reference.
+    intent = _intentForOutput(
+        _annotationsOut(),
+        _ANNOTATIONS_URL,
+        _ANNOTATIONS_NAME,
+        _PROVIDER_ID,
+        _JOB_ID,
+    )
+    assert set(intent) == {"intent", "url", "name", "source"}
 
 
 def test_segment_group_carries_source_tag():
@@ -141,6 +301,16 @@ _EMITTED_CASES = {
         ),
         "id": _RESULT_ID,
     },
+    "add-annotations": {
+        **_intentForOutput(
+            _annotationsOut(),
+            _ANNOTATIONS_URL,
+            _ANNOTATIONS_NAME,
+            _PROVIDER_ID,
+            _JOB_ID,
+        ),
+        "id": _RESULT_ID,
+    },
     "ordinary-file": {
         **_intentForOutput(
             _out("file", False), _URL, _NAME, _PROVIDER_ID, _JOB_ID
@@ -191,3 +361,15 @@ def test_emitted_add_segment_group_matches_fixture_shape():
     # The fixture is a full result-list item (carries `id`); the emitted INTENT
     # never does (the collector adds it), so compare modulo the id key.
     assert set(embedded) == set(embedded_fixture) - {"id"}
+
+
+def test_emitted_add_annotations_matches_fixture_shape():
+    emitted = _intentForOutput(
+        _annotationsOut(),
+        _ANNOTATIONS_URL,
+        _ANNOTATIONS_NAME,
+        _PROVIDER_ID,
+        _JOB_ID,
+    )
+    fixture = contract_loader.load_fixture("wire/intent.add-annotations.json")
+    assert set(emitted) == set(fixture) - {"id"}

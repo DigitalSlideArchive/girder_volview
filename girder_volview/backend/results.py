@@ -19,6 +19,7 @@ from .outputs import (
     _OUTPUT_SPECS_FIELD,
     _declaredOutputIdentifiers,
 )
+from .slicer_spec import declares_annotations
 
 
 @functools.cache
@@ -215,35 +216,22 @@ def _projectJobHistorySummary(job, user, readableOutputFiles=None):
 
 
 def _intentForOutput(out, url, name, providerId, jobId):
-    """Build the declarative result intent for one output.
+    """Build one declarative result intent.
 
-    Results cross the wire as declarative intents the client's single applier
-    applies — never a ``role`` the client switches on. The vocabulary the client
-    validates (VolView ``backend-contract/processing/wire.ts``): a labelmap →
-    ``add-segment-group``, a plain image → ``add-base-image``. Any other file
-    remains an ordinary result record with no state directive.
-
-    A labelmap intent carries a provider-qualified
-    ``source: {providerId, jobId, outputId}`` provenance tag (``outputId`` = the
-    CLI's output identifier) so the idempotency key remains unique when two
-    providers use the same raw job/output ids and round-trips the
-    ``.volview.zip``. A labelmap's segment names/colors travel *inside* the
-    ``.seg.nrrd`` file as embedded metadata and are read client-side, so the
-    backend sets no ``segments`` payload; the wire field stays optional.
-    Validates against the contract ``result-intent`` schema.
+    Labelmap and annotations intents carry provider-qualified provenance for
+    idempotent application; other files carry no source tag.
     """
     fileRef = {"url": url, "name": name}
-    if out["isLabel"]:
-        return {
-            "intent": "add-segment-group",
-            **fileRef,
-            "source": {
-                "providerId": str(providerId),
-                "jobId": str(jobId),
-                "outputId": out["name"],
-            },
-        }
-    if out["tag"] == "image":
+    source = {
+        "providerId": str(providerId),
+        "jobId": str(jobId),
+        "outputId": out["name"],
+    }
+    if out.get("isLabel"):
+        return {"intent": "add-segment-group", **fileRef, "source": source}
+    if out.get("tag") == "file" and declares_annotations(out.get("fileExtensions")):
+        return {"intent": "add-annotations", **fileRef, "source": source}
+    if out.get("tag") == "image":
         return {"intent": "add-base-image", **fileRef}
     return fileRef
 

@@ -5,7 +5,7 @@ Clusters, all documented in ``backend/submit.py``:
 * ``_autofillOutputs`` -- output ``name`` is server-owned, and every composed
   component (including the one derived from a client-minted handle, whose
   percent-encoded tail can decode to a traversal path) goes through
-  ``_safeNameToken``;
+  the shared ``utils.safeNameToken`` chokepoint;
 * ``_rejectUndeclaredSubmitParams`` -- a key the CLI does not declare is a 400;
 * ``_validateDeclaredSubmitValues`` -- a declared key whose value mismatches the
   declaration is a 400 naming the parameter (scalar type, ``<constraints>``
@@ -21,7 +21,7 @@ import pytest
 
 from girder.exceptions import RestException
 
-from girder_volview import handles
+from girder_volview import handles, utils
 from girder_volview.backend import slicer_spec, submit
 
 
@@ -92,14 +92,14 @@ def test_autofill_sanitizes_encoded_traversal_input_handle_name(monkeypatch):
 def test_safe_name_token_collapses_every_hostile_shape():
     # Path components (either separator) collapse to the last segment; a
     # component that is nothing but dots/spaces/separators yields the fallback.
-    assert submit._safeNameToken("safe/../../etc/passwd", "x") == "passwd"
-    assert submit._safeNameToken("..\\..\\windows", "x") == "windows"
-    assert submit._safeNameToken(" .name. ", "x") == "name"
-    assert submit._safeNameToken("plain", "x") == "plain"
-    assert submit._safeNameToken("foo/..", "x") == "x"
-    assert submit._safeNameToken("../", "x") == "x"
-    assert submit._safeNameToken("", "x") == "x"
-    assert submit._safeNameToken(None, "x") == "x"
+    assert utils.safeNameToken("safe/../../etc/passwd", "x") == "passwd"
+    assert utils.safeNameToken("..\\..\\windows", "x") == "windows"
+    assert utils.safeNameToken(" .name. ", "x") == "name"
+    assert utils.safeNameToken("plain", "x") == "plain"
+    assert utils.safeNameToken("foo/..", "x") == "x"
+    assert utils.safeNameToken("../", "x") == "x"
+    assert utils.safeNameToken("", "x") == "x"
+    assert utils.safeNameToken(None, "x") == "x"
 
 
 def test_candidate_output_name_sanitizes_all_components():
@@ -107,6 +107,67 @@ def test_candidate_output_name_sanitizes_all_components():
         "safe/../../etc/passwd", "../cli", "sub/param", ".nii.gz"
     )
     assert name == "passwd.cli.param.nii.gz"
+
+
+@pytest.mark.parametrize(
+    "extensions",
+    (
+        ".//../../../../etc/passwd,.annotations.json",
+        ".json,.safe/../../etc/passwd",
+        ".safe/../../etc/passwd",
+        ".safe\\..\\passwd",
+        ".safe..json",
+        ".safe\x00json",
+        ".safe\njson",
+    ),
+)
+def test_autofill_rejects_path_like_declared_output_extensions(extensions):
+    outputs = [
+        {
+            "name": "outputAnnotations",
+            "tag": "file",
+            "isLabel": False,
+            "fileExtensions": extensions,
+        }
+    ]
+
+    with pytest.raises(RestException) as exc:
+        submit._autofillOutputs({}, outputs, "HostRead")
+
+    assert exc.value.code == 500
+    assert "invalid output file extension" in str(exc.value)
+
+
+def test_autofill_accepts_each_declared_output_extension_before_using_first():
+    outputs = [
+        {
+            "name": "outputAnnotations",
+            "tag": "file",
+            "isLabel": False,
+            "fileExtensions": ".json, annotations.json",
+        }
+    ]
+
+    values = submit._autofillOutputs({}, outputs, "Measure")
+
+    assert (
+        values["outputAnnotations"]["name"]
+        == "output.Measure.outputAnnotations.json"
+    )
+    # Naming and classification read the SAME declaration: the dotless member
+    # gets its leading dot on both sides, so this output is annotations either
+    # way it is looked at.
+    assert slicer_spec.declares_annotations(outputs[0]["fileExtensions"]) is True
+
+
+def test_safe_name_token_drops_control_characters():
+    # The output-extension guard rejects control bytes outright, so the name
+    # sanitizer must not pass them through: a NUL or newline in a staged name
+    # would reach a worker-host path the extension never could.
+    assert utils.safeNameToken("ro\x00is", "x") == "rois"
+    assert utils.safeNameToken("rois\n", "x") == "rois"
+    assert utils.safeNameToken("\x7f", "x") == "x"
+    assert utils.safeNameToken("a\tb", "x") == "ab"
 
 
 def test_declared_param_names_reads_inputs_outputs_and_scalars():
@@ -417,3 +478,87 @@ def test_required_output_and_optional_input_are_exempt():
     # arrive from the client.
     values = {"inputVolume": {"type": "image", "uris": ["girder://x"]}}
     assert submit._rejectMissingRequiredParams(values, _INDEXED_DECLARED) is None
+
+
+# --------------------------------------------------------------------------
+# Annotations inputs cross the submit boundary as ordinary <file> params
+# --------------------------------------------------------------------------
+# A vector-annotations input is declared as a ``<file>`` whose fileExtensions
+# names the annotations format. The submit boundary is deliberately type-blind:
+# ``_TYPE_MAP`` maps ``file`` to the ``file`` widget, which the input branch of
+# ``_submitValueProblem`` already accepts as a client-minted ``{uris}`` object.
+# These tests pin that the extra type tag rides through untouched and that the
+# uris guard still applies -- no annotations-specific submit branch exists.
+_ANNOTATIONS_CLI_XML = (
+    '<?xml version="1.0"?>'
+    "<executable><category>Radiology</category><title>Measure</title><parameters>"
+    "<label>IO</label>"
+    "<image><name>inputVolume</name><channel>input</channel><index>0</index></image>"
+    '<file fileExtensions=".annotations.json">'
+    "<name>inputAnnotations</name><channel>input</channel><index>1</index></file>"
+    '<file fileExtensions=".annotations.json">'
+    "<name>outputAnnotations</name><channel>output</channel><index>2</index></file>"
+    "</parameters></executable>"
+)
+
+_ANNOTATIONS_DECLARED = slicer_spec.declared_params(_ANNOTATIONS_CLI_XML)
+_ANNOTATIONS_OUTPUTS = slicer_spec.parse_cli(_ANNOTATIONS_CLI_XML)["outputs"]
+
+
+def test_annotations_input_is_declared_as_a_file_widget():
+    decl = _ANNOTATIONS_DECLARED["inputAnnotations"]
+    assert decl["tag"] == "file"
+    assert decl["widget"] == "file"
+    assert decl["channel"] == "input"
+    assert decl["required"] is True  # indexed
+
+
+def test_annotations_input_value_passes_the_submit_guards():
+    values = {
+        "inputVolume": {"type": "image", "uris": ["girder://image"]},
+        "inputAnnotations": {"type": "annotations", "uris": ["girder://vectors"]},
+    }
+    submit._rejectUndeclaredSubmitParams(values, _ANNOTATIONS_DECLARED)
+    submit._validateDeclaredSubmitValues(values, _ANNOTATIONS_DECLARED)
+    assert submit._rejectMissingRequiredParams(values, _ANNOTATIONS_DECLARED) is None
+
+
+def test_annotations_input_without_uris_is_rejected():
+    for bad in ("not-an-object", {"type": "annotations"}, {"uris": "girder://x"}):
+        with pytest.raises(RestException) as exc:
+            submit._validateDeclaredSubmitValues(
+                {"inputAnnotations": bad}, _ANNOTATIONS_DECLARED
+            )
+        assert exc.value.code == 400
+        assert "inputAnnotations" in str(exc.value)
+
+
+def test_missing_required_annotations_input_is_rejected():
+    with pytest.raises(RestException) as exc:
+        submit._rejectMissingRequiredParams(
+            {"inputVolume": {"type": "image", "uris": ["girder://x"]}},
+            _ANNOTATIONS_DECLARED,
+        )
+    assert exc.value.code == 400
+    assert "inputAnnotations" in str(exc.value)
+
+
+def test_annotations_output_name_keeps_the_compound_extension():
+    # ``.annotations.json`` is a COMPOUND extension: without the
+    # ``_COMPOUND_EXTENSIONS`` entry the composed output basename would keep
+    # ``.annotations`` as a stem and the CLI would be told to write a bare
+    # ``.json``, so the client's typed output would arrive misnamed.
+    values = submit._autofillOutputs({}, _ANNOTATIONS_OUTPUTS, "Measure")
+    assert (
+        values["outputAnnotations"]["name"]
+        == "output.Measure.outputAnnotations.annotations.json"
+    )
+
+
+def test_annotations_output_may_not_smuggle_uris():
+    with pytest.raises(RestException) as exc:
+        submit._validateDeclaredSubmitValues(
+            {"outputAnnotations": {"uris": ["girder://x"]}}, _ANNOTATIONS_DECLARED
+        )
+    assert exc.value.code == 400
+    assert "uris" in str(exc.value)
