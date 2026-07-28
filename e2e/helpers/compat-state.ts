@@ -28,10 +28,10 @@ export type GestureId =
   | 'filtered-dicom'
   | 'study-layered'
   | 'single-item'
-  | 'devkit-study';
+  | 'study-drilldown';
 
 export type FixtureId =
-  | Exclude<GestureId, 'devkit-study'>
+  | GestureId
   | 'lifecycle-single'
   | 'lifecycle-checked'
   | 'lifecycle-filter'
@@ -87,7 +87,6 @@ export type CompatState = {
   token: string;
   provisioned: boolean;
   dicomSeeded: boolean;
-  devkitTrialFolderId?: string;
   gestures: CapturedGesture[];
 };
 

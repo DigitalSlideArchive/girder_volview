@@ -4,6 +4,7 @@ import { existsSync, readFileSync, readdirSync } from 'fs';
 import * as path from 'path';
 import { APIRequestContext } from '@playwright/test';
 import { CONFIG, apiUrl } from './config';
+import { authenticate } from './provision';
 
 // The suite assumes an already-deployed paired stack; it does not manage docker.
 // The stack must satisfy four things:
@@ -44,12 +45,48 @@ export async function healthCheck(request: APIRequestContext): Promise<void> {
   throw new Error(`[e2e] girder is not reachable at ${VERSION_URL}.${BRING_UP_HINT}`);
 }
 
+// The served VolView SPA: warmed below, and the deploy guard's md5 subject.
+const INDEX_URL = `${CONFIG.baseURL}/static/built/plugins/volview/index.html`;
+
+// Warm-up. script/deploy force-recreates the girder container, and
+// /system/version starts answering while mongo queries and the plugin routes
+// are still cold -- so the FIRST spec after a deploy pays the whole cold-start
+// cost. That has been seen to blow a 60s popup wait and to make a session
+// lookup return fresh instead of resuming, both of which read as product bugs.
+// Pay the cost here, once, on the same paths the specs use.
+//
+// Best-effort on purpose: a warm-up hiccup must never fail the run. healthCheck
+// and verifyDeployedHeads are what decide whether the stack is usable; this
+// only decides who waits.
+export async function warmUp(request: APIRequestContext): Promise<void> {
+  try {
+    const { token, userId } = await authenticate(request);
+    const headers = { 'Girder-Token': token };
+    // The girder web client and the served VolView SPA: the pages a launch
+    // gesture opens.
+    await request.get(CONFIG.baseURL, { timeout: 30_000 });
+    await request.get(INDEX_URL, { timeout: 30_000 });
+    // A mongo-backed folder query, then the plugin's manifest route on a real
+    // folder -- the two server paths every launch depends on.
+    const res = await request.get(
+      apiUrl(`/folder?parentType=user&parentId=${userId}&limit=1`),
+      { headers, timeout: 30_000 }
+    );
+    const folders = res.ok() ? await res.json() : [];
+    const folderId = folders?.[0]?._id;
+    if (folderId) {
+      await request.get(apiUrl(`/folder/${folderId}/volview`), { headers, timeout: 60_000 });
+    }
+  } catch {
+    // Warming is an optimization, not a gate.
+  }
+}
+
 // Deploy guard. The deploy step writes a receipt recording the worktree HEADs it
 // deployed. Refuse to run unless the stack serves THIS worktree's current HEAD,
 // so a stale deploy fails loud instead of surfacing as a confusing mid-test
 // assertion against a different checkout.
 const RECEIPT_URL = `${CONFIG.baseURL}/static/built/plugins/volview/deployed-heads.json`;
-const INDEX_URL = `${CONFIG.baseURL}/static/built/plugins/volview/index.html`;
 
 export type DeployReceipt = {
   girderWorktree?: string;

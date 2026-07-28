@@ -131,7 +131,11 @@ export async function openInVolView(page: Page): Promise<VolViewLaunch> {
   const popupPromise = page.waitForEvent('popup', { timeout: 60_000 });
   await button.click();
   const modal = page.locator('.modal-content:has-text("Will open newest VolView session")');
-  if (await modal.isVisible({ timeout: 2_000 }).catch(() => false)) {
+  const modalVisible = await Promise.race([
+    modal.waitFor({ state: 'visible', timeout: 2_000 }).then(() => true),
+    popupPromise.then(() => false),
+  ]).catch(() => false);
+  if (modalVisible) {
     await page.locator('#g-confirm-button').click();
   }
   return toLaunch(popupPromise);
@@ -147,8 +151,8 @@ export async function openFromItemPage(page: Page, itemId: string): Promise<VolV
   return toLaunch(popupPromise);
 }
 
-// Drill through rows whose navigate is another item list (devkit patient →
-// study); the LAST row's navigate opens VolView, so the final click yields the
+// Drill through rows whose navigate is another item list (patient → study);
+// the LAST row's navigate opens VolView, so the final click yields the
 // popup.
 export async function drillRowNav(page: Page, rowTexts: string[]): Promise<VolViewLaunch> {
   for (const text of rowTexts.slice(0, -1)) {

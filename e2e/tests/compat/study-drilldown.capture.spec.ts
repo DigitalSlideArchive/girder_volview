@@ -1,6 +1,11 @@
 import { test, expect } from '@playwright/test';
 import { plantCookie, listSessionItems } from '../../helpers/girder';
-import { readCompatState, appendGesture, CompatState } from '../../helpers/compat-state';
+import {
+  readCompatState,
+  appendGesture,
+  CompatState,
+  requireFixture,
+} from '../../helpers/compat-state';
 import { waitForVolViewReady, remoteSave, shot } from '../../helpers/volview';
 import { isSessionManifest } from '../../helpers/manifest';
 import { gotoFolder, drillRowNav, loginViaUI } from '../../helpers/girder-ui';
@@ -12,17 +17,16 @@ import {
   addLayer,
 } from '../../helpers/annotations';
 import { fetchZipSummary } from '../../helpers/session-zip';
-import { apiUrl } from '../../helpers/config';
 
-// Tier 2 (optional): the fully-seeded devkit collection — real patient→study
-// drill-down through the .large_image_config.yaml hierarchy, whole-study
-// CT+PET launch. Skipped unless `seed.py seed` has run against this stack.
+// Patient → study drill-down through an isolated, automatically provisioned
+// small-tier hierarchy, followed by a whole-study CT+PET launch.
 
 const PATIENT1 = 'ACRIN-NSCLC-FDG-PET-017';
+const STUDY1 = 'PET/CT';
 const CT_DESC = 'CT IMAGES';
 const PET_DESC = 'PET NAC OSEM';
 
-test.describe('compat capture: devkit study drill-down', () => {
+test.describe('compat capture: study drill-down', () => {
   let state: CompatState;
 
   test.beforeEach(async ({ context, page }) => {
@@ -33,30 +37,20 @@ test.describe('compat capture: devkit study drill-down', () => {
     await loginViaUI(page);
   });
 
-  test('devkit-study: patient → study row opens whole study; layer + ruler; save', async ({
+  test('study-drilldown: patient → study row opens whole study; layer + ruler; save', async ({
     page,
     request,
   }, info) => {
-    test.skip(!state.devkitTrialFolderId, 'VolView Devkit collection not seeded (optional tier)');
-    const folderId = state.devkitTrialFolderId!;
-    const rowTexts = [PATIENT1, PATIENT1]; // patient row, then its first study row
-
-    // The devkit collection is shared and persistent — session zips left by
-    // earlier runs make the drill-down resume instead of loading fresh. Clear
-    // them so capture is idempotent.
-    const stale = await listSessionItems(request, state.token, folderId);
-    for (const item of stale) {
-      await request.delete(apiUrl(`/item/${item._id}`), {
-        headers: { 'Girder-Token': state.token },
-      });
-    }
+    const fixture = requireFixture(state, 'study-drilldown');
+    const folderId = fixture.folderId;
+    const rowTexts = [PATIENT1, STUDY1]; // patient row, then one pinned study row
 
     await gotoFolder(page, folderId);
     const launch = await drillRowNav(page, rowTexts);
     const m = await launch.manifest;
-    expect(isSessionManifest(m), 'devkit study launch must be fresh').toBeFalsy();
+    expect(isSessionManifest(m), 'study launch must be fresh').toBeFalsy();
     await waitForVolViewReady(launch.popup);
-    await shot(launch.popup, info, 'capture-devkit-study-loaded');
+    await shot(launch.popup, info, 'capture-study-drilldown-loaded');
 
     await selectPrimaryVolume(launch.popup, CT_DESC);
     await addLayer(launch.popup, PET_DESC);
@@ -64,7 +58,7 @@ test.describe('compat capture: devkit study drill-down', () => {
     const rulers = await readRulerMeasurements(launch.popup);
     expect(rulers.length).toBe(1);
     const datasetNames = await readDatasetNames(launch.popup);
-    await shot(launch.popup, info, 'capture-devkit-study-content');
+    await shot(launch.popup, info, 'capture-study-drilldown-content');
 
     const before = new Set(
       (await listSessionItems(request, state.token, folderId)).map((i) => i._id)
@@ -73,14 +67,14 @@ test.describe('compat capture: devkit study drill-down', () => {
     const minted = (await listSessionItems(request, state.token, folderId)).filter(
       (i) => !before.has(i._id)
     );
-    expect(minted.length, 'devkit study save should mint one session item').toBe(1);
+    expect(minted.length, 'study save should mint one session item').toBe(1);
 
     const zip = await fetchZipSummary(request, state.token, minted[0]._id);
     expect(zip.rulerCount).toBe(1);
     expect(zip.hasLayers).toBeTruthy();
 
     appendGesture({
-      id: 'devkit-study',
+      id: 'study-drilldown',
       folderId,
       launch: { via: 'row-nav', rowTexts },
       sessionItemId: minted[0]._id,

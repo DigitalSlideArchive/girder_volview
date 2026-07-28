@@ -10,7 +10,7 @@ import { apiUrl } from '../../helpers/config';
 
 const PET_DESC = 'PET NAC OSEM';
 
-test.describe('compat verify: devkit study drill-down', () => {
+test.describe('compat verify: study drill-down', () => {
   let state: CompatState;
 
   test.beforeEach(async ({ context, page }) => {
@@ -21,14 +21,14 @@ test.describe('compat verify: devkit study drill-down', () => {
     await loginViaUI(page);
   });
 
-  test('devkit-study: replaying the drill-down resumes the session with its layer', async ({
+  test('study-drilldown: replaying the drill-down resumes the session with its layer', async ({
     page,
     request,
   }, info) => {
-    const gesture = state.gestures.find((g) => g.id === 'devkit-study');
-    test.skip(!gesture, 'devkit tier was not captured (optional)');
-    const { rowTexts } = gesture!.launch as { rowTexts: string[] };
-    const folderId = gesture!.folderId;
+    const gesture = state.gestures.find((g) => g.id === 'study-drilldown');
+    if (!gesture) throw new Error('[compat] capture did not record study drill-down');
+    const { rowTexts } = gesture.launch as { rowTexts: string[] };
+    const folderId = gesture.folderId;
 
     await gotoFolder(page, folderId);
     const launch = await drillRowNav(page, rowTexts);
@@ -37,13 +37,13 @@ test.describe('compat verify: devkit study drill-down', () => {
       isSessionManifest(m),
       `study drill-down must resume the main-era session: ${resourceNames(m)}`
     ).toBeTruthy();
-    expect(resourceNames(m)).toContain(gesture!.sessionItemName);
+    expect(resourceNames(m)).toContain(gesture.sessionItemName);
     await waitForVolViewReady(launch.popup);
-    await shot(launch.popup, info, 'verify-devkit-study-restored');
+    await shot(launch.popup, info, 'verify-study-drilldown-restored');
 
     const rulers = await readRulerMeasurements(launch.popup);
     expect(rulers.map((r) => r.lengthText).sort()).toEqual(
-      gesture!.expected.rulers.map((r) => r.lengthText).sort()
+      gesture.expected.rulers.map((r) => r.lengthText).sort()
     );
     expect(await isLayered(launch.popup, PET_DESC), 'PET layer lost in restore').toBeTruthy();
 
@@ -59,12 +59,12 @@ test.describe('compat verify: devkit study drill-down', () => {
     );
     expect(minted.length).toBe(1);
     const zip = await fetchZipSummary(request, state.token, minted[0]._id);
-    expect(zip.rulerCount).toBe(gesture!.expected.zip.rulerCount);
+    expect(zip.rulerCount).toBe(gesture.expected.zip.rulerCount);
     expect(zip.hasLayers).toBeTruthy();
 
-    // The devkit collection is shared, not run-provisioned: remove the session
-    // items this run minted so re-runs start clean.
-    for (const itemId of [gesture!.sessionItemId, minted[0]._id]) {
+    // Remove the session items this run minted so a kept fixture can be
+    // verified again without changing newest-session selection.
+    for (const itemId of [gesture.sessionItemId, minted[0]._id]) {
       if (!itemId) continue;
       await request.delete(apiUrl(`/item/${itemId}`), {
         headers: { 'Girder-Token': state.token },
