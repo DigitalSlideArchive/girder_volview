@@ -41,6 +41,8 @@ _translator = _load_translator()
 translate_slicer_xml = _translator.translate_slicer_xml
 task_spec_semantic_issues = _translator.task_spec_semantic_issues
 validate_task_spec = _translator.validate_task_spec
+declares_annotations = _translator.declares_annotations
+ANNOTATIONS_EXTENSION = _translator.ANNOTATIONS_EXTENSION
 
 _KNOWN_KINDS = frozenset(
     ("int", "float", "string", "bool", "enum", "sourceRef", "bounds")
@@ -72,6 +74,11 @@ _CONFORMANCE_CASES = [
         _CLI_XML_DIR / "synthetic-bounds-enum.xml",
         "SyntheticRegionEnum",
         "synthetic-bounds-enum",
+    ),
+    (
+        _CLI_XML_DIR / "annotations-measure.xml",
+        "AnnotationsMeasure",
+        "annotations-measure",
     ),
 ]
 
@@ -447,3 +454,132 @@ def test_non_finite_region_default_is_omitted_fail_closed():
     spec = translate_slicer_xml(xml, "RegionDefault")
     roi = next(p for p in spec["parameters"] if p["kind"] == "bounds")
     assert "default" not in roi
+
+
+# --------------------------------------------------------------------------
+# Annotations: the ONE typed <file> binding
+# --------------------------------------------------------------------------
+# The Slicer Execution Model has no vector-annotation element, so a CLI declares
+# rulers/rectangles/polygons as a <file> param whose fileExtensions names the
+# annotations format. That declaration -- and nothing else about the param -- is
+# what turns an otherwise opaque file into a bindable sourceRef (input) or a
+# typed result (output). Every OTHER <file> input keeps today's fail-closed
+# behavior: an unknown field kind the client's schema validation rejects.
+
+
+def _file_param_xml(extension_attr, channel="input"):
+    ext = "" if extension_attr is None else ' fileExtensions="%s"' % extension_attr
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        "<executable>\n"
+        "  <title>File Param</title>\n"
+        "  <description>d</description>\n"
+        "  <parameters>\n"
+        "    <label>IO</label>\n"
+        "    <file%s>\n"
+        "      <name>vectors</name>\n"
+        "      <label>Vectors</label>\n"
+        "      <channel>%s</channel>\n"
+        "      <description>Some file.</description>\n"
+        "      <index>0</index>\n"
+        "    </file>\n"
+        "  </parameters>\n"
+        "</executable>\n"
+    ) % (ext, channel)
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        ".annotations.json",
+        ".ANNOTATIONS.JSON",  # case-insensitive
+        ".json,.annotations.json",  # comma list, member match
+        " .annotations.json , .txt ",  # members are trimmed
+        "annotations.json",  # dotless: submit prepends the missing dot too
+        ".json, annotations.json",  # dotless member of a comma list
+    ],
+)
+def test_annotations_file_input_becomes_a_source_ref(declaration):
+    spec = translate_slicer_xml(_file_param_xml(declaration), "FileParam")
+    param = next(p for p in spec["parameters"] if p["id"] == "vectors")
+    assert param["kind"] == "sourceRef"
+    assert param["accepts"] == ["annotations"]
+    _task_spec_validator().validate(spec)
+    assert validate_task_spec(spec) is spec
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        None,  # no fileExtensions at all
+        ".json",  # plain JSON is not the annotations format
+        ".annotations.json.bak",  # a member must match exactly
+        ".seg.nrrd",
+    ],
+)
+def test_plain_file_input_still_fails_closed(declaration):
+    # Out of scope by design: the backend has no binding convention for an
+    # opaque file input, so it stays an unknown field kind and the whole spec is
+    # rejected rather than guessed at.
+    spec = translate_slicer_xml(_file_param_xml(declaration), "FileParam")
+    param = next(p for p in spec["parameters"] if p["id"] == "vectors")
+    assert param["kind"] == "file"
+    assert param["kind"] not in _KNOWN_KINDS
+    assert "accepts" not in param
+    assert not _task_spec_validator().is_valid(spec)
+    with pytest.raises(ValueError, match="unknown parameter kind"):
+        validate_task_spec(spec)
+
+
+def test_annotations_file_output_is_typed_annotations():
+    spec = translate_slicer_xml(
+        _file_param_xml(".annotations.json", channel="output"), "FileParam"
+    )
+    assert spec["parameters"] == []  # outputs are declarations, not form fields
+    assert spec["outputs"] == [
+        {
+            "id": "vectors",
+            "title": "Vectors",
+            "help": "Some file.",
+            "type": "annotations",
+            "format": ".annotations.json",
+        }
+    ]
+    _task_spec_validator().validate(spec)
+
+
+def test_plain_file_output_stays_type_file():
+    # Outputs are an OPEN vocabulary, so an undeclared file output is still a
+    # valid spec -- it simply carries no state action on the client.
+    spec = translate_slicer_xml(_file_param_xml(".json", channel="output"), "FileParam")
+    assert spec["outputs"][0]["type"] == "file"
+    _task_spec_validator().validate(spec)
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (".annotations.json", True),
+        (".ANNOTATIONS.json", True),
+        (" .annotations.json ", True),
+        (".nrrd,.annotations.json", True),
+        (".annotations.json,.nrrd", True),
+        (".json", False),
+        # A missing leading dot is supplied, matching how the submit boundary
+        # normalizes the same declaration before it names an output file.
+        ("annotations.json", True),
+        ("ANNOTATIONS.JSON", True),
+        ("x.annotations.json", False),
+        ("", False),
+        (None, False),  # absent declaration is not a string
+        (42, False),
+    ],
+)
+def test_declares_annotations_predicate(value, expected):
+    # results.py imports this predicate to type job OUTPUTS, so its exact
+    # comma-list/case semantics are shared between the spec and result paths.
+    assert declares_annotations(value) is expected
+
+
+def test_annotations_extension_is_the_single_marker():
+    assert ANNOTATIONS_EXTENSION == ".annotations.json"

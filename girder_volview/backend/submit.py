@@ -7,13 +7,16 @@ correlation/collection live in ``outputs.py`` / ``results.py``.
 
 import functools
 import os
+import re
 
 from girder.exceptions import RestException
 
 from ..handles import parseFileHandle
+from ..utils import safeNameToken
 from .inputs import resolveInputUrisToFiles
 from .slicer_spec import (
     parse_cli,
+    ANNOTATIONS_EXTENSION,
     _bounds_to_region,
     _json_number,
     _RESERVED_INPUT_PARAMS,
@@ -155,7 +158,8 @@ def _findScopedCliItem(taskId, user):
 
 # The composed name becomes the output filename the worker writes on the
 # container host, so it must be a server-generated basename: every component is
-# collapsed through ``_safeNameToken`` and a client-supplied name is discarded.
+# collapsed through ``utils.safeNameToken`` and a client-supplied name is
+# discarded.
 # Correlation itself binds by reference (``outputs.py`` / ``results.py``), never
 # by this string.
 
@@ -168,7 +172,13 @@ _COMPOUND_EXTENSIONS = (
     ".mnc.gz",
     ".iwi.cbor.zst",
     ".iwi.cbor",
+    ANNOTATIONS_EXTENSION,
 )
+
+# One or more dot-prefixed ASCII extension segments.  This preserves ordinary
+# and compound suffixes (``.nrrd``, ``.nii.gz``) while excluding separators,
+# empty/dot segments, controls, and every other character with path semantics.
+_SAFE_OUTPUT_EXTENSION = re.compile(r"(?:\.[A-Za-z0-9][A-Za-z0-9_+-]*)+\Z")
 
 
 def _splitExt(name):
@@ -193,32 +203,32 @@ def _defaultExtensionForOutput(out):
     return ".dat"
 
 
-def _outputExtension(out):
-    """Return the first declared fileExtension, or a tag-based default.
+def _validatedOutputExtension(ext):
+    """Normalize one declared extension and reject anything path-like."""
+    if not isinstance(ext, str):
+        raise RestException("Task declares an invalid output file extension", code=500)
+    normalized = ext if ext.startswith(".") else "." + ext
+    if _SAFE_OUTPUT_EXTENSION.fullmatch(normalized) is None:
+        raise RestException("Task declares an invalid output file extension", code=500)
+    return normalized
 
-    Cosmetic only: shapes the default filename and nothing else.
+
+def _outputExtension(out):
+    """Validate declared fileExtensions and return the first, or a default.
+
+    Only the first non-empty member ever names a file, but the whole declaration
+    is validated: a task declaring any path-like member is malformed, so it is
+    rejected outright rather than quietly used through its safe prefix.
     """
     raw = out.get("fileExtensions") or ""
-    for ext in raw.split(","):
-        ext = ext.strip()
-        if ext:
-            return ext if ext.startswith(".") else "." + ext
-    return _defaultExtensionForOutput(out)
-
-
-def _safeNameToken(token, fallback):
-    """Collapse a name component to a single separator-free path token.
-
-    The composed output name becomes a worker-host filename, so every component
-    MUST be a plain basename: an input-handle name can decode to
-    ``safe/../../etc/passwd`` (``%2F`` survives the handle parser's pre-decode
-    slash check), and a bare ``strip``-style cleanup would pass the traversal
-    through. Takes the last ``/``- or ``\\``-separated segment, strips edge
-    dots/spaces, and falls back when nothing safe is left.
-    """
-    token = str(token or "").replace("\\", "/").rsplit("/", 1)[-1]
-    token = token.strip(". ")
-    return token or fallback
+    if not isinstance(raw, str):
+        raise RestException("Task declares an invalid output file extension", code=500)
+    declared = [
+        _validatedOutputExtension(ext)
+        for ext in (member.strip() for member in raw.split(","))
+        if ext
+    ]
+    return declared[0] if declared else _defaultExtensionForOutput(out)
 
 
 def _candidateOutputName(inputBase, cliName, paramName, ext):
@@ -226,11 +236,13 @@ def _candidateOutputName(inputBase, cliName, paramName, ext):
 
     Correlation binds by reference, never by this string, but the name IS the
     worker-host output filename, so every component is collapsed to a safe
-    single token through the ``_safeNameToken`` chokepoint.
+    single token through the shared ``safeNameToken`` chokepoint. ``ext`` arrives
+    already normalized and validated by ``_outputExtension``, the one extension
+    chokepoint.
     """
-    base = _safeNameToken(inputBase, "output")
-    cli = _safeNameToken(cliName, "task")
-    param = _safeNameToken(paramName, "out")
+    base = safeNameToken(inputBase, "output")
+    cli = safeNameToken(cliName, "task")
+    param = safeNameToken(paramName, "out")
     return f"{base}.{cli}.{param}{ext}"
 
 
@@ -258,7 +270,7 @@ def _firstInputBaseName(values):
         # A parsed handle name is percent-DECODED and may contain slashes the
         # handle grammar never saw; basename it before use (defense in depth —
         # _candidateOutputName re-sanitizes every component regardless).
-        name = _safeNameToken(name, "")
+        name = safeNameToken(name, "")
         base, _ = _splitExt(name)
         base = base.strip(". ")
         if base:

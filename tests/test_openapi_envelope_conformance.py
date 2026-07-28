@@ -64,6 +64,7 @@ _ENVELOPES_VALIDATED_HERE = frozenset(
 _WIRE_COMPONENTS_VALIDATED_ELSEWHERE = {
     "InputValue": "test_input_value_resolution",
     "StageInputDescriptor": "test_contract_fixtures",
+    "AnnotationsFile": "test_contract_fixtures",
     "TaskSpec": "test_slicer_spec_translation",
     "NeutralJobStatus": "test_status_conformance",
     "JobHistorySummary": "test_job_history_durability(_routes)",

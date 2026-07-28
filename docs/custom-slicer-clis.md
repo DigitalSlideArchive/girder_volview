@@ -81,16 +81,24 @@ VolView uses Slicer XML to build the form and connect job data to the scene.
 Users and CLI authors do not set intents. Girder VolView derives each output
 intent from its XML declaration using the rules below.
 
-| Direction | Slicer XML                                                      | VolView behavior                                                       |
-| --------- | --------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Input     | `<image channel="input">`; omitted `type` defaults to `scalar`  | Uses the selected base scalar image.                                   |
-| Input     | `<image channel="input" type="label">`                          | Uses the selected segment group's labelmap.                            |
-| Output    | `<image channel="output">`; omitted `type` defaults to `scalar` | `add-base-image`: loads the output as a new base image.                |
-| Output    | `<image channel="output" type="label">`                         | `add-segment-group`: adds the output labelmap to the input base image. |
-| Output    | `<file channel="output">`                                       | No scene intent; downloadable under **Details > Files**.               |
+| Direction | Slicer XML                                                          | VolView behavior                                                                         |
+| --------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Input     | `<image channel="input">`; omitted `type` defaults to `scalar`      | Uses the selected base scalar image.                                                     |
+| Input     | `<image channel="input" type="label">`                              | Uses the selected segment group's labelmap.                                              |
+| Input     | `<file channel="input" fileExtensions=".annotations.json">`         | Stages every finished ruler, rectangle, and polygon on the selected image as one JSON file. |
+| Output    | `<image channel="output">`; omitted `type` defaults to `scalar`     | `add-base-image`: loads the output as a new base image.                                  |
+| Output    | `<image channel="output" type="label">`                             | `add-segment-group`: adds the output labelmap to the input base image.                   |
+| Output    | `<file channel="output" fileExtensions=".annotations.json">`        | `add-annotations`: adds the output's rulers, rectangles, and polygons to the input image. |
+| Output    | `<file channel="output">`                                           | No scene intent; downloadable under **Details > Files**.                                 |
 
 This mapping is VolView-specific; HistomicsUI can interpret the same CLI
-differently. Unknown image types are rejected.
+differently. Unknown image types are rejected, and so is a `<file>` **input**
+that does not declare `.annotations.json`: VolView has no binding convention for
+an opaque input file, so such a task does not load in the Jobs form.
+
+The declared extension is the only signal. VolView never inspects a file's
+content or mime type to decide an intent, and an `<image type="label">` output
+stays a segment group whatever its `fileExtensions` claim.
 
 Example labelmap output:
 
@@ -108,6 +116,130 @@ path passed to the CLI; Girder Worker uploads it to the job-owned folder.
 
 See [`ThresholdSegmentation.xml`](https://github.com/PaulHax/volview-radiology-cli/blob/main/ThresholdSegmentation/ThresholdSegmentation.xml)
 for a complete scalar-image-to-labelmap declaration.
+
+### The annotations JSON format
+
+The Slicer Execution Model has no vector-annotation element, so a task declares
+rulers, rectangles, and polygons as `<file>` parameters whose `fileExtensions`
+names `.annotations.json`:
+
+```xml
+<file fileExtensions=".annotations.json" reference="_girder_id_">
+  <name>inputAnnotations</name>
+  <label>Input Annotations</label>
+  <channel>input</channel>
+  <index>1</index>
+</file>
+<file fileExtensions=".annotations.json" reference="inputVolume">
+  <name>outputAnnotations</name>
+  <label>Output Annotations</label>
+  <channel>output</channel>
+  <index>2</index>
+</file>
+```
+
+The file is a versioned envelope. Coordinates are **world LPS millimeters** —
+never image indices — because that is the one space the CLI and the client can
+agree on without knowing each other's image indexing.
+
+```json
+{
+  "schemaVersion": 1,
+  "space": "LPS",
+  "labels": {
+    "rulers": { "lesion": { "color": "#ff0000", "strokeWidth": 2 } },
+    "rectangles": { "lesion": { "color": "#00ff00", "fillColor": "#00ff0033" } }
+  },
+  "tools": {
+    "rulers": [
+      {
+        "firstPoint": [-30.5, 12.25, -12.5],
+        "secondPoint": [18.75, 44, -12.5],
+        "frameOfReference": {
+          "planeNormal": [0, 0, 1],
+          "planeOrigin": [0, 0, -12.5]
+        },
+        "labelName": "lesion",
+        "name": "Ruler"
+      }
+    ],
+    "rectangles": [],
+    "polygons": []
+  }
+}
+```
+
+Rules a producer must follow:
+
+- `schemaVersion` must be `1` and `space` must be `"LPS"`. Any other value is
+  rejected rather than half-understood.
+- `tools` holds up to three arrays: `rulers` and `rectangles` are two points
+  (`firstPoint`, `secondPoint`; a rectangle's points are opposite corners), and
+  `polygons` is a `points` array of at least three points. Rectangle edges follow
+  the referenced image's in-plane axes; use a polygon for a rotated box.
+- Every tool record carries a required `frameOfReference`
+  (`planeNormal`, `planeOrigin`) and may carry `slice`, `frame`, `labelName`,
+  `name`, and a string-to-string `metadata` map. Nothing else is allowed: tool
+  records are strict, so an `id`, `imageID`, `color`, `strokeWidth`,
+  `fillColor`, `hidden`, `placing`, or `source` field makes the file invalid.
+  Styles belong in `labels`; identity and placement state are the session's.
+- `frameOfReference` contains exactly `planeNormal` and `planeOrigin`. `slice`
+  must be finite when present, and `frame` must be a nonnegative JavaScript
+  safe integer.
+- `planeNormal` must be a finite, nonzero vector. Its magnitude carries no
+  information: consumers normalize it before matching the plane to an image
+  axis and storing the annotation.
+- `labels` has one namespace per tool kind, each keyed by label name. The same
+  name may carry different styles for different kinds — rulers and polygons are
+  independent — so a style is only ever read from its own kind's namespace.
+- Label definitions are strict objects containing only string `color`, numeric
+  `strokeWidth`, and string `fillColor` fields. The record key `__proto__` is
+  reserved in both label namespaces and tool metadata.
+- Label references must resolve. Every nonempty `labelName` has to exist in that
+  tool kind's namespace; a dangling reference rejects the whole file. Omit
+  `labelName` for an unlabeled tool.
+- An empty `tools` set is valid and applies nothing.
+
+Rules specific to **output** in this version:
+
+- Every output frame must align to an axis of the referenced image. The client
+  normalizes `planeNormal` and matches it against the image's own axes within a
+  small tolerance (gl-matrix `vec3.equals`, a relative epsilon of `1e-6`), so a
+  normal that is an axis up to floating-point noise still matches while a
+  genuinely oblique plane matches none of them. An oblique plane rejects the
+  entire result — no partial apply — with a diagnostic that the plane is not
+  axis-aligned, because the viewers cannot render an unaligned frame. The
+  simplest correct producer echoes the `frameOfReference` of an input
+  annotation.
+- Placement comes from `planeOrigin` along that axis. An origin outside the
+  image's slice range is accepted as it stands — the annotation lands on that
+  out-of-bounds slice, matching how the renderer treats a position past the
+  volume. An origin that falls *between* slices rejects the result with a
+  diagnostic saying so, since an annotation can only be drawn on a slice.
+- `slice` and `frame` are advisory echoes of where the producer saw the
+  annotation. The client re-derives placement and never trusts them; on a cine
+  image a `frame` outside the image's range is dropped rather than failing the
+  result.
+- Applying a result is idempotent: the client records the job's provenance on
+  each added tool, so loading the same output twice adds nothing.
+
+The normative definition is the `volview` package's neutral backend contract:
+the JSON Schema at `backend-contract/generated/annotations-file.schema.json`,
+the TypeScript source at `backend-contract/processing/annotations.ts`, and the
+worked interchange example at `backend-contract/fixtures/wire/annotations-file.json`
+(one ruler, one rectangle, one polygon, per-kind labels, and tool metadata). See
+[Backend contract and tests](./development.md#backend-contract-and-tests) for
+where that package lives in a checkout.
+`tests/slicer_xml/annotations-measure.xml` in this repository is a complete
+annotations-in, annotations-out task declaration, and
+[`RulerToRectangle`](https://github.com/PaulHax/volview-radiology-cli/tree/main/RulerToRectangle)
+is a runnable task that reads and writes the format.
+
+This wire format is **not** VolView's session manifest. In particular
+`session_builder`'s [`add_annotation`](../session_builder/README.md) writes the
+manifest's annotation shape — different keys (`imageID`, a flat `planeNormal` /
+`planeOrigin`, a label name under `label`, per-tool colors) inside a
+`.volview.zip`. Do not use one as a template for the other.
 
 ### DICOM and Girder-backed inputs
 

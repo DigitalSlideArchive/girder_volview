@@ -1,0 +1,53 @@
+{
+  "specVersion": 1,
+  "id": "AnnotationsMeasure",
+  "title": "Annotations Measure",
+  "description": "Read the vector annotations placed on a volume and emit derived annotations back onto it. The Slicer Execution Model has no vector element, so both sides are <file> params declaring the annotations extension.",
+  "parameters": [
+    {
+      "kind": "sourceRef",
+      "id": "inputVolume",
+      "title": "Input Volume",
+      "help": "Volume the annotations were placed on (DICOM, NIfTI, NRRD, MHA, etc.)",
+      "section": "IO",
+      "order": 0,
+      "required": true,
+      "accepts": [
+        "image"
+      ]
+    },
+    {
+      "kind": "sourceRef",
+      "id": "inputAnnotations",
+      "title": "Input Annotations",
+      "help": "Rulers, rectangles and polygons placed on the input volume.",
+      "section": "IO",
+      "order": 1,
+      "required": true,
+      "accepts": [
+        "annotations"
+      ]
+    },
+    {
+      "kind": "float",
+      "id": "margin",
+      "title": "Margin",
+      "help": "Margin in millimeters added around each derived annotation.",
+      "section": "Measurement parameters",
+      "order": 2,
+      "min": 0,
+      "max": 50,
+      "step": 0.5,
+      "default": 0
+    }
+  ],
+  "outputs": [
+    {
+      "id": "outputAnnotations",
+      "title": "Output Annotations",
+      "help": "Derived annotations to apply to the input volume.",
+      "type": "annotations",
+      "format": ".annotations.json"
+    }
+  ]
+}

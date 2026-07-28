@@ -5,6 +5,7 @@ source formats (e.g. Slicer XML) and their translated goldens are backend test
 fixtures, exercised by ``test_slicer_spec_translation``.
 """
 
+import copy
 import json
 
 import jsonschema
@@ -41,6 +42,11 @@ def test_wire_fixtures_load():
     assert wire["input-value.labelmap"]["type"] == "labelmap"
     assert wire["stage-input.labelmap"]["type"] == "labelmap"
     assert wire["stage-input.labelmap"]["referenceImage"]["type"] == "image"
+    # Both staged types share ONE descriptor shape; only the tag differs, which
+    # is what keeps the backend's staging transport type-blind.
+    assert wire["stage-input.annotations"]["type"] == "annotations"
+    assert wire["stage-input.annotations"]["referenceImage"]["type"] == "image"
+    assert set(wire["stage-input.annotations"]) == set(wire["stage-input.labelmap"])
     assert wire["job-history-summary"]["state"] == "success"
     assert wire["job-history-page"]["nextCursor"]
     assert wire["job-history-detail"]["log"]
@@ -80,6 +86,13 @@ def test_negative_fixtures_present():
         "constraint-violation",
         "wrong-length-color",
         "empty-uris",
+        "stage-input-unknown-type",
+        "annotations-bad-schema-version",
+        "annotations-bad-space",
+        "annotations-two-point-polygon",
+        "annotations-dangling-label",
+        "annotations-session-field",
+        "annotations-zero-normal",
     }
 
 
@@ -123,8 +136,132 @@ def test_generated_schemas_present_and_parse():
     assert "task-spec" in names
     assert "result-intent" in names
     assert "stage-input-descriptor" in names
+    assert "annotations-file" in names
     task_spec_schema = contract_loader.load_generated_schema("task-spec")
     assert task_spec_schema["type"] == "object"
-    jsonschema.Draft202012Validator(
-        contract_loader.load_generated_schema("stage-input-descriptor")
-    ).validate(contract_loader.load_fixture("wire/stage-input.labelmap.json"))
+
+
+def _stage_input_validator():
+    """A validator for the staged-descriptor schema.
+
+    The normative ``stageInputDescriptorSchema`` is a discriminated union, so the
+    generated artifact is a ``oneOf`` -- one branch per member of the backend's
+    ``inputs._STAGEABLE_TYPES``, not a single object. Both branches must accept
+    their fixture, and a type outside the union must match NO branch.
+    """
+    schema = contract_loader.load_generated_schema("stage-input-descriptor")
+    assert set(schema) == {"$schema", "oneOf"}
+    assert len(schema["oneOf"]) == 2
+    return jsonschema.Draft202012Validator(schema)
+
+
+def test_stage_input_descriptor_schema_accepts_both_staged_types():
+    validator = _stage_input_validator()
+    validator.validate(contract_loader.load_fixture("wire/stage-input.labelmap.json"))
+    validator.validate(
+        contract_loader.load_fixture("wire/stage-input.annotations.json")
+    )
+
+
+def test_stage_input_descriptor_schema_rejects_an_unknown_type():
+    # Mirrors the backend's own 400 (inputs.validateStagedDescriptor): the type
+    # discriminator is closed, so an unlisted staged type fails closed on both
+    # sides of the boundary.
+    validator = _stage_input_validator()
+    unknown = contract_loader.load_fixture("negative/stage-input-unknown-type.json")
+    assert not validator.is_valid(unknown)
+
+
+def test_annotations_file_fixture_validates_and_negatives_fail_closed():
+    # The annotations wire file is the interchange format a CLI reads and writes;
+    # the backend never parses it, but it ships the schema, so the golden and
+    # every negative are pinned here.
+    validator = jsonschema.Draft202012Validator(
+        contract_loader.load_generated_schema("annotations-file")
+    )
+    golden = contract_loader.load_fixture("wire/annotations-file.json")
+    validator.validate(golden)
+    assert golden["schemaVersion"] == 1
+    assert golden["space"] == "LPS"
+    # Per-kind label namespaces: the SAME label name legally carries different
+    # styles in different tool kinds, which is why labels are not one flat map.
+    assert (
+        golden["labels"]["rulers"]["lesion"] != golden["labels"]["rectangles"]["lesion"]
+    )
+    assert set(golden["tools"]) == {"rulers", "rectangles", "polygons"}
+
+    for stem in (
+        "annotations-bad-schema-version",
+        "annotations-bad-space",
+        "annotations-two-point-polygon",
+        "annotations-session-field",
+    ):
+        bad = contract_loader.load_fixture("negative/%s.json" % stem)
+        assert not validator.is_valid(bad), stem
+
+
+def test_dangling_label_negative_is_a_semantic_not_structural_rejection():
+    # Label-reference integrity is a cross-field rule the generated JSON Schema
+    # cannot express, exactly like the task-spec constraint pass: the structural
+    # schema accepts it and the decoder's semantic pass rejects it.
+    validator = jsonschema.Draft202012Validator(
+        contract_loader.load_generated_schema("annotations-file")
+    )
+    dangling = contract_loader.load_fixture("negative/annotations-dangling-label.json")
+    validator.validate(dangling)
+    labelled = [
+        tool
+        for tools in dangling["tools"].values()
+        for tool in tools
+        if tool.get("labelName")
+    ]
+    assert labelled
+    assert any(
+        tool["labelName"] not in (dangling.get("labels") or {}).get(kind, {})
+        for kind, tools in dangling["tools"].items()
+        for tool in tools
+        if tool.get("labelName")
+    )
+
+
+def test_zero_normal_negative_is_a_semantic_not_structural_rejection():
+    validator = jsonschema.Draft202012Validator(
+        contract_loader.load_generated_schema("annotations-file")
+    )
+    zero_normal = contract_loader.load_fixture(
+        "negative/annotations-zero-normal.json"
+    )
+    validator.validate(zero_normal)
+    assert zero_normal["tools"]["rulers"][0]["frameOfReference"][
+        "planeNormal"
+    ] == [0, 0, 0]
+
+
+def test_annotations_schema_rejects_reserved_record_keys():
+    validator = jsonschema.Draft202012Validator(
+        contract_loader.load_generated_schema("annotations-file")
+    )
+    golden = contract_loader.load_fixture("wire/annotations-file.json")
+
+    unsafe_labels = copy.deepcopy(golden)
+    unsafe_labels["labels"]["rulers"]["__proto__"] = {}
+    assert not validator.is_valid(unsafe_labels)
+
+    unsafe_metadata = copy.deepcopy(golden)
+    unsafe_metadata["tools"]["rulers"][0]["metadata"] = {
+        "__proto__": "value"
+    }
+    assert not validator.is_valid(unsafe_metadata)
+
+
+def test_add_annotations_intent_is_a_known_strict_intent():
+    # The typed annotations OUTPUT the backend emits in results.py: a strict
+    # known-intent branch member carrying the idempotency source triple.
+    schema = contract_loader.load_generated_schema("result-intent")
+    strict = jsonschema.Draft202012Validator(schema["anyOf"][0])
+    intent = contract_loader.load_fixture("wire/intent.add-annotations.json")
+    strict.validate(intent)
+    assert intent["intent"] == "add-annotations"
+    assert set(intent["source"]) == {"providerId", "jobId", "outputId"}
+    # No ``segments`` equivalent: labels ride inside the annotations file.
+    assert "segments" not in intent

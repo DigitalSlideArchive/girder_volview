@@ -16,7 +16,7 @@ from girder.models.upload import Upload
 from girder_jobs.models import job as girder_job
 
 from ..handles import parseFileHandle
-from ..utils import TRANSIENT_STAGED_META_KEY, isTransientStagedItem
+from ..utils import TRANSIENT_STAGED_META_KEY, isTransientStagedItem, safeNameToken
 
 # Every submitted uri is a backend-minted, origin-relative
 # ``/<apiRoot>/file/<id>/proxiable/<name>`` (``utils.makeFileDownloadUrl``).
@@ -118,24 +118,35 @@ def _readableFilesInOrder(fileIds, user):
     return files
 
 
+# Staged bytes share one descriptor shape and lifecycle. The declared type gates
+# what may be staged at all and is then discarded -- nothing persists it, so it
+# is not what decides which CLI source reference a staged resource may bind.
+_STAGEABLE_TYPES = ("labelmap", "annotations")
+
+
 def validateStagedDescriptor(descriptor, user):
     """Validate a staged-resource descriptor end to end; return its name.
 
-    Owns the whole descriptor schema — shape, the ``labelmap`` type
-    discriminator, and the reference image (own-scheme + ACL + durable) — so the
-    ``stageInput`` route stays transport + authorization only and a future
-    staged type extends this one validator.
+    The reference image must use this server's scheme, be readable, and be
+    durable. The returned name is a single path token: no separators, no control
+    characters, no edge dots or spaces.
     """
     if set(descriptor) != {"type", "name", "referenceImage"}:
         raise RestException("Malformed staged resource descriptor", code=400)
-    if descriptor.get("type") != "labelmap":
-        raise RestException("Staged resource type must be labelmap", code=400)
+    if descriptor.get("type") not in _STAGEABLE_TYPES:
+        raise RestException(
+            "Staged resource type must be one of: %s" % ", ".join(_STAGEABLE_TYPES),
+            code=400,
+        )
     name = descriptor.get("name")
-    if not isinstance(name, str) or not name:
+    if not isinstance(name, str):
+        raise RestException("Staged resource name must not be empty", code=400)
+    name = safeNameToken(name, "")
+    if not name:
         raise RestException("Staged resource name must not be empty", code=400)
     referenceImage = descriptor.get("referenceImage")
     if not isinstance(referenceImage, dict):
-        raise RestException("Staged labelmap requires a reference image", code=400)
+        raise RestException("Staged resource requires a reference image", code=400)
     if not set(referenceImage).issubset({"type", "format", "uris"}):
         raise RestException("Malformed staged reference image", code=400)
     if "format" in referenceImage and not isinstance(referenceImage["format"], str):
@@ -145,15 +156,9 @@ def validateStagedDescriptor(descriptor, user):
 
 
 def validateStagedReferenceImage(referenceImage, user):
-    """Validate a staged labelmap's reference image (own-scheme + ACL + durable).
-
-    Resolves the reference image's own-scheme uris to files under the caller's
-    READ permission — rejecting a malformed, foreign, or unauthorized reference
-    — and rejects a transient reference so a staged labelmap never binds to
-    ephemeral data. Validation only: no lineage is tracked.
-    """
+    """Validate a staged resource's reference image (own-scheme + ACL + durable)."""
     if not isinstance(referenceImage, dict) or referenceImage.get("type") != "image":
-        raise RestException("Staged labelmap requires a reference image", code=400)
+        raise RestException("Staged resource requires a reference image", code=400)
     fileDocs = resolveInputUrisToFiles(referenceImage.get("uris"), user)
     itemIds = {fileDoc.get("itemId") for fileDoc in fileDocs}
     itemIds.discard(None)
@@ -163,7 +168,7 @@ def validateStagedReferenceImage(referenceImage, user):
     for item in Item().find(query={"_id": {"$in": list(itemIds)}}):
         if _isTransientItem(item):
             raise RestException(
-                "Staged labelmap requires a durable reference image", code=400
+                "Staged resource requires a durable reference image", code=400
             )
 
 

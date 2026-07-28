@@ -58,6 +58,33 @@ def _widget_type(tag):
     return _TYPE_MAP.get(tag)
 
 
+# Slicer has no vector-annotation element, so the compound file extension marks
+# an otherwise opaque ``<file>`` parameter as annotations.
+ANNOTATIONS_EXTENSION = ".annotations.json"
+
+
+def _normalized_extension(member):
+    """One declared extension member, trimmed, lowercased and dot-prefixed.
+
+    The submit boundary prepends a missing leading dot before an extension names
+    an output file, so classification normalizes the same way: a dotless
+    ``annotations.json`` declaration must not name an annotations file while
+    being typed as an opaque one.
+    """
+    member = member.strip().lower()
+    return member if member.startswith(".") else "." + member
+
+
+def declares_annotations(file_extensions):
+    """Whether a comma-separated extension declaration includes annotations."""
+    if not isinstance(file_extensions, str):
+        return False
+    return any(
+        _normalized_extension(part) == ANNOTATIONS_EXTENSION
+        for part in file_extensions.split(",")
+    )
+
+
 # Leading numeric run, JS ``parseFloat``-style (optional sign, digits, decimal,
 # exponent).
 _LEADING_FLOAT = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
@@ -603,10 +630,14 @@ def _image_accepts(image_type):
 
 def _output_type(parsed):
     """Declared output ``type``: image outputs reuse the accepts vocabulary
-    (image/labelmap); file outputs are ``file``; anything else passes through
-    (outputs are an open vocabulary -- an unknown one has no state action)."""
+    (image/labelmap); a file output declaring the annotations extension is
+    ``annotations``, other file outputs are ``file``; anything else passes
+    through (outputs are an open vocabulary -- an unknown one has no state
+    action)."""
     if parsed["tag"] == "file":
-        return "file"
+        return (
+            "annotations" if declares_annotations(parsed["fileExtensions"]) else "file"
+        )
     image_type = parsed["imageType"]
     if image_type is None or image_type == "scalar":
         return "image"
@@ -741,6 +772,8 @@ def _translate_param(parsed, order):
             # unknown <image> type -> unknown field kind (fail closed).
             return {"kind": parsed["imageType"], **base}
         return {"kind": "sourceRef", **base, "accepts": accepts}
+    if tag == "file" and declares_annotations(parsed["fileExtensions"]):
+        return {"kind": "sourceRef", **base, "accepts": ["annotations"]}
     if tag == "region":
         param = {"kind": "bounds", **base}
         bounds_default = _region_default_to_bounds(parsed["default"])
