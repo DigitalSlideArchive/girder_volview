@@ -39,8 +39,19 @@ not a clinical annotation.
 Start MinIO in the existing `dsa-plus` Compose project:
 
 ```bash
-docker compose -p dsa-plus -f docker-compose.minio.yml up -d
+cp ../../.env.example ../../.env   # first time only
+docker compose -p dsa-plus --env-file ../../.env -f docker-compose.minio.yml up -d
 ```
+
+`--env-file` is load-bearing. Compose resolves `.env` against the compose file's
+own directory, not the working directory, so without it the repo-root `.env` is
+never read and `MINIO_DATA_DIR` silently falls back to `e2e/seed/.minio-data` —
+an empty bucket, while girder still serves the file records imported from the
+real one. A missing `.env` fails the command outright and names the path it
+wanted, which is the intended behavior.
+
+Set `MINIO_DATA_DIR` in that `.env` to share one seeded bucket across worktrees;
+leave it unset for a single checkout.
 
 Then prepare and seed:
 
