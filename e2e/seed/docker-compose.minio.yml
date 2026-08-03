@@ -4,7 +4,10 @@
 # Bring it up into the EXISTING compose project so it lands on the same network
 # as girder -- otherwise girder cannot resolve the `minio` hostname:
 #
-#     docker compose -p dsa-plus -f docker-compose.minio.yml up -d
+#     docker compose -p dsa-plus --env-file ../../.env -f docker-compose.minio.yml up -d
+#
+# --env-file is required for MINIO_DATA_DIR below to be read: compose looks for
+# .env next to THIS file, never in the working directory.
 #
 # Girder reaches it at http://minio:9000 (service name on the compose network).
 # From the host: API on :9000, web console on :9001.
@@ -20,7 +23,14 @@ services:
       - "9000:9000"
       - "9001:9001"
     volumes:
-      - ./.minio-data:/data
+      # MINIO_DATA_DIR (absolute, from the repo .env) or this file's own
+      # directory. The relative default resolves against WHICHEVER CHECKOUT
+      # started the stack, so bringing it up from a second worktree hands MinIO
+      # an empty data dir while girder still holds every imported file record --
+      # downloads then return 200 with a NoSuchBucket XML body, which VolView
+      # reports as "Not DICOM". Point MINIO_DATA_DIR at the seeded directory to
+      # keep one bucket across worktrees.
+      - ${MINIO_DATA_DIR:-./.minio-data}:/data
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 5s
