@@ -53,12 +53,18 @@ Each scenario owns a folder, so state can't leak between tests. Tests run on
 one worker for predictable load, but aren't Playwright `serial` — one failure
 doesn't mark the rest as unrun.
 
-The DICOM fixtures use real IDC data (ACRIN NSCLC FDG-PET/CT, CC-BY): the
-devkit's pinned `patient-01/study-01/{CT,PET}` + `patient-02/study-01/CT`
-series at 12 slices each. Each grouped scenario gets its own uploaded copy,
-with `meta.dicom.*` populated by girder_volview, plus
-`e2e/fixtures/dicom.large_image_config.yaml` so the folder groups into
-filterable series rows.
+The DICOM fixtures use real IDC data (ACRIN NSCLC FDG-PET/CT, CC-BY): two
+complete pinned studies, `patient-01/study-01/{CT,PET}` and
+`patient-02/study-01/{CT,PET}`, at 12 slices per series. Each grouped scenario
+gets its own uploaded copy under the run root, with `meta.dicom.*` populated by
+girder_volview, plus `e2e/fixtures/dicom.large_image_config.yaml` so the folder
+groups into filterable series rows.
+
+These fixtures are uploaded directly and live in the running user's own folders.
+The optional manual-test tier from `e2e/seed/seed.py seed` arrives the other way,
+through a MinIO/S3 import, and lives in collections whose names say so —
+`Trial (MinIO Import)` and friends. Nothing has to police the split because the
+two never share a parent.
 
 ## Running it
 
@@ -124,9 +130,9 @@ meaning a previous capture was never verified or torn down. Either finish it
 (`npm run compat:verify`) or delete the state file and the
 `girder-volview-compat-<runId>` folder it names.
 
-Optional full-devkit tier: seed the "VolView Devkit" collection first
-(`e2e/seed/README.md`); the `devkit-study` gesture then runs automatically and
-cleans up the session items it mints.
+Optional full-devkit tier: seed the "VolView Devkit" collection first; the
+`devkit-study` gesture then runs automatically and cleans up the session items
+it mints.
 
 ## Guards
 

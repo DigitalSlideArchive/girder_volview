@@ -36,6 +36,7 @@ import {
 // folder, and every launch goes through the deployed Girder UI and open.js.
 
 const PATIENT2 = 'ACRIN-NSCLC-FDG-PET-022';
+const CT_DESC = 'CT IMAGES';
 
 type Gesture = 'single-item' | 'checked' | 'filter' | 'bare-folder';
 type Launched = { view: Page; freshManifest: string; manifest: any };
@@ -50,7 +51,7 @@ async function launchGesture(driver: Page, g: Girder, gesture: Gesture): Promise
       await checkRowByItemId(driver, g.itemId);
     } else if (gesture === 'filter') {
       await fillFilterBox(driver, PATIENT2);
-      await checkRowByTexts(driver, [PATIENT2]);
+      await checkRowByTexts(driver, [PATIENT2, CT_DESC]);
     } else {
       await uncheckAllRows(driver);
     }

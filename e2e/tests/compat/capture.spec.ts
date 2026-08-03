@@ -175,14 +175,16 @@ test.describe('compat capture (against main deploy)', () => {
   test('filtered-dicom: filter box narrows, ruler, filter-linked save', async ({ page, request }, info) => {
     const fixture = requireFixture(state, 'filtered-dicom');
     await gotoFolder(page, fixture.folderId);
-    // Three series rows: p1 CT, p1 PET, p2 CT.
+    // Two complete studies: p1 CT+PET and p2 CT+PET.
     await expectRow(page, [PATIENT1, CT_DESC]);
     await expectRow(page, [PATIENT1, PET_DESC]);
     await expectRow(page, [PATIENT2, CT_DESC]);
+    await expectRow(page, [PATIENT2, PET_DESC]);
     await fillFilterBox(page, PATIENT2);
     await expectNoRow(page, [PATIENT1]);
     await expectRow(page, [PATIENT2, CT_DESC]);
-    await checkRowByTexts(page, [PATIENT2]);
+    await expectRow(page, [PATIENT2, PET_DESC]);
+    await checkRowByTexts(page, [PATIENT2, CT_DESC]);
     const launch = await openInVolView(page);
     await expectFresh(launch);
     await waitForVolViewReady(launch.popup);
@@ -201,7 +203,7 @@ test.describe('compat capture (against main deploy)', () => {
     record(
       'filtered-dicom',
       fixture.folderId,
-      { via: 'checked-rows', rows: [[PATIENT2]], filterText: PATIENT2 },
+      { via: 'checked-rows', rows: [[PATIENT2, CT_DESC]], filterText: PATIENT2 },
       { datasetNames, rulers, segmentGroupNames: [], petLayer: false },
       zip,
       session

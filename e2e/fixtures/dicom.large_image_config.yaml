@@ -6,7 +6,8 @@
 # openable app), leaving the item list stuck on its loading spinner.
 #
 # Grouping keys resolve against item metadata as `meta.dicom.*`, which
-# girder_volview populates when `seed.py seed-small` uploads the slices.
+# girder_volview populates when `seed.py seed-small` uploads both complete
+# CT/PET studies into the scenario folder.
 
 defaultItemList: seriesList
 
