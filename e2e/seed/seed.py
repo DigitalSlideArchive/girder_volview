@@ -12,6 +12,8 @@
 # ///
 """
 Seed a local DSA/Girder with public CC-BY DICOM via a simulated S3 import.
+The collections it creates are named for that ingestion path; the browser e2e
+fixtures are uploaded directly and live in the running user's own folders.
 
 Pipeline (each step is idempotent and re-runnable):
 
@@ -78,9 +80,13 @@ EXPECTED_ACTIVE_LAYOUT = {
     "ultrasound": "1 Cine (single pane)",
 }
 
-UNFILTERED_COLLECTION_NAME = "Trial"
-FILTERED_COLLECTION_NAME = "Trial (Large Image Filter)"
-DEVELOPER_COLLECTION_NAME = "Developer"
+# The collection name carries the ingestion path: everything in these three
+# arrived through the MinIO/S3 assetstore import. The browser compat harness
+# uploads its fixtures directly, into the running user's own folders, so the two
+# can never be mistaken for each other.
+UNFILTERED_COLLECTION_NAME = "Trial (MinIO Import)"
+FILTERED_COLLECTION_NAME = "Trial (Large Image Filter, MinIO Import)"
+DEVELOPER_COLLECTION_NAME = "Developer (MinIO Import)"
 COLLECTION_NAMES = (
     UNFILTERED_COLLECTION_NAME,
     FILTERED_COLLECTION_NAME,
@@ -139,14 +145,15 @@ N_PATIENTS = 3
 N_STUDIES = 2
 N_CLIPS = 3
 
-# The e2e "small tier": a couple of real multi-file series uploaded directly
-# (no MinIO) into a test folder — one study whose CT+PET pair exercises
-# PET-over-CT layering, plus a second patient's CT so filtering has something
-# to exclude. (patient_slot, study_slot, modality_slot) of manifest entries.
+# The e2e "small tier": two complete CT+PET studies uploaded directly, no MinIO
+# involved.  Keeping patient-02's PET with its CT prevents a coherent study from
+# being split across ingestion paths.
+# Values are (patient_slot, study_slot, modality_slot) manifest coordinates.
 SMALL_TIER_SLOTS = {
     ("patient-01", "study-01", "CT"),
     ("patient-01", "study-01", "PET"),
     ("patient-02", "study-01", "CT"),
+    ("patient-02", "study-01", "PET"),
 }
 
 # Skip scouts/topograms and keep each series small enough to seed quickly.
@@ -1026,7 +1033,6 @@ def cmd_seed(args) -> None:
     if not STAGED_PATH.exists():
         die(f"No staging plan at {STAGED_PATH}. Run `seed.py stage` first.")
     plan = json.loads(STAGED_PATH.read_text())
-
     gc = girder_client()
 
     # The import path fires model.file.save per file, which walks into
@@ -1116,9 +1122,9 @@ def cmd_seed(args) -> None:
 def cmd_seed_small(args) -> None:
     """Upload the small-tier slices straight into a folder (no MinIO/S3).
 
-    The e2e compat provisioning calls this against its own run folder: a couple
-    of multi-file series (patient-01 study-01 CT+PET for layering, patient-02
-    study-01 CT for filtering) at --slices per series and flat item names.
+    The e2e compat provisioning calls this against its own scenario folder:
+    two complete multi-file CT+PET studies at --slices per series and flat item
+    names.
     girder_volview populates meta.dicom.* when each file is saved; this command
     adds the study-level modality list derived from the selected series.
     """
@@ -1255,6 +1261,7 @@ def cmd_verify(args) -> None:
     trial_roots = {}
     ultrasound_roots = {}
     sample_ct_folder = None
+    sample_study_folder = None
     expected_patients = {f"patient-{index:02d}" for index in range(1, N_PATIENTS + 1)}
     log("\nTrial hierarchies")
     for collection_name in TRIAL_COLLECTION_NAMES:
@@ -1293,6 +1300,7 @@ def cmd_verify(args) -> None:
                 )
                 if sample_ct_folder is None and "CT" in series:
                     sample_ct_folder = series["CT"]
+                    sample_study_folder = study
 
     if len(trial_roots) == len(TRIAL_COLLECTION_NAMES):
         signatures = {
@@ -1475,37 +1483,49 @@ def cmd_verify(args) -> None:
     headers = {"Girder-Token": token}
     manifest = (
         requests.get(
-            f"{API_ROOT}/folder/{sample_ct_folder['_id']}/volview",
+            f"{API_ROOT}/folder/{sample_study_folder['_id']}/volview",
             headers=headers,
             timeout=30,
         )
-        if sample_ct_folder
+        if sample_study_folder
         else None
     )
     check(
-        "folder/:id/volview responds",
+        "CT/PET study folder/:id/volview responds",
         manifest is not None and manifest.status_code == 200,
-        str(manifest.status_code if manifest else "no CT folder"),
+        str(manifest.status_code if manifest else "no CT/PET study"),
     )
     if manifest is not None and manifest.status_code == 200:
         resources = manifest.json().get("resources", [])
-        check("manifest has resources", bool(resources), f"{len(resources)} entries")
-        proxiable = [r for r in resources if "/proxiable/" in r.get("url", "")]
-        check("urls are proxiable", bool(proxiable), f"{len(proxiable)} proxiable")
+        image_resources = [
+            resource for resource in resources if resource.get("name") != "config.json"
+        ]
+        proxiable = [
+            resource
+            for resource in image_resources
+            if "/proxiable/" in resource.get("url", "")
+        ]
+        check(
+            "every study resource uses the proxiable route",
+            bool(image_resources) and len(proxiable) == len(image_resources),
+            f"{len(proxiable)} of {len(image_resources)} proxiable",
+        )
         if proxiable:
             url = proxiable[0]["url"]
             if url.startswith("/"):
                 url = GIRDER_URL.rstrip("/") + url
-            resp = requests.get(
+            with requests.get(
                 url, headers=headers, allow_redirects=False, stream=True, timeout=30
-            )
-            # A 303 here means Girder handed the browser a presigned minio:9000
-            # URL, which the host cannot resolve. Streaming (200) is what we want.
-            check(
-                "file streams through girder (not a redirect)",
-                resp.status_code == 200,
-                f"status {resp.status_code}",
-            )
+            ) as response:
+                # A 303 here means Girder handed the browser a presigned
+                # minio:9000 URL, which the host cannot resolve. Streaming (200)
+                # is what we want. One probe covers the study: every file in it
+                # is imported from the same assetstore.
+                check(
+                    "file streams through girder (not a redirect)",
+                    response.status_code == 200,
+                    f"status {response.status_code}",
+                )
 
     if ultrasound:
         log("\nUltrasound clips")
