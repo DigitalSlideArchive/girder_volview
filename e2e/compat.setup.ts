@@ -5,8 +5,8 @@ import { readCompatState, writeCompatState, COMPAT_STATE_PATH } from './helpers/
 
 // Phase-switched global setup for the browser harness.
 //
-//   COMPAT_PHASE=capture  — against the MAIN deploy (E2E_EXPECT_GIRDER_SHA and
-//                           E2E_EXPECT_VOLVIEW_SHA carry the pinned pair):
+//   COMPAT_PHASE=capture  — against the baseline deploy (E2E_EXPECT_GIRDER_SHA and
+//                           E2E_EXPECT_VOLVIEW_SHA carry the expected pair):
 //                           provision the run folder ONCE and write
 //                           .compat-state.json.
 //   COMPAT_PHASE=verify   — against THIS worktree: restore captured sessions.

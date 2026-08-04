@@ -30,10 +30,7 @@ export async function requireManifestJson(response: Response): Promise<any> {
 export async function captureManifest(page: Page, navigate: () => Promise<unknown>): Promise<any> {
   const manifestResp = page.waitForResponse(isManifestGet, { timeout: 60_000 });
   await navigate();
-  // Status BEFORE the readiness wait, on purpose: a failed manifest means the
-  // viewer never gets data, so waiting first turns a plain HTTP error into a
-  // 90s "viewer never became ready" timeout that names nothing. Checked here
-  // rather than in each caller so every launch and F5 gets it.
+  // Validate the manifest response before waiting for a viewer that depends on it.
   const manifest = await requireManifestJson(await manifestResp);
   await waitForVolViewReady(page);
   return manifest;

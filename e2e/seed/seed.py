@@ -130,15 +130,10 @@ DEVELOPER_DOWNLOADS = {
 # collection, so this is filtered on every pick rather than assumed.
 ALLOWED_LICENSES = ("CC BY 4.0", "CC BY 3.0")
 
-# ACRIN 6668: FDG-PET/CT of NSCLC with an explicit baseline + post-treatment
-# design, so patients genuinely have repeat CT+PET studies. CMB-LCA looks like an
-# obvious choice but only 13 of its studies have both CT and PT, and no patient
-# has more than one -- so a 3x2 trial hierarchy is impossible there.
+# ACRIN 6668 supplies repeat paired CT+PET studies for the 3x2 trial hierarchy.
 TRIAL_COLLECTION = "acrin_nsclc_fdg_pet"
 
-# Real cine: verified 35-41 frame color loops from GE scanners. The CMB
-# ultrasound is single-frame stills and prostate_mri_us_biopsy is a 3D volume
-# stack (multiframe, but not a temporal loop), so neither is what we want here.
+# B-mode/CEUS liver supplies 35-41 frame color cine loops.
 US_COLLECTION = "b_mode_and_ceus_liver"
 
 N_PATIENTS = 3
