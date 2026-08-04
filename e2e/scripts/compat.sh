@@ -4,7 +4,7 @@ set -euo pipefail
 # Backwards-compat orchestration:
 #
 #   1. materialize the BASELINE girder_volview from git history (no second
-#      checkout required) and deploy it with the baseline VolView
+#      checkout required) and deploy it with the client that baseline pins
 #   2. playwright `capture` project — real-UI gestures, content, saves
 #      (expected backend + client shas carry the pins past the deploy guard)
 #   3. redeploy THIS worktree + its paired VolView
@@ -17,9 +17,21 @@ set -euo pipefail
 # redeploy, so the girder folders/sessions captured in step 2 are still there
 # for step 4.
 #
-# The baseline is a `git archive` export under the gitignored e2e/.compat/,
-# pinned by e2e/compat-baseline.json. Neither the old sources nor the session
-# zips they produce are ever committed — both are reproducible from a sha.
+# NOTHING HERE NAMES A BRANCH. Both sides are derived:
+#
+#   baseline backend  the repo's integration branch (origin/HEAD), resolved per run
+#   baseline client   whatever that backend pins in web_client/package.json
+#   branch backend    this worktree — the one this script lives in
+#   branch client     the VolView worktree sharing this worktree's name
+#
+# So a new pre-merge branch needs no edit here: make the two worktrees, name them
+# the same, and the harness finds both. Every derivation has an env override for
+# the cases the convention does not cover.
+#
+# The baseline is a `git archive` export under the gitignored e2e/.compat/. The
+# baseline client is resolved to an existing checkout at the pinned sha, or a
+# detached worktree created on demand. Neither the old sources nor the session
+# zips they produce are ever committed — all of it is reproducible from a sha.
 #
 # Usage: compat.sh [--phase all|capture|verify|current] [--skip-deploy] [--link] [--keep]
 #
@@ -28,18 +40,15 @@ set -euo pipefail
 #   --link         pass --link to script/deploy (fast client copy; default pack)
 #   --keep         keep the run folder + state after verify (iteration)
 #
-# Env overrides: COMPAT_BASELINE_REF (baseline ref instead of the pin),
-# COMPAT_NO_FETCH, COMPAT_OLD_CHECKOUT/COMPAT_OLD_SHA, COMPAT_BRANCH_VOLVIEW,
-# COMPAT_BASELINE_VOLVIEW, COMPAT_BRANCH_VOLVIEW_SHA,
-# COMPAT_BASELINE_VOLVIEW_SHA, COMPAT_DEPLOY.
+# Env overrides: COMPAT_BASELINE_REF (baseline ref instead of the integration
+# branch), COMPAT_NO_FETCH, COMPAT_OLD_CHECKOUT/COMPAT_OLD_SHA,
+# COMPAT_BRANCH_VOLVIEW, COMPAT_BASELINE_VOLVIEW, COMPAT_BRANCH_VOLVIEW_SHA,
+# COMPAT_BASELINE_VOLVIEW_SHA, COMPAT_ALLOW_VACUOUS, COMPAT_DEPLOY.
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)
 E2E="$REPO/e2e"
-MANIFEST="$E2E/compat-baseline.json"
 
-BASELINE_VOLVIEW=${COMPAT_BASELINE_VOLVIEW:-main}
-BRANCH_VOLVIEW=${COMPAT_BRANCH_VOLVIEW:-just-jobs}
 DEPLOY=${COMPAT_DEPLOY:-$REPO/script/deploy}
 
 PHASE=all
@@ -61,10 +70,16 @@ case "$PHASE" in all|capture|verify|current) ;; *) echo "--phase must be all|cap
 
 die() { echo "compat: $*" >&2; exit 1; }
 
-manifest_sha() {
-    python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]]["sha"])' \
-        "$MANIFEST" "$1" || die "could not read $1.sha from $MANIFEST"
-}
+# Sourced before any path resolution, because VOLVIEW_ROOT lives here.
+if [[ -f $REPO/.env ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$REPO/.env"
+    set +a
+fi
+
+[[ -x $DEPLOY ]] || die "deploy script not found/executable: $DEPLOY (set COMPAT_DEPLOY)"
+command -v uv >/dev/null || die "uv is required (seed.py seed-small runs via 'uv run')"
 
 resolve_volview() {
     local arg=$1
@@ -87,26 +102,34 @@ require_volview_sha() {
         die "$label VolView is at $actual, but expected $expected ($checkout)"
 }
 
-[[ -x $DEPLOY ]] || die "deploy script not found/executable: $DEPLOY (set COMPAT_DEPLOY)"
-command -v uv >/dev/null || die "uv is required (seed.py seed-small runs via 'uv run')"
-[[ -f $MANIFEST ]] || die "missing $MANIFEST"
+# The baseline client is not recorded anywhere — it is read out of the baseline
+# backend's own dependency pin, so the two cannot drift apart. That drift is
+# precisely what a hand-maintained pin produced before.
+volview_pin_sha() {
+    local tree=$1 pkg version
+    pkg="$tree/girder_volview/web_client/package.json"
+    [[ -f $pkg ]] || die "baseline tree has no web_client/package.json: $pkg"
+    version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dependencies"]["volview"])' "$pkg" 2>/dev/null) || \
+        die "could not read dependencies.volview from $pkg"
+    [[ $version =~ ([0-9a-f]{40}) ]] || \
+        die "the baseline pins volview@$version, which carries no commit sha. Set COMPAT_BASELINE_VOLVIEW_SHA to the commit it was built from."
+    printf '%s\n' "${BASH_REMATCH[1]}"
+}
 
-BASELINE_VOLVIEW_SHA=${COMPAT_BASELINE_VOLVIEW_SHA:-$(manifest_sha volview)}
-[[ $BASELINE_VOLVIEW_SHA =~ ^[0-9a-f]{40}$ ]] || die "invalid baseline VolView sha: $BASELINE_VOLVIEW_SHA"
+# ---------------------------------------------------------------- branch side
 
-if [[ -f $REPO/.env ]]; then
-    set -a
-    # shellcheck disable=SC1091
-    . "$REPO/.env"
-    set +a
-fi
+# The worktree this script lives in, and the VolView worktree that shares its
+# name. Both overridable; neither spelled out.
+BRANCH_VOLVIEW_ARG=${COMPAT_BRANCH_VOLVIEW:-$(basename "$REPO")}
+BRANCH_VOLVIEW=$(resolve_volview "$BRANCH_VOLVIEW_ARG")
+BRANCH_SHA=$(git -C "$REPO" rev-parse HEAD)
 
-if [[ $SKIP_DEPLOY -eq 0 && ($PHASE == all || $PHASE == capture) ]]; then
-    BASELINE_VOLVIEW=$(resolve_volview "$BASELINE_VOLVIEW")
-    require_volview_sha "$BASELINE_VOLVIEW" "$BASELINE_VOLVIEW_SHA" baseline
-fi
 if [[ $PHASE == all || $PHASE == verify || $PHASE == current ]]; then
-    BRANCH_VOLVIEW=$(resolve_volview "$BRANCH_VOLVIEW")
+    [[ -f $BRANCH_VOLVIEW/package.json ]] || die \
+"no VolView checkout at $BRANCH_VOLVIEW.
+   The client paired with this worktree is assumed to be the VolView worktree of
+   the same name ($(basename "$REPO")). Create it, or set COMPAT_BRANCH_VOLVIEW
+   to a path or a \$VOLVIEW_ROOT-relative name."
     BRANCH_VOLVIEW_HEAD=$(git -C "$BRANCH_VOLVIEW" rev-parse HEAD 2>/dev/null) || \
         die "branch VolView path is not a git checkout: $BRANCH_VOLVIEW"
     BRANCH_VOLVIEW_SHA=${COMPAT_BRANCH_VOLVIEW_SHA:-$BRANCH_VOLVIEW_HEAD}
@@ -114,21 +137,37 @@ if [[ $PHASE == all || $PHASE == verify || $PHASE == current ]]; then
     require_volview_sha "$BRANCH_VOLVIEW" "$BRANCH_VOLVIEW_SHA" branch
 fi
 
+# -------------------------------------------------------------- baseline side
+
 # Unconditional, including under --skip-deploy: the capture phase exports
 # E2E_EXPECT_GIRDER_SHA either way, and this is a cache hit that needs no docker.
-BASELINE_DIR_SHA=$("$E2E/scripts/materialize-baseline.sh")
-MAIN_SHA=$BASELINE_DIR_SHA
-BASELINE_DIR="$E2E/.compat/checkout-${MAIN_SHA:0:9}"
-[[ -n ${COMPAT_OLD_CHECKOUT:-} ]] && BASELINE_DIR=$COMPAT_OLD_CHECKOUT
+BASELINE_SHA=$("$E2E/scripts/materialize-baseline.sh")
+BASELINE_DIR="$E2E/.compat/checkout-${BASELINE_SHA:0:9}"
 CUSTOM_BASELINE=0
-[[ -n ${COMPAT_OLD_CHECKOUT:-} ]] && CUSTOM_BASELINE=1
-
-BRANCH_SHA=$(git -C "$REPO" rev-parse HEAD)
-if [[ $MAIN_SHA == "$BRANCH_SHA" ]]; then
-    echo "compat: WARNING — the baseline and this worktree are the same commit; the run is vacuous" >&2
+if [[ -n ${COMPAT_OLD_CHECKOUT:-} ]]; then
+    BASELINE_DIR=$COMPAT_OLD_CHECKOUT
+    CUSTOM_BASELINE=1
 fi
 
-echo "compat: baseline ${MAIN_SHA:0:9} at $BASELINE_DIR (VolView: ${BASELINE_VOLVIEW_SHA:0:9} at $BASELINE_VOLVIEW)"
+BASELINE_VOLVIEW_SHA=${COMPAT_BASELINE_VOLVIEW_SHA:-$(volview_pin_sha "$BASELINE_DIR")}
+[[ $BASELINE_VOLVIEW_SHA =~ ^[0-9a-f]{40}$ ]] || die "invalid baseline VolView sha: $BASELINE_VOLVIEW_SHA"
+
+BASELINE_VOLVIEW=
+if [[ $SKIP_DEPLOY -eq 0 && ($PHASE == all || $PHASE == capture) ]]; then
+    BASELINE_VOLVIEW=$("$E2E/scripts/materialize-volview-baseline.sh" "$BASELINE_VOLVIEW_SHA" "$BRANCH_VOLVIEW")
+    require_volview_sha "$BASELINE_VOLVIEW" "$BASELINE_VOLVIEW_SHA" baseline
+fi
+
+# With the baseline tracking the integration branch, running the harness FROM an
+# integration-branch worktree compares a commit against itself and passes without
+# proving anything. That is a footgun, not a warning.
+if [[ $BASELINE_SHA == "$BRANCH_SHA" && ${COMPAT_ALLOW_VACUOUS:-0} != 1 ]]; then
+    die "the baseline and this worktree are both ${BRANCH_SHA:0:9} — the run would compare a commit
+   against itself and pass without proving anything. Run this from the worktree
+   whose changes you want checked, or set COMPAT_ALLOW_VACUOUS=1 to override."
+fi
+
+echo "compat: baseline ${BASELINE_SHA:0:9} at $BASELINE_DIR (VolView: ${BASELINE_VOLVIEW_SHA:0:9}${BASELINE_VOLVIEW:+ at $BASELINE_VOLVIEW})"
 if [[ $PHASE == all || $PHASE == verify || $PHASE == current ]]; then
     echo "compat: branch   ${BRANCH_SHA:0:9} at $REPO (VolView: ${BRANCH_VOLVIEW_SHA:0:9} at $BRANCH_VOLVIEW)"
 fi
@@ -145,13 +184,13 @@ run_capture() {
             "$DEPLOY" $LINK_FLAG -- "$BASELINE_DIR" "$BASELINE_VOLVIEW"
         else
             # The normal export is a plain tree with no .git to ask.
-            "$DEPLOY" $LINK_FLAG --girder-sha "$MAIN_SHA" -- "$BASELINE_DIR" "$BASELINE_VOLVIEW"
+            "$DEPLOY" $LINK_FLAG --girder-sha "$BASELINE_SHA" -- "$BASELINE_DIR" "$BASELINE_VOLVIEW"
         fi
     fi
-    echo "compat: running capture specs against the baseline (${MAIN_SHA:0:9})..."
+    echo "compat: running capture specs against the baseline (${BASELINE_SHA:0:9})..."
     (
         cd "$E2E"
-        COMPAT_PHASE=capture E2E_EXPECT_GIRDER_SHA=$MAIN_SHA \
+        COMPAT_PHASE=capture E2E_EXPECT_GIRDER_SHA=$BASELINE_SHA \
             E2E_EXPECT_VOLVIEW_SHA=$BASELINE_VOLVIEW_SHA \
             npx playwright test --config playwright.config.ts --project capture
     )

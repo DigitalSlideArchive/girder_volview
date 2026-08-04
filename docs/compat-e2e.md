@@ -7,17 +7,44 @@ save/load/restore and job behavior.
 
 ```
 e2e/scripts/compat.sh
- ├─ materialize-baseline.sh                          # git archive <pinned sha> -> e2e/.compat/
- ├─ script/deploy <baseline export> main             # baseline backend + client
+ ├─ materialize-baseline.sh                          # git archive origin/HEAD -> e2e/.compat/
+ ├─ materialize-volview-baseline.sh                  # the client that baseline pins
+ ├─ script/deploy <baseline export> <baseline client>  # baseline pair
  ├─ playwright --project capture                     # save sessions on the baseline
- ├─ script/deploy <this worktree> just-jobs          # branch backend + client
+ ├─ script/deploy <this worktree> <sibling client>   # branch backend + client
  ├─ playwright --project verify                      # old sessions must restore
  └─ playwright --project current                     # fresh lifecycle + jobs
 ```
 
 Neither the old sources nor the session zips are committed — both are
-reproducible from a sha. The repo stores a pointer (`e2e/compat-baseline.json`)
-and the harness recreates the rest into the gitignored `e2e/.compat/`.
+reproducible from a sha, and the harness recreates them into the gitignored
+`e2e/.compat/`.
+
+## Nothing here names a branch
+
+Checked-in tooling must not encode an in-progress branch or worktree: those get
+merged and deleted, and what is left behind is a default that cannot work. Both
+sides of the comparison are derived instead.
+
+| | derived from | override |
+| --- | --- | --- |
+| baseline backend | the repo's integration branch (`origin/HEAD`), resolved per run | `COMPAT_BASELINE_REF` |
+| baseline client | whatever that backend pins in `web_client/package.json` | `COMPAT_BASELINE_VOLVIEW_SHA` |
+| baseline client checkout | any checkout at that sha, else one created on demand | `COMPAT_BASELINE_VOLVIEW` |
+| branch backend | this worktree — the one `compat.sh` lives in | — |
+| branch client | the VolView worktree sharing this worktree's name | `COMPAT_BRANCH_VOLVIEW` |
+
+So a new pre-merge branch needs no edit here. Make the two worktrees, give them
+the same name, and the harness finds both.
+
+Deriving the baseline client from the backend's own dependency pin is what keeps
+the pair honest: the two shas cannot drift apart, because there is only one of
+them. An earlier version recorded both by hand and they did drift — the suite
+spent a while proving compat against a pairing nobody shipped.
+
+Because the baseline tracks the integration branch, running the harness *from*
+an integration-branch worktree would compare a commit against itself. That is a
+hard failure, not a warning (`COMPAT_ALLOW_VACUOUS=1` to override).
 
 Girder's mongo volume survives the redeploy (script/deploy only recreates the
 girder container's code), so the folders and sessions captured in step 2 are
@@ -89,20 +116,23 @@ deployed; that's the only change this repo makes to the upstream stack.
 What the harness needs beyond `.env`:
 
 - **The baseline backend** — no checkout required. It's exported from this
-  repo's own history at the sha pinned in `e2e/compat-baseline.json`. Override
-  for a one-off with `COMPAT_BASELINE_REF=origin/main`, or point at a real git
-  checkout with `COMPAT_OLD_CHECKOUT` + `COMPAT_OLD_SHA` (HEAD must equal that
-  sha).
-- **VolView worktrees** `main` and `just-jobs` under `VOLVIEW_ROOT` (override
-  `COMPAT_BASELINE_VOLVIEW` / `COMPAT_BRANCH_VOLVIEW`). Baseline sha and
-  published npm version are pinned in `e2e/compat-baseline.json`; the
-  branch-side client is unpublished and builds from source, with its sha read
-  from the worktree at run start. Set `COMPAT_BRANCH_VOLVIEW_SHA` to assert the
+  repo's own history at whatever `origin/HEAD` resolves to. Freeze it with
+  `COMPAT_BASELINE_REF=<sha>`, or point at a real git checkout with
+  `COMPAT_OLD_CHECKOUT` + `COMPAT_OLD_SHA` (HEAD must equal that sha).
+- **The baseline client** — no checkout required either. Its sha comes from the
+  baseline backend's own `volview` dependency pin; the harness reuses any
+  checkout under `VOLVIEW_ROOT` already at that commit, and creates a detached
+  worktree under `$VOLVIEW_ROOT/.compat-baseline/` only if none is. The first
+  such creation installs `node_modules` and is slow; later runs reuse it.
+- **The branch client** — a VolView worktree under `VOLVIEW_ROOT` named after
+  this girder_volview worktree. It's unpublished and builds from source, with
+  its sha read at run start. Set `COMPAT_BRANCH_VOLVIEW_SHA` to assert the
   checkout is at one particular commit.
 
-To move the baseline forward, resolve the new sha and edit
-`e2e/compat-baseline.json` — it's pinned rather than floating so a red compat
-run is bisectable.
+The baseline moves on its own as the integration branch moves, so there is
+nothing to bump. When a red run needs to be bisectable, pin it for the duration
+with `COMPAT_BASELINE_REF=<sha>` — that answers "did the integration branch
+move, or did I break it?" without leaving a stale pin behind afterwards.
 
 Full coverage-first run (two deploys):
 
@@ -120,7 +150,8 @@ npm run compat:capture        # capture half only (deploys main first)
 bash scripts/compat.sh --phase capture --skip-deploy   # re-capture, baseline already deployed
 bash scripts/compat.sh --phase current --skip-deploy   # current scenarios using retained state
 bash scripts/compat.sh --link                          # fast client deploys (docker cp, no npm pack)
-COMPAT_BRANCH_VOLVIEW=/abs/path/to/VolView/just-jobs npm test  # another current checkout
+COMPAT_BRANCH_VOLVIEW=/abs/path/to/a/VolView npm test   # client not named after this worktree
+COMPAT_BASELINE_REF=<sha> npm test                     # freeze the baseline while bisecting
 npm run compat:clean          # remove materialized baselines (handles root-owned residue)
 npm run report                # html report of the last phase
 ```
@@ -152,6 +183,13 @@ seed; the run folder and the session items it mints are removed at teardown.
 - The baseline export has no `.git`, so its sha is asserted via `--girder-sha`
   and backstopped by comparing the mounted backend tree hash to the tree
   `materialize-baseline.sh` produced.
+- A resolved baseline client is asserted against the sha the baseline backend
+  pins, whichever way it was resolved — reused, created, or named by
+  `COMPAT_BASELINE_VOLVIEW`. A checkout at the wrong commit tests the wrong
+  pairing silently, which is the failure the derivation exists to prevent.
+- Baseline equal to branch is a hard failure. With the baseline tracking the
+  integration branch, a run launched from an integration-branch worktree would
+  otherwise compare a commit against itself and pass, proving nothing.
 - One `playwright.config.ts` defines the capture, verify, and current
   projects, and refuses to start without the phase `compat.sh` selects —
   preventing a partial direct invocation from silently testing the wrong

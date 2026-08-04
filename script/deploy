@@ -58,11 +58,16 @@
 #      failing loudly on any drift.
 #
 # Usage:
-#   script/deploy [--link]                            # both default to just-jobs
+#   script/deploy [--link]                            # this worktree + its client
 #   script/deploy [--link] <girder-worktree> <volview-worktree>
 #     each positional arg: an absolute path, an existing dir, or a branch name
 #     resolved under the known roots ($DSA_WORKTREE_ROOT/girder_volview-<name>,
 #     $VOLVIEW_ROOT/<name>).
+#
+#     The defaults are DERIVED, never a branch name — a name checked in here
+#     would go stale the moment that branch merged. The girder side is the
+#     worktree this script lives in; the client side is the VolView worktree
+#     sharing its name.
 #
 #   --girder-sha <sha>   record this sha in the receipt instead of asking git.
 #     Lets the compat harness deploy a `git archive` export of an older commit,
@@ -115,8 +120,13 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-GIRDER_ARG=${1:-just-jobs}
-VOLVIEW_ARG=${2:-just-jobs}
+GIRDER_ARG=${1:-$REPO}
+VOLVIEW_ARG=${2:-}
+VOLVIEW_DERIVED=0
+if [ -z "$VOLVIEW_ARG" ]; then
+    VOLVIEW_ARG=$(basename "$REPO")
+    VOLVIEW_DERIVED=1
+fi
 
 # Resolve an arg to a worktree path: absolute path | existing dir | name under a
 # root with an optional prefix (e.g. girder_volview-<name>).
@@ -136,7 +146,14 @@ resolve() {  # $1=arg  $2=root  $3=name-prefix
 GIRDER_WT=$(resolve "$GIRDER_ARG" "$DSA_WORKTREE_ROOT" "girder_volview-")
 VOLVIEW_WT=$(resolve "$VOLVIEW_ARG" "$VOLVIEW_ROOT" "")
 [ -f "$GIRDER_WT/setup.py" ]     || { echo "girder_volview worktree not found: $GIRDER_WT" >&2; exit 1; }
-[ -f "$VOLVIEW_WT/package.json" ] || { echo "VolView worktree not found: $VOLVIEW_WT" >&2; exit 1; }
+if [ ! -f "$VOLVIEW_WT/package.json" ]; then
+    echo "VolView worktree not found: $VOLVIEW_WT" >&2
+    if [ "$VOLVIEW_DERIVED" = 1 ]; then
+        echo "  With no second argument the client is taken to be the VolView worktree named" >&2
+        echo "  after this one ($VOLVIEW_ARG). Create it, or pass a checkout explicitly." >&2
+    fi
+    exit 1
+fi
 
 # A materialized baseline is a `git archive` export: real source, no .git. Its
 # sha is passed in rather than derived.
@@ -171,17 +188,14 @@ fi
 VOLVIEW_SHA=$(git -C "$VOLVIEW_WT" rev-parse HEAD)
 VOLVIEW_SHORT=$(git -C "$VOLVIEW_WT" rev-parse --short HEAD)
 
-# Step 5 registers the radiology CLI, but only for a backend that ships the
-# processing routes. Decide that here, where it costs nothing, rather than
+# Every tree this deploys ships the processing backend — the branch always does,
+# and the compat baseline tracks the integration branch, which has since the
+# processing backend landed. Validated here, where it costs nothing, rather than
 # discovering a bad CLI_REPO at step 5 of 6 — after a container recreate, a
 # health wait, and a full client build, with the receipt not yet written.
-WITH_CLI=0
-if [ -f "$GIRDER_WT/girder_volview/backend/routes.py" ]; then
-    WITH_CLI=1
-    : "${CLI_REPO:?not set, but the deployed backend ships processing routes — set CLI_REPO in .env}"
-    [ -f "$CLI_REPO/cli_list.json" ] || {
-        echo "CLI_REPO has no cli_list.json: $CLI_REPO (still the .env.example placeholder?)" >&2; exit 1; }
-fi
+: "${CLI_REPO:?not set — the deployed backend ships processing routes; set CLI_REPO in .env}"
+[ -f "$CLI_REPO/cli_list.json" ] || {
+    echo "CLI_REPO has no cli_list.json: $CLI_REPO (still the .env.example placeholder?)" >&2; exit 1; }
 
 SERVED=/opt/venv/share/girder/static/built/plugins/volview
 WEB_CLIENT=/opt/girder_volview/girder_volview/web_client
@@ -326,14 +340,7 @@ else
 fi
 
 echo "==> [5/6] register radiology CLI tasks (dropped by the reprovision)"
-# The verify step reads the volview_processing routes, which only exist when
-# the deployed girder_volview ships the processing backend. Pre-processing
-# worktrees (e.g. main, deployed by the compat harness) have none — skip.
-if [ "$WITH_CLI" -eq 1 ]; then
-    "$SCRIPT_DIR/ensure-radiology-cli"
-else
-    echo "    (deployed girder_volview has no processing backend — skipping radiology CLI registration)"
-fi
+"$SCRIPT_DIR/ensure-radiology-cli"
 
 echo "==> [6/6] verify served == built and backend == worktree, then write deployed-heads.json"
 BUILT_MD5=$(md5sum "$VOLVIEW_WT/dist/index.html" | cut -d' ' -f1)
