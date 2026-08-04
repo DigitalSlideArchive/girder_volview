@@ -1,16 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Produce a VolView checkout at an exact sha, without requiring anyone to keep a
-# hand-maintained worktree parked at that commit.
+# Produce a VolView checkout at an exact sha.
 #
-# The compat baseline's client is not a branch anyone works on. It is whatever
-# commit the baseline backend pins in girder_volview/web_client/package.json —
-# so it moves whenever that pin moves, and no human should be tracking it.
-#
-# Hand-maintaining it is exactly how the old harness rotted: the default named a
-# moving branch while the check asserted a frozen sha, so the two agreed only by
-# luck, and once the pin advanced a default run could not start at all.
+# The baseline backend supplies the client commit through
+# girder_volview/web_client/package.json.
 #
 # Resolution order:
 #   1. COMPAT_BASELINE_VOLVIEW — an explicit path or $VOLVIEW_ROOT-relative name,
@@ -40,9 +34,7 @@ REF_CHECKOUT=${2:-}
 
 head_of() { git -C "$1" rev-parse HEAD 2>/dev/null || true; }
 
-# 1. Explicit override. Asserted, never trusted: a checkout at the wrong commit
-#    would silently test the wrong pairing, which is the failure this whole
-#    script exists to make impossible.
+# 1. Validate an explicit checkout override against the required sha.
 if [ -n "${COMPAT_BASELINE_VOLVIEW:-}" ]; then
     case "$COMPAT_BASELINE_VOLVIEW" in
         /*) WT=$COMPAT_BASELINE_VOLVIEW ;;
@@ -60,9 +52,7 @@ if [ -n "${COMPAT_BASELINE_VOLVIEW:-}" ]; then
     exit 0
 fi
 
-# 2. Reuse. Any checkout already at the sha will do — a developer's own worktree
-#    that happens to sit there is as good as one we create, and it comes with
-#    node_modules already installed.
+# 2. Reuse any checkout already at the required sha.
 shopt -s nullglob
 for CAND in "$VOLVIEW_ROOT"/*/ "$VOLVIEW_ROOT"/.compat-baseline/*/; do
     [ -f "${CAND}package.json" ] || continue
@@ -74,9 +64,7 @@ for CAND in "$VOLVIEW_ROOT"/*/ "$VOLVIEW_ROOT"/.compat-baseline/*/; do
 done
 shopt -u nullglob
 
-# 3. Create one. Needs a git context to create it from; any checkout will do,
-#    since worktrees of the same repo share an object store. The caller names one
-#    when it has it; a capture-only run may not, so fall back to discovery.
+# 3. Create a detached worktree using any checkout of the same repository.
 if [ -z "$REF_CHECKOUT" ] || { [ ! -d "$REF_CHECKOUT/.git" ] && [ ! -f "$REF_CHECKOUT/.git" ]; }; then
     REF_CHECKOUT=
     shopt -s nullglob
@@ -102,16 +90,14 @@ fi
 
 DEST="$VOLVIEW_ROOT/.compat-baseline/${SHA:0:9}"
 
-# Keyed on the sha, so a moving baseline extracts into a virgin directory rather
-# than needing the old one torn down first.
+# Key materialized worktrees by sha.
 if [ -f "$DEST/package.json" ] && [ "$(head_of "$DEST")" = "$SHA" ]; then
     echo "materialize-volview-baseline: reusing $DEST (${SHA:0:9})" >&2
     printf '%s\n' "$DEST"
     exit 0
 fi
 
-# A crashed run can strand a registration that a later `worktree add` trips
-# over. Pruning first makes the create idempotent instead of a manual cleanup.
+# Prune stale registrations before creating the worktree.
 git -C "$REF_CHECKOUT" worktree prune
 rm -rf "$DEST"
 mkdir -p "$(dirname "$DEST")"

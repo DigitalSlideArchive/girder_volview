@@ -1,61 +1,31 @@
 #!/usr/bin/env bash
-# script/deploy — make the running DSA stack authoritative for the code you
-# are DEVELOPING (both the girder_volview plugin backend AND the VolView client),
-# then leave a machine-checkable receipt so the e2e harness can PROVE it is
-# exercising that code and refuse to run against a stale/wrong deploy.
+# Deploy a girder_volview backend and VolView client into the running DSA stack,
+# verify the deployed code, and write a receipt for the e2e harness.
 #
-# Why this exists: the default DSA loop serves stale/wrong code three ways —
-#   (a) the compose override mounts the MAIN girder_volview checkout, not a worktree;
-#   (b) `girder build` re-clobbers the served SPA with the stock (processing-
-#       disabled) npm VolView on every container start;
-#   (c) redeploy-volview.sh / start-dsa-volview.sh default to VolView `main`.
-# Nothing ever verified otherwise, so a wrong deploy failed as a confusing test
-# assertion instead of failing fast. This closes all three and verifies.
-#
-# HOW THE CLIENT IS DEPLOYED (default = pack-install, the CI/prod path):
-#   Production consumes VolView the way any npm consumer does — `girder build`
-#   runs `npm install`, which pulls the pinned `volview` package and serves its
-#   `node_modules/volview/dist`. To mirror that faithfully, this script PACKS the
-#   developing VolView worktree (`npm pack`) and installs the TARBALL through the
-#   real package boundary, so a packaging bug surfaces on your machine, not only
-#   in CI:
+# The default pack mode installs an npm tarball through the production package
+# boundary and checks that:
 #     * a build-only dependency left in "dependencies" leaks into the client
 #       build → the install-leak guard fails;
 #     * a path missing from the "files" allowlist (e.g. backend-contract) is
 #       simply absent → the presence guard fails.
 #
-#   THE CONTRACT LINK: girder_volview never vendors the backend-contract — its
-#   conformance tests read it from the installed volview package
-#   (tests/contract_loader.py → web_client/node_modules/volview/backend-contract).
-#   There is no separate drift check to run here anymore: the deployed contract
-#   IS the packed client's contract by construction. And because the girder
-#   worktree is bind-mounted at /opt/girder_volview, writing the package into
-#   the CONTAINER's node_modules/volview refreshes the SAME directory host
-#   pytest reads — one write covers the served client, the next `girder build`,
-#   and the conformance suite. (--link refreshes dist + backend-contract only.)
-#   All node_modules writes go through docker exec/cp on purpose: the container
-#   creates root-owned dirs there, so host-side rm/cp would hit EPERM.
+# girder_volview's conformance tests read backend-contract from the installed
+# volview package. The bind mount exposes that same package to host-side pytest.
+# node_modules writes run through the container because it owns those paths.
 #
-#   --link (fast path): skip pack/install and just docker-cp the freshly built
-#   dist onto the served path. Quicker per iteration, but it BYPASSES the package
-#   boundary (whole worktree, not the files allowlist), so it cannot catch the
-#   packaging bugs above. Use it for tight UI-only loops, not before a push.
+# --link copies dist and backend-contract directly. It skips package-boundary
+# validation and is intended for UI iteration.
 #
-# What it does:
-#   1. mount the DEVELOPING girder_volview worktree at /opt/girder_volview
-#      (GIRDER_VOLVIEW_SRC, read by the compose override) and force-recreate girder
-#      so provision installs THAT backend;
-#   2. build the DEVELOPING VolView worktree;
+# Deployment stages:
+#   1. mount the selected girder_volview worktree and recreate Girder;
+#   2. build the selected VolView worktree;
 #   3. deploy the client — pack+install (default) or docker-cp (--link) — and
-#      overlay its dist onto the served plugin path (preserving girder's
-#      plugin.min.js glue) AND the node_modules/volview "durability" copy that the
-#      next `girder build` re-propagates — so a later restart keeps OUR build;
+#      update both the served plugin and node_modules/volview copies;
 #   4. (re-)register the radiology CLI tasks a reprovision drops;
 #   5. write deployed-heads.json (both worktree HEADs + built index hash) next to
 #      the served index.html, reachable at
 #      /static/built/plugins/volview/deployed-heads.json;
-#   6. VERIFY served SPA == freshly built SPA and mounted backend == the worktree,
-#      failing loudly on any drift.
+#   6. verify the served SPA and installed backend against the selected trees.
 #
 # Usage:
 #   script/deploy [--link]                            # this worktree + its client
@@ -64,16 +34,12 @@
 #     resolved under the known roots ($DSA_WORKTREE_ROOT/girder_volview-<name>,
 #     $VOLVIEW_ROOT/<name>).
 #
-#     The defaults are DERIVED, never a branch name — a name checked in here
-#     would go stale the moment that branch merged. The girder side is the
-#     worktree this script lives in; the client side is the VolView worktree
-#     sharing its name.
+#     By default, deploy this girder worktree and the VolView worktree with the
+#     same basename.
 #
 #   --girder-sha <sha>   record this sha in the receipt instead of asking git.
-#     Lets the compat harness deploy a `git archive` export of an older commit,
-#     which has no .git of its own. The claim is not taken on faith: step 6
-#     still proves the mounted backend tree matches what was handed over, and
-#     only materialize-baseline.sh writes those trees.
+#     Used for compat exports, which have no .git directory. Such exports must
+#     carry the stamp written by materialize-baseline.sh.
 #
 # Machine-specific paths come from <repo>/.env (see .env.example); nothing here
 # is hardcoded to one developer's layout. A missing one fails immediately with
@@ -98,12 +64,8 @@ GIRDER_URL=${GIRDER_URL:-http://localhost:8080}
 DSA_COMPOSE_PROJECT=${DSA_COMPOSE_PROJECT:-dsa-plus}
 : "${DSA_DEVOPS:?not set — copy .env.example to .env and point DSA_DEVOPS at digital_slide_archive/devops}"
 
-# Compose files defining the stack, colon-separated. The default is the pair
-# this script has always passed. NOTE: `docker compose ls` reports the live
-# dsa-plus project was created from THREE files (the third being the devkit's
-# docker-compose.minio.yml); passing two has been harmless because
-# --no-recreate leaves the unlisted service alone, but set DSA_COMPOSE_FILES
-# explicitly if you want compose to see the whole project.
+# Compose files defining the stack, colon-separated. Set DSA_COMPOSE_FILES to
+# include additional project files such as docker-compose.minio.yml.
 DSA_COMPOSE_FILES=${DSA_COMPOSE_FILES:-$DSA_DEVOPS/dsa/docker-compose.yml:$DSA_DEVOPS/with-dive-volview/docker-compose.override.yml}
 
 # Client deploy mode: pack (faithful, default) or link (fast docker-cp).
@@ -155,15 +117,8 @@ if [ ! -f "$VOLVIEW_WT/package.json" ]; then
     exit 1
 fi
 
-# A materialized baseline is a `git archive` export: real source, no .git. Its
-# sha is passed in rather than derived.
-#
-# Step 6 proves the MOUNT matches the tree it was handed, but that says nothing
-# about whether the tree is the commit being claimed — so on its own --girder-sha
-# would let a wrong value write a receipt that lies, and the e2e deploy guard
-# trusts that receipt completely. Tie the two together here:
-# materialize-baseline.sh stamps every tree it writes with the sha it exported,
-# so a mismatch means the tree is not what the caller says it is.
+# A materialized baseline has no .git directory. Validate its requested sha
+# against the stamp written by materialize-baseline.sh.
 if [ -n "$OPT_GIRDER_SHA" ]; then
     git -C "$REPO" cat-file -e "$OPT_GIRDER_SHA^{commit}" 2>/dev/null || {
         echo "--girder-sha $OPT_GIRDER_SHA is not a commit in $REPO" >&2; exit 1; }
@@ -188,11 +143,7 @@ fi
 VOLVIEW_SHA=$(git -C "$VOLVIEW_WT" rev-parse HEAD)
 VOLVIEW_SHORT=$(git -C "$VOLVIEW_WT" rev-parse --short HEAD)
 
-# Every tree this deploys ships the processing backend — the branch always does,
-# and the compat baseline tracks the integration branch, which has since the
-# processing backend landed. Validated here, where it costs nothing, rather than
-# discovering a bad CLI_REPO at step 5 of 6 — after a container recreate, a
-# health wait, and a full client build, with the receipt not yet written.
+# Radiology task registration requires the CLI repository manifest.
 : "${CLI_REPO:?not set — the deployed backend ships processing routes; set CLI_REPO in .env}"
 [ -f "$CLI_REPO/cli_list.json" ] || {
     echo "CLI_REPO has no cli_list.json: $CLI_REPO (still the .env.example placeholder?)" >&2; exit 1; }
@@ -227,17 +178,8 @@ echo "==> [1/6] backend: mount $GIRDER_WT ($GIRDER_SHORT) at /opt/girder_volview
 compose up -d --no-recreate
 compose up -d --force-recreate --no-deps girder
 
-# A recreate reprovisions from scratch — pip installs, slicer-CLI image load and
-# a full `girder build` npm install, ~5-6 min measured. The budget below is
-# deliberately generous: it also covers a cold slicer-CLI image PULL (multi-GB,
-# and the likeliest cause if you ever see this take far longer), and the failure
-# it prevents ("girder never came up" while provisioning was fine) is expensive
-# to debug. A slow day should not need a flag.
-#
-# Two failure modes to tell apart, because they want opposite responses: still
-# provisioning (wait) versus the container exited (stop). Polling the API alone
-# cannot distinguish them, so check the container too and report progress rather
-# than sitting silent for half an hour.
+# Reprovisioning includes package installation, the client build, and possibly a
+# multi-GB CLI image pull. Stop early if the Girder container exits.
 GIRDER_WAIT_SECS=${GIRDER_WAIT_SECS:-2700}
 echo "==> [2/6] waiting up to ${GIRDER_WAIT_SECS}s for girder health at $GIRDER_URL"
 up=
@@ -264,17 +206,14 @@ GIRDER=$(compose ps -q girder)
 echo "==> [3/6] build DEVELOPING VolView: $VOLVIEW_WT ($VOLVIEW_SHORT)"
 export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 [ -e "$VOLVIEW_WT/node_modules" ] || ( cd "$VOLVIEW_WT" && npm ci )
-# Pre-flag-removal worktrees (e.g. VolView main) compile the girder remote-save
-# path behind VITE_ENABLE_REMOTE_SAVE — the published packages set it, so match
-# them. Current worktrees dropped the flag; the env var is ignored there.
+# Baseline clients may gate remote save behind VITE_ENABLE_REMOTE_SAVE; clients
+# without the flag ignore the variable.
 ( cd "$VOLVIEW_WT" && VITE_ENABLE_REMOTE_SAVE=true npm run build )
 [ -f "$VOLVIEW_WT/dist/index.html" ] || { echo "    !! VolView build produced no dist" >&2; exit 1; }
 
 if [ "$MODE" = pack ]; then
     echo "==> [4/6] pack + install VolView through the real package boundary ($MODE mode)"
-    # Pack the worktree, then install the TARBALL exactly as girder build would —
-    # npm resolves the package's PRODUCTION deps and lays down only files the
-    # "files" allowlist ships. This is what makes a packaging bug fail HERE.
+    # Install the tarball with production dependencies and the published files allowlist.
     STAGE=$(mktemp -d)
     trap 'rm -rf "$STAGE"' EXIT
     TARBALL=$( cd "$VOLVIEW_WT" && npm pack --pack-destination "$STAGE" 2>/dev/null )
@@ -283,17 +222,12 @@ if [ "$MODE" = pack ]; then
     ( cd "$STAGE/consumer" \
         && printf '{"name":"c","version":"1.0.0","private":true,"dependencies":{"volview":"file:%s"}}\n' "$STAGE/$TARBALL" > package.json \
         && npm install --no-audit --no-fund >/dev/null 2>&1 )
-    # Install-leak guard: the pre-built dist is self-contained, so a consumer must
-    # pull volview and NOTHING else. Any extra node_modules entry means a build-only
-    # dependency slipped into "dependencies" and would bloat the client build.
+    # The pre-built dist is self-contained; additional runtime dependencies are leaks.
     LEAKED=$( cd "$STAGE/consumer/node_modules" && ls -1 | grep -v '^\.' | grep -vx 'volview' || true )
     [ -z "$LEAKED" ] || { echo "    !! volview leaked runtime deps into the client build:" $LEAKED >&2; exit 1; }
     INSTALLED="$STAGE/consumer/node_modules/volview"
     [ -d "$INSTALLED/dist" ]            || { echo "    !! installed volview has no dist" >&2; exit 1; }
-    # contract_loader requires generated/ specifically — check what it checks.
-    # Pre-contract worktrees (e.g. VolView main, deployed by the compat harness)
-    # have no backend-contract at all; only enforce the allowlist when the
-    # worktree ships one.
+    # Enforce the generated contract allowlist only for clients that ship it.
     if [ -d "$VOLVIEW_WT/backend-contract" ]; then
         [ -d "$INSTALLED/backend-contract/generated" ] || { echo "    !! installed volview is missing backend-contract/generated (files allowlist regressed?)" >&2; exit 1; }
     else
@@ -301,10 +235,7 @@ if [ "$MODE" = pack ]; then
     fi
 
     echo "==> [4/6] deploy installed package into the container + overlay served dist"
-    # Via the /opt/girder_volview bind mount this ALSO refreshes the girder
-    # worktree's node_modules/volview on the host — the tree pytest's
-    # contract_loader reads — so the conformance suite tests against the SAME
-    # contract just deployed.
+    # The bind mount also refreshes the package read by host-side conformance tests.
     docker exec "$GIRDER" rm -rf "$NPM_VOLVIEW"
     docker exec "$GIRDER" mkdir -p "$(dirname "$NPM_VOLVIEW")"
     docker cp "$INSTALLED" "$GIRDER:$NPM_VOLVIEW"
@@ -323,16 +254,11 @@ else
     docker exec "$GIRDER" rm -rf "$SERVED/assets" "$SERVED/itk"
     docker cp "$VOLVIEW_WT/dist/assets" "$GIRDER:$SERVED/assets"
     docker cp "$VOLVIEW_WT/dist/itk"    "$GIRDER:$SERVED/itk"
-    # Durability: `girder build` re-copies node_modules/volview/dist into $SERVED on
-    # the next restart, so that copy must BE our build. A fresh worktree may not have
-    # web_client node_modules yet — create the dir, then replace its dist.
+    # Keep node_modules/volview/dist aligned because `girder build` copies it to $SERVED.
     docker exec "$GIRDER" mkdir -p "$(dirname "$NPM_DIST")"
     docker exec "$GIRDER" rm -rf "$NPM_DIST"
     docker cp "$VOLVIEW_WT/dist" "$GIRDER:$NPM_DIST"
-    # Even on the fast path, keep the contract copy (what pytest's
-    # contract_loader reads, via the bind mount) in lockstep with the client.
-    # Pre-contract worktrees (e.g. VolView main) ship none — remove any stale
-    # copy rather than leaving a mismatched contract behind.
+    # Keep the contract copy aligned, removing it for clients that ship none.
     docker exec "$GIRDER" rm -rf "$NPM_VOLVIEW/backend-contract"
     if [ -d "$VOLVIEW_WT/backend-contract" ]; then
         docker cp "$VOLVIEW_WT/backend-contract" "$GIRDER:$NPM_VOLVIEW/backend-contract"
@@ -345,19 +271,13 @@ echo "==> [5/6] register radiology CLI tasks (dropped by the reprovision)"
 echo "==> [6/6] verify served == built and backend == worktree, then write deployed-heads.json"
 BUILT_MD5=$(md5sum "$VOLVIEW_WT/dist/index.html" | cut -d' ' -f1)
 
-# VERIFY FIRST. The receipt is the e2e harness's proof that the stack serves
-# this code, so it must be written only once that is actually true — writing it
-# before these checks (as this script used to) meant a deploy that failed here
-# still left a receipt certifying the deploy.
+# Write the receipt only after both deployment checks pass.
 SERVED_MD5=$(docker exec "$GIRDER" md5sum "$SERVED/index.html" | cut -d' ' -f1)
 [ "$SERVED_MD5" = "$BUILT_MD5" ] || {
     echo "    !! served SPA ($SERVED_MD5) != freshly built SPA ($BUILT_MD5) — overlay did not take" >&2; exit 1; }
 
-# Hash the INSTALLED package, not the mount: hashing the container side of the
-# bind mount would compare a directory to itself and could only ever pass. girder
-# imports from site-packages, so that is what has to match the worktree — this
-# catches a `pip install --no-deps .` that did not take. The python version is
-# globbed so a base-image bump does not silently skip the check.
+# Hash the site-packages installation that Girder imports, not the bind mount.
+# Glob the Python version so base-image updates retain the check.
 INSTALLED_PKG=$(docker exec "$GIRDER" bash -lc \
     'ls -d /opt/venv/lib/python*/site-packages/girder_volview 2>/dev/null | head -1')
 [ -n "$INSTALLED_PKG" ] || {
@@ -389,11 +309,7 @@ JSON
 docker cp "$HEADS" "$GIRDER:$SERVED/deployed-heads.json"
 rm -f "$HEADS"
 
-# The container runs as root, so everything it created through the
-# /opt/girder_volview bind mount (build/, *.egg-info/, web_client/node_modules)
-# lands root-owned in the host tree. Hand it back now, while the mount is still
-# up: otherwise a materialized baseline checkout cannot be removed without
-# docker, and the developing worktree accumulates undeletable directories.
+# Reclaim files created as root through the bind mount while the container runs.
 docker exec "$GIRDER" chown -R "$(id -u):$(id -g)" /opt/girder_volview 2>/dev/null || \
     echo "    (could not chown the mounted worktree; run script/clean-compat if removal fails)" >&2
 

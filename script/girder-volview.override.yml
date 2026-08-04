@@ -17,12 +17,6 @@
 # compose invocation — omitting it on a later `compose ps` would recompute a
 # different config and ask to recreate the container.
 #
-# NOTE: caching girder's npm install across recreates was tried and does not
-# work. `girder build --no-reinstall` needs node_modules in EVERY plugin's
-# web_client, and plugins installed into site-packages (e.g. dive_server) keep
-# theirs in the writable layer, which --force-recreate discards. Persisting only
-# girder's staging node_modules leaves the build failing on `Cannot find module
-# 'webpack'`.
 services:
   girder:
     volumes:

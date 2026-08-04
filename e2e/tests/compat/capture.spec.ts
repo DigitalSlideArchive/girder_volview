@@ -34,11 +34,11 @@ import {
 } from '../../helpers/annotations';
 import { fetchZipSummary } from '../../helpers/session-zip';
 
-// CAPTURE phase — runs against the MAIN deploy. Each test drives a real girder
-// UI gesture, creates content in main's client, saves, and records the session
+// CAPTURE phase — runs against the baseline deploy. Each test drives a real Girder
+// UI gesture, creates content in the baseline client, saves, and records the session
 // item + expected content into .compat-state.json for the verify phase.
 //
-// Only main-era affordances may be used here: main's folder save returns NO
+// Only baseline affordances may be used here: the folder save returns no
 // resumeUrl, so session items are discovered by folder-listing diff.
 
 const PATIENT1 = 'ACRIN-NSCLC-FDG-PET-017';

@@ -1,36 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Recreate the baseline (old) girder_volview tree from git history.
+# Recreate the baseline girder_volview tree from git history.
 #
-# The compat suite needs to deploy an OLDER version of this plugin so it can
-# save sessions the way that version did. The old tree is derived from the repo's
-# own history so the suite does not depend on a second checkout existing on the
-# developer's machine.
+# The baseline defaults to the repo's integration branch (`origin/HEAD`) and can
+# be fixed to a commit with COMPAT_BASELINE_REF.
 #
-# The baseline is the repo's INTEGRATION BRANCH, resolved fresh on every run.
-# That is the pairing users actually get, so it is the one worth proving
-# backwards-compat against. It is asked of the repo (origin/HEAD) rather than
-# spelled out, so a repo that renames its integration branch needs no edit here,
-# and no in-progress branch name is ever baked into checked-in tooling.
+# `git archive` avoids adding an entry to the shared worktree registry. The
+# export has no .git, so its sha is passed to script/deploy explicitly.
 #
-# An earlier version pinned a frozen sha instead, reasoning that a red run should
-# be bisectable. The reasoning was sound and the mechanism was not: the pin drifted
-# out of agreement with what the plugin actually ships, so the suite proved
-# compat against a pairing nobody ran. Bisectability lives in COMPAT_BASELINE_REF
-# now — pass a sha to freeze the baseline for as long as you are bisecting.
-#
-# `git archive` rather than `git worktree add`: the export is ~36 files, it
-# takes milliseconds, and — the deciding reason — it leaves no entry in the
-# shared .git/worktrees registry. A crashed run therefore cannot strand a
-# registration that a later `worktree add` trips over, and the tree can be
-# deleted with plain rm once ownership is sane. The cost is that the export has
-# no .git, so its sha must be passed to the deploy explicitly; script/deploy
-# still proves the mounted backend matches the tree it was handed.
-#
-# Nothing this produces is ever committed: e2e/.compat/ is gitignored, because a
-# checkout reproducible from a sha is not source. Exports are keyed by sha and
-# accumulate as the integration branch moves; `npm run compat:clean` clears them.
+# Exports are keyed by sha under gitignored e2e/.compat/; `npm run compat:clean`
+# clears them.
 #
 # Usage: materialize-baseline.sh
 #   stdout: the resolved 40-char sha, and nothing else (callers capture it)
@@ -63,9 +43,7 @@ if [ -n "${COMPAT_OLD_CHECKOUT:-}" ]; then
     exit 0
 fi
 
-# The integration branch, asked of the repo rather than hardcoded. origin/HEAD is
-# what `git remote set-head` records; a clone that never learned it falls back to
-# origin/main with a note, because guessing silently is how this drifts.
+# Resolve the integration branch from origin/HEAD, falling back to origin/main.
 default_ref() {
     local head
     if head=$(git -C "$REPO" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null); then
@@ -101,9 +79,7 @@ fi
 
 DEST="$REPO/e2e/.compat/checkout-${SHA:0:9}"
 
-# Keyed on the sha, so the integration branch moving extracts into a virgin
-# directory instead of needing the old one removed first — which matters because
-# the old one may still be root-owned from a container mount.
+# A sha-keyed directory avoids replacing a possibly root-owned mounted export.
 if [ -f "$DEST/setup.py" ]; then
     echo "materialize-baseline: reusing $DEST" >&2
 else
@@ -113,9 +89,7 @@ else
     echo "materialize-baseline: exported ${SHA:0:9} -> $DEST" >&2
 fi
 
-# A truncated export would deploy a half-plugin and fail much later as a
-# confusing test error. `git archive` honours .gitattributes export-ignore, so
-# this also catches someone adding one.
+# Guard against incomplete exports, including export-ignore changes.
 [ -f "$DEST/setup.py" ] && [ -d "$DEST/girder_volview" ] || \
     die "export at $DEST is missing setup.py or girder_volview/ — delete it and retry"
 

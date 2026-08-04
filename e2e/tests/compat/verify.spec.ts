@@ -30,7 +30,7 @@ import {
 import { fetchZipSummary } from '../../helpers/session-zip';
 
 // VERIFY phase — runs against THIS worktree's deploy, after the redeploy.
-// Each captured main-era session must: resolve through the branch's manifest
+// Each captured baseline session must resolve through the branch's manifest
 // logic when the gesture is replayed, restore its content faithfully, and
 // round-trip through a branch re-save + F5.
 

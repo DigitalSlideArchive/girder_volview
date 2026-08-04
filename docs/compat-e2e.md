@@ -20,11 +20,10 @@ Neither the old sources nor the session zips are committed — both are
 reproducible from a sha, and the harness recreates them into the gitignored
 `e2e/.compat/`.
 
-## Nothing here names a branch
+## Derived pairings
 
-Checked-in tooling must not encode an in-progress branch or worktree: those get
-merged and deleted, and what is left behind is a default that cannot work. Both
-sides of the comparison are derived instead.
+The harness derives both sides of the comparison rather than naming branches or
+worktrees.
 
 | | derived from | override |
 | --- | --- | --- |
@@ -34,13 +33,8 @@ sides of the comparison are derived instead.
 | branch backend | this worktree — the one `compat.sh` lives in | — |
 | branch client | the VolView worktree sharing this worktree's name | `COMPAT_BRANCH_VOLVIEW` |
 
-So a new pre-merge branch needs no edit here. Make the two worktrees, give them
-the same name, and the harness finds both.
-
-Deriving the baseline client from the backend's own dependency pin is what keeps
-the pair honest: the two shas cannot drift apart, because there is only one of
-them. An earlier version recorded both by hand and they did drift — the suite
-spent a while proving compat against a pairing nobody shipped.
+Name the two worktrees alike and the harness finds both. The baseline client's
+sha comes from the baseline backend's dependency pin, keeping the pair aligned.
 
 Because the baseline tracks the integration branch, running the harness *from*
 an integration-branch worktree would compare a commit against itself. That is a
@@ -129,10 +123,8 @@ What the harness needs beyond `.env`:
   its sha read at run start. Set `COMPAT_BRANCH_VOLVIEW_SHA` to assert the
   checkout is at one particular commit.
 
-The baseline moves on its own as the integration branch moves, so there is
-nothing to bump. When a red run needs to be bisectable, pin it for the duration
-with `COMPAT_BASELINE_REF=<sha>` — that answers "did the integration branch
-move, or did I break it?" without leaving a stale pin behind afterwards.
+The baseline follows the integration branch. Set `COMPAT_BASELINE_REF=<sha>` to
+hold it fixed while bisecting a failure.
 
 Full coverage-first run (two deploys):
 

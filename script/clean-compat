@@ -3,12 +3,8 @@ set -euo pipefail
 
 # Remove the compat harness's materialized baseline checkouts.
 #
-# A successful script/deploy hands the mounted tree back to you (it chowns
-# /opt/girder_volview before finishing), so plain `rm -rf e2e/.compat` normally
-# works. This exists for the case that does not: a deploy that died after the
-# container created build/ or web_client/node_modules through the bind mount
-# leaves root-owned directories behind, and the stack may now be down, so there
-# is nothing left to chown from the inside.
+# Reclaim root-owned files left by an interrupted container deployment before
+# removing e2e/.compat.
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$SCRIPT_DIR/.." && pwd)

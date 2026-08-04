@@ -17,21 +17,16 @@ set -euo pipefail
 # redeploy, so the girder folders/sessions captured in step 2 are still there
 # for step 4.
 #
-# NOTHING HERE NAMES A BRANCH. Both sides are derived:
+# Both sides are derived:
 #
 #   baseline backend  the repo's integration branch (origin/HEAD), resolved per run
 #   baseline client   whatever that backend pins in web_client/package.json
 #   branch backend    this worktree — the one this script lives in
 #   branch client     the VolView worktree sharing this worktree's name
 #
-# So a new pre-merge branch needs no edit here: make the two worktrees, name them
-# the same, and the harness finds both. Every derivation has an env override for
-# the cases the convention does not cover.
-#
 # The baseline is a `git archive` export under the gitignored e2e/.compat/. The
 # baseline client is resolved to an existing checkout at the pinned sha, or a
-# detached worktree created on demand. Neither the old sources nor the session
-# zips they produce are ever committed — all of it is reproducible from a sha.
+# detached worktree created on demand.
 #
 # Usage: compat.sh [--phase all|capture|verify|current] [--skip-deploy] [--link] [--keep]
 #
@@ -102,9 +97,7 @@ require_volview_sha() {
         die "$label VolView is at $actual, but expected $expected ($checkout)"
 }
 
-# The baseline client is not recorded anywhere — it is read out of the baseline
-# backend's own dependency pin, so the two cannot drift apart. That drift is
-# precisely what a hand-maintained pin produced before.
+# Read the baseline client sha from the backend's dependency pin.
 volview_pin_sha() {
     local tree=$1 pkg version
     pkg="$tree/girder_volview/web_client/package.json"
@@ -158,9 +151,7 @@ if [[ $SKIP_DEPLOY -eq 0 && ($PHASE == all || $PHASE == capture) ]]; then
     require_volview_sha "$BASELINE_VOLVIEW" "$BASELINE_VOLVIEW_SHA" baseline
 fi
 
-# With the baseline tracking the integration branch, running the harness FROM an
-# integration-branch worktree compares a commit against itself and passes without
-# proving anything. That is a footgun, not a warning.
+# Reject comparisons where the integration baseline and branch are identical.
 if [[ $BASELINE_SHA == "$BRANCH_SHA" && ${COMPAT_ALLOW_VACUOUS:-0} != 1 ]]; then
     die "the baseline and this worktree are both ${BRANCH_SHA:0:9} — the run would compare a commit
    against itself and pass without proving anything. Run this from the worktree

@@ -48,16 +48,8 @@ export async function healthCheck(request: APIRequestContext): Promise<void> {
 // The served VolView SPA: warmed below, and the deploy guard's md5 subject.
 const INDEX_URL = `${CONFIG.baseURL}/static/built/plugins/volview/index.html`;
 
-// Warm-up. script/deploy force-recreates the girder container, and
-// /system/version starts answering while mongo queries and the plugin routes
-// are still cold -- so the FIRST spec after a deploy pays the whole cold-start
-// cost. That has been seen to blow a 60s popup wait and to make a session
-// lookup return fresh instead of resuming, both of which read as product bugs.
-// Pay the cost here, once, on the same paths the specs use.
-//
-// Best-effort on purpose: a warm-up hiccup must never fail the run. healthCheck
-// and verifyDeployedHeads are what decide whether the stack is usable; this
-// only decides who waits.
+// Warm the Mongo-backed launch routes after script/deploy recreates Girder.
+// This is best-effort; healthCheck and verifyDeployedHeads are the gates.
 export async function warmUp(request: APIRequestContext): Promise<void> {
   try {
     const { token, userId } = await authenticate(request);
@@ -82,10 +74,7 @@ export async function warmUp(request: APIRequestContext): Promise<void> {
   }
 }
 
-// Deploy guard. The deploy step writes a receipt recording the worktree HEADs it
-// deployed. Refuse to run unless the stack serves THIS worktree's current HEAD,
-// so a stale deploy fails loud instead of surfacing as a confusing mid-test
-// assertion against a different checkout.
+// Require the deploy receipt to match the expected worktree HEADs.
 const RECEIPT_URL = `${CONFIG.baseURL}/static/built/plugins/volview/deployed-heads.json`;
 
 export type DeployReceipt = {
@@ -165,7 +154,7 @@ export async function verifyDeployedHeads(request: APIRequestContext): Promise<v
   // The harness lives at <girder_volview worktree>/e2e/helpers, so the worktree
   // root is two dirs up. Prove the stack serves THIS worktree's HEAD — unless
   // E2E_EXPECT_GIRDER_SHA overrides the expectation (the compat capture phase
-  // runs these specs against a deliberately different deploy, e.g. main).
+  // runs these specs against the baseline deploy).
   const override = process.env.E2E_EXPECT_GIRDER_SHA;
   const worktreeRoot = path.resolve(__dirname, '..', '..');
   const expected = override || gitHead(worktreeRoot);
@@ -175,8 +164,7 @@ export async function verifyDeployedHeads(request: APIRequestContext): Promise<v
       `[e2e] E2E_EXPECT_GIRDER_SHA set: expecting deployed girder ${override.slice(0, 9)}`
     );
   }
-  // Both halves of the comparison must exist, or the guard is not a guard: a
-  // missing sha on either side is when a wrong deploy is most likely, not least.
+  // Both expected and deployed shas are required.
   if (!receipt.girderSha) {
     throw new Error(
       `[e2e] the deploy receipt at ${RECEIPT_URL} has no girderSha, so it cannot ` +

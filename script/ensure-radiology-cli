@@ -1,14 +1,6 @@
 #!/usr/bin/env bash
-# Idempotently ensure the radiology CLI image is built and its tasks are
-# registered with slicer_cli_web, so a reprovision (or any plain stack-up)
-# never silently drops a task declared by the image manifest.
-#
-# Why this exists: provision.*.yaml only *pulls* listed images and nothing hosts
-# volview-radiology-cli:latest in a registry, so a full stack rebuild empties the
-# radiology tasks until the PUT below is re-run by hand. "The tasks disappeared"
-# reads as a bug. This is the interim durability mechanism: re-register on
-# stack-up. The slicer_cli_web PUT is idempotent, so this script is safe to run
-# repeatedly.
+# Build the radiology CLI image when absent and idempotently register every task
+# declared by its manifest with slicer_cli_web.
 #
 # Usage:
 #   script/ensure-radiology-cli
@@ -27,11 +19,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$SCRIPT_DIR/.." && pwd)
 
-# Sourced here as well as in script/deploy, because this is also a standalone
-# entry point (start-dsa-volview.sh calls it directly). Without this its own
-# CLI_REPO error told you to create a .env that it then never read. Sourcing
-# twice is harmless; already-exported values from a parent deploy win, since
-# .env assignments are plain and the parent exported the same values.
+# Load machine configuration for standalone invocation.
 if [ -f "$REPO/.env" ]; then
     set -a
     # shellcheck disable=SC1091
@@ -88,13 +76,10 @@ fi
 
 echo "==> [3/4] registering $CLI_IMAGE with slicer_cli_web"
 # Keep both secrets off the command line (argv is visible via `ps`/`/proc` to
-# any local user). We base64-encode the credentials ourselves and hand curl a
-# ready-made `Authorization: Basic` header through a 0600 header file, rather
-# than curl's `--config`/`-u`: the config `user` directive re-parses the value
+# any local user). Pass a ready-made `Authorization: Basic` header through a
+# 0600 header file. curl's config `user` directive re-parses the value
 # (a quote, backslash, or surrounding whitespace in the password is stripped or
-# truncates it), so such passwords would not round-trip. Building the header
-# passes the password byte-for-byte verbatim, matching the old `-u` behavior.
-# The credential only ever travels through the pipeline's stdin/stdout.
+# truncates it), while the explicit header preserves the password bytes.
 AUTH_HEADER=$(mktemp)
 trap 'rm -f "$AUTH_HEADER" "${TOKEN_HEADER:-}"' EXIT
 printf 'Authorization: Basic %s\n' \
