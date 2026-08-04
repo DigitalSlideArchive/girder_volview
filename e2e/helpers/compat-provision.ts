@@ -129,6 +129,9 @@ export async function provisionCompat(
   await nrrdFixture('jobs-live', 1);
   await nrrdFixture('jobs-staged', 1);
   await nrrdFixture('jobs-failure', 1);
+  await nrrdFixture('jobs-annotations', 1);
+  await nrrdFixture('jobs-roi-rulers', 1);
+  await nrrdFixture('jobs-annotations-blocked', 1);
 
   return {
     createdAt: new Date().toISOString(),

@@ -43,7 +43,10 @@ export type FixtureId =
   | 'jobs-comeback'
   | 'jobs-live'
   | 'jobs-staged'
-  | 'jobs-failure';
+  | 'jobs-failure'
+  | 'jobs-annotations'
+  | 'jobs-roi-rulers'
+  | 'jobs-annotations-blocked';
 
 export type FixtureFolder = {
   folderId: string;

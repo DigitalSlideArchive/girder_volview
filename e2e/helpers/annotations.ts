@@ -1,4 +1,4 @@
-import { Page, expect } from '@playwright/test';
+import { Locator, Page, expect } from '@playwright/test';
 import { openModuleTab } from './volview';
 import { RulerRecord } from './compat-state';
 
@@ -25,16 +25,19 @@ async function activateTool(page: Page, icon: 'mdi-ruler' | 'mdi-brush'): Promis
   await button.click();
 }
 
-// Two clicks at center±40px on the first 2D view — the same gesture VolView's
-// own wdio suite uses to place a ruler.
-export async function placeRuler(page: Page): Promise<void> {
+// The default matches VolView's wdio ruler gesture; callers may choose offsets.
+export async function placeRuler(
+  page: Page,
+  firstOffset: readonly [number, number] = [-40, 0],
+  secondOffset: readonly [number, number] = [40, 0]
+): Promise<void> {
   await activateTool(page, 'mdi-ruler');
   const box = await first2DCanvasBox(page);
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;
-  await page.mouse.click(cx - 40, cy);
+  await page.mouse.click(cx + firstOffset[0], cy + firstOffset[1]);
   await page.waitForTimeout(300);
-  await page.mouse.click(cx + 40, cy);
+  await page.mouse.click(cx + secondOffset[0], cy + secondOffset[1]);
   await page.waitForTimeout(500);
 }
 
@@ -47,15 +50,25 @@ const openAnnotationsTab = async (page: Page, tabText: 'Measurements' | 'Segment
 
 // Ruler rows in the Measurements list; the rendered length ("40.00mm") comes
 // from world coordinates in the session, so restores must reproduce it exactly.
-export async function readRulerMeasurements(page: Page): Promise<RulerRecord[]> {
+export async function rulerMeasurementRows(page: Page): Promise<Locator> {
   await openAnnotationsTab(page, 'Measurements');
-  const rows = page.locator('.v-list-item:has(i.tool-icon.mdi-ruler)');
+  return page.locator('.v-list-item:has(i.tool-icon.mdi-ruler)');
+}
+
+export async function readRulerMeasurements(page: Page): Promise<RulerRecord[]> {
+  const rows = await rulerMeasurementRows(page);
   await expect(rows.first(), 'no ruler row in the Measurements list').toBeVisible();
   const texts = await rows.allTextContents();
   return texts
     .map((t) => t.match(/\d+\.\d{2}\s*mm/)?.[0]?.replace(/\s+/, ''))
     .filter((t): t is string => !!t)
     .map((lengthText) => ({ lengthText }));
+}
+
+// Rectangle rows, returned as a locator so callers can await a count.
+export async function rectangleMeasurementRows(page: Page): Promise<Locator> {
+  await openAnnotationsTab(page, 'Measurements');
+  return page.locator('.v-list-item:has(i.tool-icon.mdi-vector-square)');
 }
 
 // Paint a few strokes on the first 2D view. Activating paint (and stroking)
@@ -86,7 +99,10 @@ export async function readSegmentGroupNames(page: Page): Promise<string[]> {
 }
 
 const dicomVolumeCard = (page: Page, seriesDescription: string) =>
-  page.locator('.v-card', { has: page.locator('.series-desc') }).filter({ hasText: seriesDescription }).first();
+  page
+    .locator('.v-card', { has: page.locator('.series-desc') })
+    .filter({ hasText: seriesDescription })
+    .first();
 
 export async function readDatasetNames(page: Page): Promise<string[]> {
   await openModuleTab(page, 'Data');
