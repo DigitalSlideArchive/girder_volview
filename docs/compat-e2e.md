@@ -67,7 +67,8 @@ The current project also covers what an old-session restore can't prove:
 - F5 before save staying fresh, and F5 after first and second saves resuming;
 - checked raw images deliberately restarting instead of resuming;
 - bare-folder newest-session selection and exact older-session selection;
-- the launch button's `urls`, `save`, `config`, and `names` contract;
+- the launch button's `urls`, `save`, and `names` contract, including config
+  delivery through the manifest;
 - saved-session rows, completed-job loading, and live job auto-apply.
 
 Each scenario owns a folder, so state can't leak between tests. Tests run on

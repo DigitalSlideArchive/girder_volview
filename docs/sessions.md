@@ -13,7 +13,10 @@ Every launch URL carries query params the client acts on:
   (`POST item/:id/volview`) for a single item, or folder-scoped
   (`POST folder/:id/volview?metadata=…`) for a checked or filter set, where
   `metadata` records that set under the saved session's `linkedResources`.
-- `config=` — the folder's VolView config (`GET folder/:id/volview_config/:name`).
+
+Every manifest returned through `urls=` includes the folder's VolView config
+(`GET folder/:id/volview_config/:name`). That config registers the folder-scoped
+processing provider used by the Jobs tab.
 
 On Save, the plugin writes a `session.volview.zip` and returns a **`resumeUrl`**
 (`item/:id/volview`, pointing at the session item). The client repoints ONLY its

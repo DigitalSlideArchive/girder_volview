@@ -21,22 +21,15 @@ const volViewPath = `static/built/plugins/volview/index.html`;
 // Launch URL legs: `urls=` loads exactly what was picked, except a bare
 // folder-open, which resumes the folder's newest session.volview.zip. `save=`
 // returns a `resumeUrl` the client repoints `urls=` at, so a later F5 reloads
-// the last save. `config=` delivers the folder config that registers the
-// processing provider; without it the Jobs tab never appears.
-
-function configParam(folderId) {
-    const configUrl = `/${getApiRoot()}/folder/${folderId}/volview_config/.volview_config.yaml`;
-    return `&config=${encodeURIComponent(configUrl)}`;
-}
+// the last save. Every manifest includes the folder's VolView config, which
+// registers the processing provider used by the Jobs tab.
 
 export function openItemURL(item) {
     const itemRoute = `/${getApiRoot()}/item/${item.id}`;
     const saveParam = `&save=${itemRoute}/volview`;
     const manifestUrl = `${itemRoute}/volview`;
     const downloadParams = `&names=[manifest.json]&urls=${encodeURIComponent(manifestUrl)}`;
-    const newTabUrl = `${volViewPath}?${saveParam}${downloadParams}${configParam(
-        item.get("folderId"),
-    )}`;
+    const newTabUrl = `${volViewPath}?${saveParam}${downloadParams}`;
     return newTabUrl;
 }
 
@@ -63,9 +56,7 @@ export function openResourcesURL(folder, resources) {
         JSON.stringify(metaData),
     )}`;
     const downloadParams = resourcesToDownloadParams(folder.id, resources);
-    const newTabUrl = `${volViewPath}?${saveParam}${downloadParams}${configParam(
-        folder.id,
-    )}`;
+    const newTabUrl = `${volViewPath}?${saveParam}${downloadParams}`;
     return newTabUrl;
 }
 
@@ -94,7 +85,7 @@ function volViewURLWithFilter(folderId, filterPayload) {
         JSON.stringify(filterPayload),
     )}`;
     const downloadParams = `&names=[manifest.json]&urls=${encodeURIComponent(manifestUrl)}`;
-    return `${volViewPath}?${saveParam}${downloadParams}${configParam(folderId)}`;
+    return `${volViewPath}?${saveParam}${downloadParams}`;
 }
 
 export function openGroupedItemURL(item, folder) {

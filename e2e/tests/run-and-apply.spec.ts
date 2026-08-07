@@ -18,8 +18,8 @@ import { paintStrokes, readDatasetNames, readSegmentGroupNames } from '../helper
 // The jobs/processing plane in the browser. Setup submits an Otsu job over REST
 // (folder+user scoped to the same admin the tab runs as) and polls it to
 // success, so the launched tab meets a job that finished before it existed and
-// must reach it through the come-back path. The launch carries config=, which
-// is what makes the Jobs tab appear.
+// must reach it through the come-back path. The launch manifest carries the
+// folder config that makes the Jobs tab appear.
 
 async function launchChecked(driver: Page, g: Girder): Promise<Page> {
   await gotoFolder(driver, g.folderId);
