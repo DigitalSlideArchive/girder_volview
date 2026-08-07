@@ -3,11 +3,10 @@ the live cherrypy pipeline.
 
 A single-item launch runs the whole job flow: the backend derives the launch
 context from the item's PARENT folder. There is no item-scoped processing route.
-An item-launched client only reads the processing provider ``baseUrl`` served
-over the trusted ``config=`` channel, which the launcher scopes to the item's
-parent folder (``open.js`` builds ``configParam(item.folderId)``; the composed
-item manifest carries no config resource, so that URL is the one and only config
-channel) -> ``/folder/{parentId}/volview_config/...`` ->
+An item-launched client reads the processing provider ``baseUrl`` from the
+config resource in the composed item manifest, which is scoped to the item's
+parent folder: ``/item/{itemId}/volview`` ->
+``/folder/{parentId}/volview_config/...`` ->
 ``buildProcessingConfigBlock`` -> ``_providerBaseUrl(parentFolder)``. So every
 test below *derives* the launch folder from the served config exactly as the
 client would, then drives the three launch-context-scoped routes -- ``listTasks``
@@ -134,11 +133,17 @@ def _segment_after(url, key):
 
 def _served_launch_folder_id(server, item, user):
     """Reproduce, exactly as the client does, the item -> parent-folder launch
-    derivation: follow the launcher's trusted ``config=`` URL to the config route
-    and return the folder id the served processing provider is scoped to.
+    derivation: follow the config resource in the item manifest and return the
+    folder id the served processing provider is scoped to.
     """
-    config_folder_id = str(item["folderId"])
-    config = _get(server, CONFIG_PATH % config_folder_id, user)
+    manifest = _get(server, ITEM_MANIFEST_PATH % item["_id"], user).json
+    config_resource = next(
+        resource
+        for resource in manifest["resources"]
+        if resource.get("name") == "config.json"
+    )
+    config_path = config_resource["url"].removeprefix("/api/v1")
+    config = _get(server, config_path, user)
     provider = config.json["processing"]["providers"][0]
     # The baseUrl is the only processing handle the client is ever given.
     return _segment_after(provider["baseUrl"], "folder")

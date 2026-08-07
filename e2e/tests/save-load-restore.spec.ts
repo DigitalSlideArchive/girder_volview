@@ -259,15 +259,19 @@ test.describe('save/load/restore F5 lifecycle', () => {
     const actual = new URL(href!, CONFIG.baseURL);
     expect(actual.pathname).toBe('/static/built/plugins/volview/index.html');
     expect(actual.searchParams.get('names')).toBe('[manifest.json]');
-    expect(actual.searchParams.get('config')).toBe(
+    expect(actual.searchParams.has('config')).toBeFalsy();
+
+    const manifestUrl = actual.searchParams.get('urls')!;
+    const manifestRoute = new URL(manifestUrl, CONFIG.baseURL);
+    expect(manifestRoute.pathname).toBe(`/${CONFIG.apiRoot}/folder/${g.folderId}/volview`);
+    expect(manifestRoute.searchParams.has('folders')).toBeTruthy();
+    expect(manifestRoute.searchParams.get('folders')).toBe('');
+    expect(manifestRoute.searchParams.get('items')).toBe(g.itemId);
+
+    const manifest = await fetchManifest(page.request, g.token, manifestUrl);
+    expect(resourceUrls(manifest)).toContain(
       `/${CONFIG.apiRoot}/folder/${g.folderId}/volview_config/.volview_config.yaml`
     );
-
-    const manifest = new URL(actual.searchParams.get('urls')!, CONFIG.baseURL);
-    expect(manifest.pathname).toBe(`/${CONFIG.apiRoot}/folder/${g.folderId}/volview`);
-    expect(manifest.searchParams.has('folders')).toBeTruthy();
-    expect(manifest.searchParams.get('folders')).toBe('');
-    expect(manifest.searchParams.get('items')).toBe(g.itemId);
 
     const save = new URL(actual.searchParams.get('save')!, CONFIG.baseURL);
     expect(save.pathname).toBe(`/${CONFIG.apiRoot}/folder/${g.folderId}/volview`);

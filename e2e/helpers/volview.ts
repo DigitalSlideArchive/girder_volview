@@ -78,7 +78,7 @@ export async function remoteSave(page: Page): Promise<string> {
 }
 
 // Click a module tab by name (Jobs / Annotations / Rendering / Data). The Jobs
-// tab appears only when the launch config= registered a processing provider;
+// tab appears only when the launch manifest registered a processing provider;
 // its job list is folder+user scoped.
 export async function openModuleTab(page: Page, name: string): Promise<void> {
   await page.locator(`button[data-testid="module-tab-${name}"]`).click();
