@@ -207,6 +207,19 @@ done
 GIRDER=$(compose ps -q girder)
 [ -n "$GIRDER" ] || { echo "    !! could not resolve the girder container" >&2; exit 1; }
 
+# Everything below can exit non-zero, and the deployment writes into the mounted
+# worktree as root (the client install lands in web_client/node_modules). Reclaim
+# ownership on EVERY path: a failed verify used to leave the whole worktree
+# root-owned, which then needed a container to clean up. One handler, because a
+# second `trap ... EXIT` would silently replace this one.
+CLEANUP_STAGE=
+cleanup() {
+    [ -z "$CLEANUP_STAGE" ] || rm -rf "$CLEANUP_STAGE"
+    docker exec "$GIRDER" chown -R "$(id -u):$(id -g)" /opt/girder_volview 2>/dev/null || \
+        echo "    (could not chown the mounted worktree; run script/clean-compat if removal fails)" >&2
+}
+trap cleanup EXIT INT TERM
+
 echo "==> [3/6] build DEVELOPING VolView: $VOLVIEW_WT ($VOLVIEW_SHORT)"
 export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 [ -e "$VOLVIEW_WT/node_modules" ] || ( cd "$VOLVIEW_WT" && npm ci )
@@ -219,7 +232,7 @@ if [ "$MODE" = pack ]; then
     echo "==> [4/6] pack + install VolView through the real package boundary ($MODE mode)"
     # Install the tarball with production dependencies and the published files allowlist.
     STAGE=$(mktemp -d)
-    trap 'rm -rf "$STAGE"' EXIT
+    CLEANUP_STAGE=$STAGE
     TARBALL=$( cd "$VOLVIEW_WT" && npm pack --pack-destination "$STAGE" 2>/dev/null )
     [ -n "$TARBALL" ] && [ -f "$STAGE/$TARBALL" ] || { echo "    !! npm pack produced no tarball" >&2; exit 1; }
     mkdir "$STAGE/consumer"
@@ -243,7 +256,7 @@ if [ "$MODE" = pack ]; then
     docker exec "$GIRDER" rm -rf "$NPM_VOLVIEW"
     docker exec "$GIRDER" mkdir -p "$(dirname "$NPM_VOLVIEW")"
     docker cp "$INSTALLED" "$GIRDER:$NPM_VOLVIEW"
-    rm -rf "$STAGE"; trap - EXIT
+    rm -rf "$STAGE"; CLEANUP_STAGE=
     # Overlay the packaged dist onto the served path (preserve girder's plugin.min.js).
     docker exec "$GIRDER" bash -c "
         cp '$NPM_DIST/index.html'  '$SERVED/index.html' &&
@@ -312,10 +325,6 @@ cat > "$HEADS" <<JSON
 JSON
 docker cp "$HEADS" "$GIRDER:$SERVED/deployed-heads.json"
 rm -f "$HEADS"
-
-# Reclaim files created as root through the bind mount while the container runs.
-docker exec "$GIRDER" chown -R "$(id -u):$(id -g)" /opt/girder_volview 2>/dev/null || \
-    echo "    (could not chown the mounted worktree; run script/clean-compat if removal fails)" >&2
 
 echo ""
 echo "==> Deployed DEVELOPING code and VERIFIED ($MODE mode):"
