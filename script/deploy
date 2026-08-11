@@ -172,6 +172,10 @@ tree_md5_host() { ( cd "$1" && find . -path './web_client/node_modules' -prune -
 tree_md5_ctr()  { docker exec "$GIRDER" bash -lc "cd '$1' && find . -type f -name '*.py' | LC_ALL=C sort | xargs md5sum | md5sum | cut -d' ' -f1"; }
 
 echo "==> [1/6] backend: mount $GIRDER_WT ($GIRDER_SHORT) at /opt/girder_volview + recreate girder"
+# A build/ left by an earlier branch would make provisioning's `pip install .`
+# ship modules this checkout deleted, and the install would report success.
+# Stage 6 catches that, but only after a full reprovision has been spent.
+"$SCRIPT_DIR/clean-build-tree" "$GIRDER_WT"
 # Start whatever infra is down WITHOUT recreating running containers, then recreate
 # girder exactly once so provision reinstalls the (possibly edited) worktree backend
 # — the install is non-editable, so a plain `up` would keep serving stale python.
