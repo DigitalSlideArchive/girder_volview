@@ -33,6 +33,7 @@ from girder_jobs.models import job as girder_job
 from ..utils import (
     _toIso,
     makeFileDownloadUrl,
+    isJobOutputFolderMarked,
     JOB_OUTPUT_FOLDER_META_KEY,
     TRANSIENT_STAGED_META_KEY,
 )
@@ -233,94 +234,265 @@ def getTaskSpec(self, folder, taskId):
 # submission (409) instead.
 JOBS_CONTAINER_NAME = "volview-jobs"
 
+# The launch folder's own authoritative pointer to its container, stamped by
+# whichever concurrent caller wins the atomic election below. A plain name
+# lookup cannot serve this role: Girder's folder-uniqueness check is
+# application-level (``Folder.validate`` does a check-then-act ``findOne``,
+# and the backing index -- see ``Folder.initialize`` -- is not declared
+# unique), so concurrent ``createFolder`` calls for the SAME name can all
+# succeed with no ``ValidationException`` at all. Electing a winner by racing
+# a single atomic ``find_one_and_update`` against one document (the launch
+# folder) is what actually serializes concurrent callers; name uniqueness
+# cannot.
+_JOBS_CONTAINER_ID_META_KEY = "volviewJobsContainerId"
 
-def _jobsContainerFolder(launchFolder, user):
-    """Create-or-reuse the launch folder's server-owned ``volview-jobs`` container.
+# Bounds the election loop below. Every iteration either returns or makes
+# irreversible progress (heals a stale pointer, or loses a creation race and
+# deletes its own orphaned attempt), so real contention resolves in at most
+# two or three passes; this is a defensive ceiling against a pathological
+# repeated-contention run, not an expected trip count.
+_JOBS_CONTAINER_ELECTION_ATTEMPTS = 10
 
-    Reuse requires the ``volviewJobOutputFolder`` marker, the server-owned
-    identity stamped at creation -- the reserved name alone is not enough:
+# Creating a container is 3 separate writes (create, ACL replace, marker
+# stamp), so a colliding concurrent creator can observe it mid-flight --
+# named, but not yet marked. Dedup is the atomic election above, which never
+# waits; this bounded grace period answers only the narrower "is the collision
+# one of ours, still finishing its own stamp" question, which reads wrong if
+# asked one write too early. Polled finely so the common case exits in tens of
+# milliseconds, over a total budget wide enough that a loaded server still
+# finishing those writes is never mistaken for a user's folder.
+_COLLISION_MARK_GRACE_ATTEMPTS = 50
+_COLLISION_MARK_GRACE_INTERVAL = 0.02
 
-    * Why a marker: adopting a user's pre-existing folder that merely shares
-      the reserved name would silently hide its contents from launch
-      manifests and turn the container-delete gesture into "delete unrelated
-      user data". An unmarked name collision refuses the submission with a
-      409 instead of being adopted.
-    * Why the marker can be trusted: it is stamped ONLY on a folder this call
-      itself created. ``createFolder`` never reuses an existing folder (a
-      name collision raises ``ValidationException``), so a folder someone
-      else made in the check-create window re-runs the marker check instead
-      of being adopted.
-    * Grace period: create and stamp are two separate writes, so an unmarked
-      collision gets a short grace period -- room for a concurrent
-      submission's own container to land between its create and its stamp --
-      before the 409 fires.
-    * Failed stamp: if the stamp write fails, the just-created folder is
-      removed rather than left behind unmarked, which would 409 every future
-      submission.
-    * ACL: after creation, the container's ACL is replaced with the launch
-      folder's exact user and group policy. This removes the implicit ADMIN
-      grant ``createFolder`` gives its creator while retaining collaborators'
-      inherited access. Each per-job folder inside keeps its own
-      submitter-only ACL.
-    """
+# How many election passes may end in an unmarked same-name collision before it
+# is reported as a user's folder. A grace period is a timing guess, while the
+# election's own fast path is where a slow race-mate's container actually lands,
+# so one expiry is not a verdict -- only a collision that survives a re-run is.
+_UNMARKED_COLLISION_ATTEMPTS = 2
 
-    def findContainer():
-        return Folder().findOne(
+
+def _validRecordedContainer(containerId, launchFolder):
+    """The recorded container if it is still a live, correctly-parented,
+    marked jobs container for ``launchFolder``; ``None`` if the record is
+    stale (folder removed, reparented, or its marker stripped)."""
+    if not containerId:
+        return None
+    try:
+        candidate = Folder().load(containerId, force=True, exc=False)
+    except Exception:
+        return None
+    if not isinstance(candidate, dict):
+        return None
+    if str(candidate.get("parentId")) != str(launchFolder["_id"]):
+        return None
+    if candidate.get("parentCollection") != "folder":
+        return None
+    if not isJobOutputFolderMarked(candidate):
+        return None
+    return candidate
+
+
+def _claimJobsContainerId(launchFolder, containerId):
+    """Atomically record ``containerId`` as the launch folder's container,
+    ONLY if nothing is recorded yet. Returns whether this call won."""
+    return (
+        Folder().collection.find_one_and_update(
+            {
+                "_id": launchFolder["_id"],
+                "meta.%s" % _JOBS_CONTAINER_ID_META_KEY: {"$exists": False},
+            },
+            {"$set": {"meta.%s" % _JOBS_CONTAINER_ID_META_KEY: str(containerId)}},
+        )
+        is not None
+    )
+
+
+def _awaitCollisionMarked(launchFolder):
+    """The reserved-name folder colliding with a lost ``createFolder`` call,
+    once (and if) it is MARKED, within a short grace period. Returns the
+    last-observed folder doc if it is still unmarked once the grace period
+    elapses; ``None`` only if it vanished (removed by someone). Never itself
+    concludes 409 -- see the caller."""
+    colliding = None
+    for _ in range(_COLLISION_MARK_GRACE_ATTEMPTS):
+        colliding = Folder().findOne(
             {
                 "parentId": launchFolder["_id"],
                 "parentCollection": "folder",
                 "name": JOBS_CONTAINER_NAME,
             }
         )
+        if colliding is None or isJobOutputFolderMarked(colliding):
+            return colliding
+        time.sleep(_COLLISION_MARK_GRACE_INTERVAL)
+    return colliding
 
-    def isMarked(folderDoc):
-        return bool((folderDoc.get("meta") or {}).get(JOB_OUTPUT_FOLDER_META_KEY))
 
-    def awaitMarkedContainer():
-        """The existing marked container, ``None`` when absent, or a 409 for an
-        unmarked collision that outlasts the create->stamp grace period."""
-        for _ in range(10):
-            existing = findContainer()
-            if existing is None or isMarked(existing):
-                return existing
-            time.sleep(0.05)
-        raise RestException(
-            "A folder named '%s' already exists here and is not a processing "
-            "jobs container; rename or remove it to run processing tasks"
-            % JOBS_CONTAINER_NAME,
-            code=409,
-        )
+def _launchFolderRemovedError():
+    """Every later election step needs a live parent to create or record
+    against, so losing one mid-flight is a 409 wherever it is noticed."""
+    return RestException(
+        "The launch folder was removed while its processing jobs "
+        "container was being established",
+        code=409,
+    )
 
-    container = awaitMarkedContainer()
-    if container is not None:
-        return container
-    try:
-        created = Folder().createFolder(
-            parent=launchFolder,
-            name=JOBS_CONTAINER_NAME,
-            parentType="folder",
-            creator=user,
-            public=False,
-        )
-    except ValidationException:
-        # Lost a creation race: a same-named sibling appeared between the check
-        # and the create. Re-run the marker check -- a concurrent submission's
-        # container is reused; a user's folder 409s (never adopted).
-        container = awaitMarkedContainer()
-        if container is None:
+
+def _reloadLaunchFolder(launchFolderId):
+    """The launch folder's current doc, or a 409 if it was removed."""
+    folder = Folder().load(launchFolderId, force=True)
+    if folder is None:
+        raise _launchFolderRemovedError()
+    return folder
+
+
+def _jobsContainerFolder(launchFolder, user):
+    """Create-or-reuse the launch folder's server-owned ``volview-jobs`` container.
+
+    Optimistically create, atomically record, losers self-delete:
+
+    1. Fast path: if the launch folder already records a container id (a meta
+       key on the LAUNCH folder, not the container), load and validate it
+       (exists, correctly parented, marked). If valid, adopt it -- no write.
+    2. Otherwise create a candidate container (``createFolder`` + ACL replace
+       + the ``volviewJobOutputFolder`` marker other code reads), then race a
+       single atomic ``find_one_and_update`` to record it on the launch
+       folder, guarded on nothing being recorded yet.
+    3. Losing that race normally means a concurrent caller's candidate was
+       recorded first: this call's own candidate was never returned to anyone,
+       so it is deleted, and the (now-recorded) winner is adopted. The one
+       exception is a win by proxy: an adopter (step 2's collision path) can
+       find THIS call's candidate already marked and record it before this
+       call's own claim runs. A failed claim therefore only licenses deletion
+       after re-reading the pointer and confirming the recorded winner is a
+       DIFFERENT folder -- a recorded winner that IS this candidate is
+       returned, never deleted (the adopter already returned it to its
+       caller).
+    4. A stale record -- the container was removed or reparented out from
+       under it after being recorded -- is healed by clearing the pointer,
+       guarded on the exact stale value so a concurrent healer/re-recorder is
+       never clobbered, and the election re-runs.
+
+    Reuse requires the ``volviewJobOutputFolder`` marker; the reserved name
+    alone is not enough:
+
+    * Why a marker: adopting a user's pre-existing folder that merely shares
+      the reserved name would silently hide its contents from launch
+      manifests and turn the container-delete gesture into "delete unrelated
+      user data". An unmarked name collision refuses the submission with a
+      409 instead of being adopted.
+    * A same-named collision at ``createFolder`` time (``ValidationException``)
+      is therefore never itself a race signal (concurrent callers routinely
+      clear ``createFolder`` with no exception at all -- see the module note
+      above); it means SOMETHING not already known to this call already holds
+      the name. If that something is marked, it is either a race-mate that
+      already won the election or an orphan left by a process that created
+      and marked a container but crashed before recording it -- either way it
+      is adopted by (trying to) record it. If it is unmarked, a short grace
+      period (:data:`_COLLISION_MARK_GRACE_ATTEMPTS`) gives a race-mate whose
+      ``createFolder`` landed first, but whose ACL replace/marker stamp
+      hasn't yet, a chance to finish becoming marked; still unmarked after
+      that is refused (409), never adopted. This is the one remaining wait in
+      the function -- not a substitute for the atomic election, which never
+      waits on anything, but a concession to container creation itself being
+      3 separate writes.
+    * ACL: after creation, the container's ACL is replaced with the launch
+      folder's exact user and group policy. This removes the implicit ADMIN
+      grant ``createFolder`` gives its creator while retaining collaborators'
+      inherited access. Each per-job folder inside keeps its own
+      submitter-only ACL.
+    * Failed stamp: if the ACL replace or marker stamp raises, the
+      just-created folder is removed rather than left behind unmarked (which
+      would permanently 409 every future submission via the collision path
+      above -- nothing else knows to adopt an unmarked folder).
+    """
+    launchFolderId = launchFolder["_id"]
+    unmarkedCollisions = 0
+    for _ in range(_JOBS_CONTAINER_ELECTION_ATTEMPTS):
+        recordedId = (launchFolder.get("meta") or {}).get(_JOBS_CONTAINER_ID_META_KEY)
+        if recordedId:
+            container = _validRecordedContainer(recordedId, launchFolder)
+            if container is not None:
+                return container
+            Folder().collection.find_one_and_update(
+                {
+                    "_id": launchFolderId,
+                    "meta.%s" % _JOBS_CONTAINER_ID_META_KEY: recordedId,
+                },
+                {"$unset": {"meta.%s" % _JOBS_CONTAINER_ID_META_KEY: ""}},
+            )
+            launchFolder = _reloadLaunchFolder(launchFolderId)
+            continue
+
+        try:
+            created = Folder().createFolder(
+                parent=launchFolder,
+                name=JOBS_CONTAINER_NAME,
+                parentType="folder",
+                creator=user,
+                public=False,
+            )
+        except ValidationException:
+            colliding = _awaitCollisionMarked(launchFolder)
+            if colliding is None:
+                # The colliding folder vanished (removed by someone else) --
+                # try the whole election again.
+                launchFolder = _reloadLaunchFolder(launchFolderId)
+                continue
+            if not isJobOutputFolderMarked(colliding):
+                unmarkedCollisions += 1
+                if unmarkedCollisions < _UNMARKED_COLLISION_ATTEMPTS:
+                    # Re-run instead: the next pass reads the recorded pointer
+                    # first, which is where a race-mate slower than the grace
+                    # period lands its container.
+                    launchFolder = _reloadLaunchFolder(launchFolderId)
+                    continue
+                raise RestException(
+                    "A folder named '%s' already exists here and is not a "
+                    "processing jobs container; rename or remove it to run "
+                    "processing tasks" % JOBS_CONTAINER_NAME,
+                    code=409,
+                ) from None
+            if _claimJobsContainerId(launchFolder, colliding["_id"]):
+                return colliding
+            launchFolder = _reloadLaunchFolder(launchFolderId)
+            continue
+
+        try:
+            created = Folder().setAccessList(
+                created,
+                launchFolder.get("access", {"users": [], "groups": []}),
+                save=True,
+                force=True,
+            )
+            created = Folder().setMetadata(created, {JOB_OUTPUT_FOLDER_META_KEY: True})
+        except Exception:
+            Folder().remove(created)
             raise
-        return container
-    try:
-        created = Folder().setAccessList(
-            created,
-            launchFolder.get("access", {"users": [], "groups": []}),
-            save=True,
-            force=True,
+
+        if _claimJobsContainerId(launchFolder, created["_id"]):
+            return created
+        # A failed claim does not mean this candidate lost: an adopter that
+        # lost ``createFolder`` to it can find it already marked and record it
+        # before this claim runs (a win by proxy), and by then the adopter has
+        # returned it to its own caller. Only a recorded winner that is a
+        # DIFFERENT folder makes this candidate unreferenced and safe to
+        # delete.
+        launchFolder = Folder().load(launchFolderId, force=True)
+        recordedId = ((launchFolder or {}).get("meta") or {}).get(
+            _JOBS_CONTAINER_ID_META_KEY
         )
-        return Folder().setMetadata(created, {JOB_OUTPUT_FOLDER_META_KEY: True})
-    except Exception:
+        if recordedId == str(created["_id"]):
+            return created
         Folder().remove(created)
-        raise
+        if launchFolder is None:
+            raise _launchFolderRemovedError()
+
+    raise RestException(
+        "Could not establish this launch folder's processing jobs container "
+        "after repeated contention; try again",
+        code=500,
+    )
 
 
 def _createJobOutputFolder(launchFolder, user, submissionId):
