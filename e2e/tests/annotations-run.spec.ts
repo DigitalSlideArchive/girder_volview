@@ -15,12 +15,12 @@ import {
   paintStrokes,
   readRulerMeasurements,
   readSegmentGroupNames,
-  rectangleMeasurementRows,
   rulerMeasurementRows,
 } from '../helpers/annotations';
 
-// RulerToRectangle proves annotation input/output by returning one rectangle
-// per ruler without echoing the additive source annotations.
+// RegionOfInterestRulers proves annotation input/output: it measures each
+// painted segment group and returns only the rulers it generated, never
+// echoing the source annotations it was given.
 
 async function launchChecked(driver: Page, g: Girder): Promise<Page> {
   await gotoFolder(driver, g.folderId);
@@ -31,21 +31,23 @@ async function launchChecked(driver: Page, g: Girder): Promise<Page> {
 }
 
 test.describe('vector annotations through a job', () => {
-  test('stages a placed ruler and applies the derived rectangle', async ({
+  test('stages a placed ruler as the annotations input and applies the generated rulers', async ({
     page,
     context,
   }, info) => {
     const g = await setupFixture(context, 'jobs-annotations');
     const view = await launchChecked(page, g);
 
-    // Nothing derived yet: the rectangle row below can only come from the job.
-    await expect(await rectangleMeasurementRows(view)).toHaveCount(0);
+    // The measured region the job reports on.
+    await paintStrokes(view);
+    expect(await readSegmentGroupNames(view)).not.toEqual([]);
 
-    // A diagonal gives the native rectangle nonzero extent on both image axes.
+    // A diagonal ruler, carrying a name that does not parse as a generated
+    // "<segment> LD"/"SD" label, so it never suppresses a measurement.
     await placeRuler(view, [-40, -25], [40, 25]);
     expect((await readRulerMeasurements(view)).length, 'the ruler was not placed').toBe(1);
 
-    await selectTask(view, 'RulerToRectangle');
+    await selectTask(view, 'RegionOfInterestRulers');
     await waitForInputBound(view);
     // The annotations input binds to every finished tool on the active image —
     // no picker, and the count is what identifies the bound value.
@@ -60,39 +62,36 @@ test.describe('vector annotations through a job', () => {
     await submitTaskFromForm(view);
     await waitForJobComplete(view);
 
-    // COUNT, not content: the rectangle is derived from a canvas gesture.
+    // The long- and short-axis rulers land alongside the source ruler: the
+    // result is additive, so the staged annotation is not echoed back.
     await expect(
-      await rectangleMeasurementRows(view),
-      'the annotations result did not add a rectangle to the image'
-    ).toHaveCount(1, { timeout: 30_000 });
-    expect(
-      (await readRulerMeasurements(view)).length,
-      'applying the annotations result duplicated the source ruler'
-    ).toBe(1);
+      await rulerMeasurementRows(view),
+      'the annotations result did not add the generated rulers to the image'
+    ).toHaveCount(3, { timeout: 30_000 });
     await shot(view, info, 'annotations-live-apply');
   });
 
-  test('blocks submission until an annotation is placed', async ({ page, context }) => {
+  test('blocks submission until a segment group is painted', async ({ page, context }) => {
     const g = await setupFixture(context, 'jobs-annotations-blocked');
     const view = await launchChecked(page, g);
 
-    await selectTask(view, 'RulerToRectangle');
-    // The image input still binds to the active dataset; only the annotations
+    await selectTask(view, 'RegionOfInterestRulers');
+    // The image input still binds to the active dataset; only the label map
     // input is unsatisfiable, and it fails closed rather than staging nothing.
     await waitForInputBound(view);
 
     const panel = view.locator('.jobs-module');
     const submit = panel.getByRole('button', { name: 'Submit', exact: true });
     await expect(
-      panel.getByText('Place a ruler, rectangle, or polygon on the current image first.').first(),
-      'no unbound-annotations message in the form'
+      panel.getByText('Paint a segment group on the active dataset first.').first(),
+      'no unbound-labelmap message in the form'
     ).toBeVisible();
-    await expect(submit, 'Submit was enabled with no annotations placed').toBeDisabled();
+    await expect(submit, 'Submit was enabled with no segment group painted').toBeDisabled();
 
-    // Placing one rebinds the form.
-    await placeRuler(view);
+    // Painting one rebinds the form.
+    await paintStrokes(view);
     await openModuleTab(view, 'Jobs');
-    await expect(submit, 'placing a ruler did not rebind the annotations input').toBeEnabled();
+    await expect(submit, 'painting a segment group did not rebind the label map input').toBeEnabled();
   });
 
   test('runs an optional annotations input empty and applies generated ROI rulers', async ({
@@ -113,8 +112,10 @@ test.describe('vector annotations through a job', () => {
     await waitForInputBound(view);
     const panel = view.locator('.jobs-module');
     await expect(
-      panel.getByText('Active segment group').first(),
-      'the painted ROI labelmap was not bound'
+      // RegionOfInterestRulers takes multiple label maps, so the widget names
+      // the input plurally rather than as the single active segment group.
+      panel.getByText('Segment groups on active dataset').first(),
+      'the painted ROI labelmaps were not bound'
     ).toBeVisible();
     await expect(panel.getByText('Annotations (optional)').first()).toBeVisible();
     await expect(panel.getByText('Not provided', { exact: true }).first()).toBeVisible();
