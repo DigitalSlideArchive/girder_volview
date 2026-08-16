@@ -80,6 +80,11 @@ _CONFORMANCE_CASES = [
         "AnnotationsMeasure",
         "annotations-measure",
     ),
+    (
+        _CLI_XML_DIR / "labelmap-majority-vote.xml",
+        "LabelmapMajorityVote",
+        "labelmap-majority-vote",
+    ),
 ]
 
 _CASE_IDS = [stem for _, _, stem in _CONFORMANCE_CASES]
@@ -141,6 +146,64 @@ def test_input_image_label_type_accepts_labelmap():
     spec = translate_slicer_xml(_LABELMAP_INPUT_XML, "LabelmapInput")
     source_ref = next(p for p in spec["parameters"] if p["kind"] == "sourceRef")
     assert source_ref["accepts"] == ["labelmap"]
+    assert "multiple" not in source_ref
+
+
+def test_multiple_labelmap_input_preserves_arity():
+    xml = _LABELMAP_INPUT_XML.replace(
+        '<image type="label">', '<image type="label" multiple="true">'
+    )
+    spec = translate_slicer_xml(xml, "MultipleLabelmapInput")
+    source_ref = next(p for p in spec["parameters"] if p["kind"] == "sourceRef")
+    assert source_ref["accepts"] == ["labelmap"]
+    assert source_ref["multiple"] is True
+    _task_spec_validator().validate(spec)
+    assert validate_task_spec(spec) is spec
+
+
+def test_multiple_false_input_omits_multiple_key():
+    xml = _LABELMAP_INPUT_XML.replace(
+        '<image type="label">', '<image type="label" multiple="false">'
+    )
+    spec = translate_slicer_xml(xml, "LabelmapInput")
+    source_ref = next(p for p in spec["parameters"] if p["kind"] == "sourceRef")
+    assert "multiple" not in source_ref
+
+
+def test_multiple_uppercase_true_is_not_treated_as_multiple():
+    # ctk_cli's _parseBool (used by slicer_cli_web at execution) accepts only
+    # 'true'/'True'/'1'; a spec must not advertise plural arity that submit
+    # would then reject, so the parse here must be exactly as strict.
+    xml = _LABELMAP_INPUT_XML.replace(
+        '<image type="label">', '<image type="label" multiple="TRUE">'
+    )
+    spec = translate_slicer_xml(xml, "LabelmapInput")
+    source_ref = next(p for p in spec["parameters"] if p["kind"] == "sourceRef")
+    assert "multiple" not in source_ref
+
+
+_MULTIPLE_ON_SCALAR_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<executable>
+  <title>Multiple On Scalar</title>
+  <description>d</description>
+  <parameters>
+    <label>Params</label>
+    <string multiple="true">
+      <name>label</name>
+      <label>Label</label>
+      <channel>input</channel>
+      <default>x</default>
+    </string>
+  </parameters>
+</executable>
+"""
+
+
+def test_multiple_attribute_on_non_source_ref_param_is_dropped():
+    spec = translate_slicer_xml(_MULTIPLE_ON_SCALAR_XML, "MultipleOnScalar")
+    param = next(p for p in spec["parameters"] if p["id"] == "label")
+    assert param["kind"] == "string"
+    assert "multiple" not in param
 
 
 # A CLI that fetches its own inputs declares ``girderApiUrl``/``girderToken`` as
@@ -508,6 +571,18 @@ def test_annotations_file_input_becomes_a_source_ref(declaration):
     assert validate_task_spec(spec) is spec
 
 
+def test_annotations_file_input_with_multiple_emits_the_flag():
+    xml = _file_param_xml(".annotations.json").replace(
+        "<file ", '<file multiple="true" '
+    )
+    spec = translate_slicer_xml(xml, "FileParam")
+    source_ref = next(p for p in spec["parameters"] if p["kind"] == "sourceRef")
+    assert source_ref["accepts"] == ["annotations"]
+    assert source_ref["multiple"] is True
+    _task_spec_validator().validate(spec)
+    assert validate_task_spec(spec) is spec
+
+
 @pytest.mark.parametrize(
     "declaration",
     [
@@ -583,3 +658,25 @@ def test_declares_annotations_predicate(value, expected):
 
 def test_annotations_extension_is_the_single_marker():
     assert ANNOTATIONS_EXTENSION == ".annotations.json"
+
+
+def test_parameter_field_allowlists_match_the_contract_schema():
+    """The structural validator's per-kind field allowlists are a mirror of the
+    contract, and they fail CLOSED: a field added to the normative schema but
+    not mirrored here would make every spec using it fail validation. Pinning
+    them against the generated schema catches that drift in this conformance
+    layer instead of in production.
+    """
+    schema = contract_loader.load_generated_schema("task-spec")
+    branches = schema["properties"]["parameters"]["items"]["oneOf"]
+
+    expected = {}
+    for branch in branches:
+        properties = branch["properties"]
+        expected[properties["kind"]["const"]] = set(properties)
+
+    assert set(expected) == set(_translator._KIND_PARAM_FIELDS)
+    for kind, fields in expected.items():
+        assert (
+            _translator._COMMON_PARAM_FIELDS | _translator._KIND_PARAM_FIELDS[kind]
+        ) == fields, "allowlist for %r drifted from the contract schema" % kind

@@ -174,6 +174,7 @@ def _parse_param(param_el, section):
         "section": section,
         "required": required,
         "imageType": param_el.get("type"),  # input <image> type -> accepts
+        "multiple": param_el.get("multiple") in ("true", "True", "1"),
         "fileExtensions": param_el.get("fileExtensions"),
         "values": values,
         "default": _parse_default(widget, _first_child(param_el, "default")),
@@ -321,6 +322,24 @@ _PARAMETER_KINDS = frozenset(
     ("int", "float", "string", "bool", "enum", "sourceRef", "bounds")
 )
 
+# The fields each parameter kind may carry, mirroring the contract's own
+# per-kind parameter branches. Structural validation fails CLOSED on anything
+# outside them, so a contract field added upstream and not mirrored here would
+# reject every spec that uses it -- the conformance suite pins these against
+# the generated schema so the drift is caught here instead.
+_COMMON_PARAM_FIELDS = frozenset(
+    ("kind", "id", "title", "help", "section", "order", "widget", "required")
+)
+_KIND_PARAM_FIELDS = {
+    "int": frozenset(("min", "max", "step", "default")),
+    "float": frozenset(("min", "max", "step", "default")),
+    "string": frozenset(("default",)),
+    "bool": frozenset(("default",)),
+    "enum": frozenset(("options", "default")),
+    "sourceRef": frozenset(("accepts", "multiple")),
+    "bounds": frozenset(("default",)),
+}
+
 # A CLI that fetches its own inputs via girder_client declares
 # ``girderApiUrl``/``girderToken`` as ``<string>`` params so ``slicer_cli_web``
 # can inject them at run time (the HistomicsTK ``example-girder-requests``
@@ -430,16 +449,6 @@ def _structural_task_spec_issues(spec):
         issue(["outputs"], "outputs must be an array")
         outputs = []
 
-    common = {"kind", "id", "title", "help", "section", "order", "widget", "required"}
-    kindFields = {
-        "int": {"min", "max", "step", "default"},
-        "float": {"min", "max", "step", "default"},
-        "string": {"default"},
-        "bool": {"default"},
-        "enum": {"options", "default"},
-        "sourceRef": {"accepts"},
-        "bounds": {"default"},
-    }
     for index, parameter in enumerate(parameters):
         path = ["parameters", index]
         if not isinstance(parameter, dict):
@@ -449,7 +458,7 @@ def _structural_task_spec_issues(spec):
         if kind not in _PARAMETER_KINDS:
             issue(path + ["kind"], "unknown parameter kind")
             continue
-        unknown = set(parameter) - common - kindFields[kind]
+        unknown = set(parameter) - _COMMON_PARAM_FIELDS - _KIND_PARAM_FIELDS[kind]
         if unknown:
             issue(path, "unknown parameter fields: %s" % ", ".join(sorted(unknown)))
         if not _is_identifier(parameter.get("id")):
@@ -495,6 +504,8 @@ def _structural_task_spec_issues(spec):
                 or any(not isinstance(value, str) for value in accepts)
             ):
                 issue(path + ["accepts"], "accepts must be a non-empty string array")
+            if "multiple" in parameter and not isinstance(parameter["multiple"], bool):
+                issue(path + ["multiple"], "multiple must be a boolean")
         elif kind == "bounds" and "default" in parameter:
             default = parameter["default"]
             if (
@@ -762,6 +773,13 @@ def _translate_scalar(kind, parsed, base):
     return param
 
 
+def _source_ref_param(base, accepts, parsed):
+    param = {"kind": "sourceRef", **base, "accepts": accepts}
+    if parsed["multiple"]:
+        param["multiple"] = True
+    return param
+
+
 def _translate_param(parsed, order):
     tag = parsed["tag"]
     base = _base_fields(parsed, order)
@@ -771,9 +789,9 @@ def _translate_param(parsed, order):
         if accepts is None:
             # unknown <image> type -> unknown field kind (fail closed).
             return {"kind": parsed["imageType"], **base}
-        return {"kind": "sourceRef", **base, "accepts": accepts}
+        return _source_ref_param(base, accepts, parsed)
     if tag == "file" and declares_annotations(parsed["fileExtensions"]):
-        return {"kind": "sourceRef", **base, "accepts": ["annotations"]}
+        return _source_ref_param(base, ["annotations"], parsed)
     if tag == "region":
         param = {"kind": "bounds", **base}
         bounds_default = _region_default_to_bounds(parsed["default"])
