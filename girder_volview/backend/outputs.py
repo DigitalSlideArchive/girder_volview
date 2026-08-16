@@ -27,7 +27,10 @@ from girder.models.item import Item
 # ``girder_jobs.models.job`` and be seen here.
 from girder_jobs.models import job as girder_job
 
-from ..utils import JOB_OUTPUT_FOLDER_META_KEY, TRANSIENT_STAGED_META_KEY
+from ..utils import (
+    TRANSIENT_STAGED_META_KEY,
+    isJobOutputFolderMarked,
+)
 from .inputs import _removeTransientItems
 
 # Backend-owned job fields (otherFields, not a schema change). The id map is
@@ -233,7 +236,7 @@ def _cascadeDeleteFolderOwnedJob(event):
     folder = getattr(event, "info", None)
     if not isinstance(folder, dict):
         return
-    if not (folder.get("meta") or {}).get(JOB_OUTPUT_FOLDER_META_KEY):
+    if not isJobOutputFolderMarked(folder):
         return
     folderId = folder.get("_id")
     if folderId is None or str(folderId) in _CASCADING_FOLDER_IDS:

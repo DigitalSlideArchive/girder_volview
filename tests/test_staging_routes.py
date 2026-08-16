@@ -730,3 +730,68 @@ def test_staged_annotations_copied_per_job_and_deleted_at_terminal(
 
     assert Item().load(copies[0], force=True) is None
     assert Item().load(stagedItem["_id"], force=True) is not None
+
+
+# --------------------------------------------------------------------------
+# Concurrent staging: create-or-adopt race
+# --------------------------------------------------------------------------
+# Plural labelmap staging fans N concurrent ``/stage`` calls into ONE
+# submission's jobs container, so every call reaches
+# ``routes._jobsContainerFolder``'s create-or-adopt election at nearly the same
+# instant. ``test_folder_delete_cascade.py``'s
+# ``test_jobsContainerFolder_concurrent_calls_converge_on_one_container`` pins
+# that election at the helper level; this drives the full ``/stage`` handler,
+# where a second container would also scatter the staged files across the two.
+
+
+@pytest.mark.plugin("volview")
+def test_concurrent_stage_calls_land_in_one_container(server, owner, ownerFolder):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from girder.models.folder import Folder
+
+    reference = _durable_reference(ownerFolder, owner)
+    resolved_reference = makeFileDownloadUrl(reference)
+    concurrency = 8
+    start = threading.Barrier(concurrency)
+
+    def stageOne(i):
+        name = "seg-%d.seg.nrrd" % i
+        descriptor = {
+            "type": "labelmap",
+            "name": name,
+            "referenceImage": {"type": "image", "uris": [resolved_reference]},
+        }
+        body, content_type = _multipart_stage_body(
+            b"labelmap-bytes-%d" % i, name, descriptor
+        )
+        start.wait()
+        return server.request(
+            path=STAGE_PATH % ownerFolder["_id"],
+            method="POST",
+            user=owner,
+            body=body,
+            type=content_type,
+            isJson=True,
+            exception=True,
+        )
+
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        responses = list(pool.map(stageOne, range(concurrency)))
+
+    for resp in responses:
+        assert resp.output_status.startswith(b"200")
+
+    containers = list(
+        Folder().find(
+            {
+                "parentId": ownerFolder["_id"],
+                "parentCollection": "folder",
+                "name": routes.JOBS_CONTAINER_NAME,
+            }
+        )
+    )
+    assert len(containers) == 1
+    names = sorted(item["name"] for item in Folder().childItems(containers[0]))
+    assert names == sorted("seg-%d.seg.nrrd" % i for i in range(concurrency))

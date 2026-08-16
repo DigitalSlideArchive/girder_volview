@@ -374,44 +374,212 @@ def test_marked_container_is_reused(server, owner, launchFolder):
 
 @pytest.mark.plugin("volview")
 def test_container_create_race_does_not_adopt(server, owner, launchFolder, monkeypatch):
-    """A user folder that appears BETWEEN the pre-check and the create must not
-    be adopted (marker-stamped): the lost creation race re-runs the marker
-    check and 409s. Simulated by blinding the first pre-check ``findOne``."""
+    """A genuinely unmarked folder that lands in the window between the
+    election's (in-memory, DB-free) fast-path check and its own
+    ``createFolder`` call must not be adopted: the resulting
+    ``ValidationException`` still refuses (409) rather than mistaking an
+    unmarked collision for a race-mate. Simulated by sneaking a real,
+    unmarked, same-named user folder in immediately before the election's own
+    ``createFolder`` call actually runs -- the analogous race for the new
+    atomic-election design, in which there is no longer a separate DB lookup
+    upstream of ``createFolder`` to blind."""
     from girder.exceptions import RestException
     from girder.models.folder import Folder
     from girder.models.item import Item
 
-    userFolder = Folder().createFolder(
+    realCreateFolder = Folder.createFolder
+    snuck = {"itemId": None}
+
+    def sneakInAUserFolder(self, parent, name, **kwargs):
+        if snuck["itemId"] is None and name == routes.JOBS_CONTAINER_NAME:
+            userFolder = realCreateFolder(
+                self, parent, name, parentType="folder", creator=owner, public=False
+            )
+            snuck["itemId"] = Item().createItem("precious.nrrd", owner, userFolder)[
+                "_id"
+            ]
+        return realCreateFolder(self, parent, name, **kwargs)
+
+    monkeypatch.setattr(Folder, "createFolder", sneakInAUserFolder)
+
+    with pytest.raises(RestException) as excinfo:
+        routes._createJobOutputFolder(launchFolder, owner, uuid.uuid4().hex)
+    assert excinfo.value.code == 409
+    assert snuck["itemId"] is not None
+
+    userFolder = Folder().findOne(
+        {
+            "parentId": launchFolder["_id"],
+            "parentCollection": "folder",
+            "name": routes.JOBS_CONTAINER_NAME,
+        }
+    )
+    assert userFolder is not None
+    assert not (userFolder.get("meta") or {}).get(JOB_OUTPUT_FOLDER_META_KEY)
+    assert _itemExists(snuck["itemId"])
+
+
+@pytest.mark.plugin("volview")
+def test_marked_orphan_container_with_no_recorded_pointer_is_adopted(
+    server, owner, launchFolder
+):
+    """A crash between creating+marking a container and recording it on the
+    launch folder leaves a real, marked, but unrecorded orphan. The next
+    election must adopt it (record it) rather than 409 -- an unmarked
+    collision refuses, but a MARKED one is always ours to reclaim."""
+    from girder.models.folder import Folder
+
+    orphan = Folder().createFolder(
         launchFolder,
         routes.JOBS_CONTAINER_NAME,
         parentType="folder",
         creator=owner,
         public=False,
     )
-    keepsake = Item().createItem("precious.nrrd", owner, userFolder)
+    orphan = Folder().setMetadata(orphan, {JOB_OUTPUT_FOLDER_META_KEY: True})
+    reloaded = Folder().load(launchFolder["_id"], force=True)
+    assert not (reloaded.get("meta") or {}).get(routes._JOBS_CONTAINER_ID_META_KEY)
 
-    realFindOne = Folder.findOne
-    blinded = {"done": False}
+    adopted = routes._jobsContainerFolder(reloaded, owner)
 
-    def blindFirstContainerLookup(self, query=None, **kwargs):
-        if (
-            not blinded["done"]
-            and isinstance(query, dict)
-            and query.get("name") == routes.JOBS_CONTAINER_NAME
-        ):
-            blinded["done"] = True
-            return None
-        return realFindOne(self, query, **kwargs)
+    assert str(adopted["_id"]) == str(orphan["_id"])
+    stillOnlyOne = list(
+        Folder().find(
+            {
+                "parentId": launchFolder["_id"],
+                "parentCollection": "folder",
+                "name": routes.JOBS_CONTAINER_NAME,
+            }
+        )
+    )
+    assert len(stillOnlyOne) == 1
+    reloaded = Folder().load(launchFolder["_id"], force=True)
+    assert reloaded["meta"][routes._JOBS_CONTAINER_ID_META_KEY] == str(orphan["_id"])
 
-    monkeypatch.setattr(Folder, "findOne", blindFirstContainerLookup)
-    with pytest.raises(RestException) as excinfo:
-        routes._createJobOutputFolder(launchFolder, owner, uuid.uuid4().hex)
-    assert excinfo.value.code == 409
-    assert blinded["done"]
 
-    reloaded = Folder().load(userFolder["_id"], force=True)
-    assert not (reloaded.get("meta") or {}).get(JOB_OUTPUT_FOLDER_META_KEY)
-    assert _itemExists(keepsake["_id"])
+@pytest.mark.plugin("volview")
+def test_creator_keeps_candidate_adopted_by_a_race_mate(
+    server, owner, launchFolder, monkeypatch
+):
+    """A race-mate that loses ``createFolder`` can find the creator's candidate
+    already MARKED and record it before the creator's own claim runs -- a win
+    by proxy. The creator's failed claim must then RETURN its candidate, never
+    delete it: the race-mate has already returned that exact folder to its own
+    caller. Simulated deterministically by running a full adopting election
+    inside the window between the creator's marker stamp and its claim."""
+    from girder.models.folder import Folder
+
+    realSetMetadata = Folder.setMetadata
+    adopted = {}
+
+    def adoptBeforeCreatorClaims(self, folder, metadata, **kwargs):
+        marked = realSetMetadata(self, folder, metadata, **kwargs)
+        if metadata.get(JOB_OUTPUT_FOLDER_META_KEY) and not adopted:
+            adopted["container"] = routes._jobsContainerFolder(
+                Folder().load(launchFolder["_id"], force=True), owner
+            )
+        return marked
+
+    monkeypatch.setattr(Folder, "setMetadata", adoptBeforeCreatorClaims)
+
+    creatorContainer = routes._jobsContainerFolder(launchFolder, owner)
+
+    assert adopted, "the adopting election must run inside the mark->claim window"
+    assert str(creatorContainer["_id"]) == str(adopted["container"]["_id"])
+    assert Folder().load(creatorContainer["_id"], force=True) is not None
+    containers = list(
+        Folder().find(
+            {
+                "parentId": launchFolder["_id"],
+                "parentCollection": "folder",
+                "name": routes.JOBS_CONTAINER_NAME,
+            }
+        )
+    )
+    assert len(containers) == 1
+    reloaded = Folder().load(launchFolder["_id"], force=True)
+    assert reloaded["meta"][routes._JOBS_CONTAINER_ID_META_KEY] == str(
+        creatorContainer["_id"]
+    )
+
+
+@pytest.mark.plugin("volview")
+def test_stale_recorded_pointer_is_healed(server, owner, launchFolder):
+    """If the recorded container is later removed out from under the launch
+    folder's pointer (the record goes stale), the next election heals the
+    pointer and creates a fresh container rather than erroring forever."""
+    from girder.models.folder import Folder
+
+    first = routes._jobsContainerFolder(launchFolder, owner)
+    launchFolder = Folder().load(launchFolder["_id"], force=True)
+    assert launchFolder["meta"][routes._JOBS_CONTAINER_ID_META_KEY] == str(
+        first["_id"]
+    )
+
+    Folder().remove(first)
+
+    second = routes._jobsContainerFolder(launchFolder, owner)
+    assert str(second["_id"]) != str(first["_id"])
+    reloaded = Folder().load(launchFolder["_id"], force=True)
+    assert reloaded["meta"][routes._JOBS_CONTAINER_ID_META_KEY] == str(second["_id"])
+
+
+@pytest.mark.plugin("volview")
+def test_jobsContainerFolder_concurrent_calls_converge_on_one_container(server, owner):
+    """Concurrent callers of the create-or-adopt election must converge on
+    exactly one container: plural labelmap staging fans N concurrent ``/stage``
+    calls into ONE submission's jobs container, so every call reaches
+    ``_jobsContainerFolder`` at nearly the same instant.
+
+    Exercises the helper directly rather than the full stage handler: it takes
+    plain Folder/User documents and talks to Mongo directly (thread-safe
+    pymongo), so it is the precise unit that owns the race -- the REST layer
+    around it (current user, multipart parsing) is orthogonal. A ``Barrier``
+    holds every thread at the starting line so the create/record window is
+    maximally contended. Each round needs a FRESH launch folder, since a
+    container recorded by a prior round would let later rounds win on the
+    read-only fast path without exercising the create/record race at all;
+    several rounds run because a single election can converge by luck.
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from girder.models.folder import Folder
+
+    concurrency = 8
+    rounds = 3
+
+    for roundIndex in range(rounds):
+        roundFolder = Folder().createFolder(
+            owner,
+            "launch-race-%d" % roundIndex,
+            parentType="user",
+            creator=owner,
+            public=False,
+        )
+        start = threading.Barrier(concurrency)
+
+        def race(_i, folder=roundFolder, barrier=start):
+            barrier.wait()
+            return routes._jobsContainerFolder(folder, owner)
+
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            results = list(pool.map(race, range(concurrency)))
+
+        ids = {str(result["_id"]) for result in results}
+        assert len(ids) == 1, "every concurrent call must return the SAME container"
+
+        containers = list(
+            Folder().find(
+                {
+                    "parentId": roundFolder["_id"],
+                    "parentCollection": "folder",
+                    "name": routes.JOBS_CONTAINER_NAME,
+                }
+            )
+        )
+        assert len(containers) == 1
+        assert str(containers[0]["_id"]) == ids.pop()
 
 
 @pytest.fixture

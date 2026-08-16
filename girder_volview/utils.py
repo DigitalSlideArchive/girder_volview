@@ -31,6 +31,17 @@ JOB_OUTPUT_FOLDER_META_KEY = "volviewJobOutputFolder"
 TRANSIENT_STAGED_META_KEY = "volviewTransient"
 
 
+def isJobOutputFolderMarked(folder):
+    """Whether a folder doc itself carries the job-output-folder marker.
+
+    The ONE definition of "this folder is a job's private output folder",
+    shared by every marker check (route collision handling, the delete-cascade
+    guard in ``backend.outputs``, and ``isJobOutputFolderItem`` below).
+    ``None``/marker-less folders are not marked.
+    """
+    return bool((folder or {}).get("meta", {}).get(JOB_OUTPUT_FOLDER_META_KEY))
+
+
 def _promoteFilterToList(value):
     """Normalize dict-or-list filter input to a list of dicts.
     Returns None for non-conforming values.
@@ -267,7 +278,7 @@ def isJobOutputFolderItem(item, folderCache=None):
     """
     folderId = item.get("folderId") if isinstance(item, dict) else None
     folder = _loadFolderCached(folderId, folderCache)
-    return bool((folder or {}).get("meta", {}).get(JOB_OUTPUT_FOLDER_META_KEY))
+    return isJobOutputFolderMarked(folder)
 
 
 def isTransientStagedItem(item):
