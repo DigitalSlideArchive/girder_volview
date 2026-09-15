@@ -53,7 +53,7 @@ LARGE_IMAGE_CONFIG_FOLDER = "large_image.config_folder"
 
 BASE_CONFIG = {
     "io": {
-        "segmentGroupExtension": "seg",
+        "segmentationExtension": "seg",
         "segmentGroupSaveFormat": "nii.gz",
         "layerExtension": "layer",
     },
@@ -359,6 +359,25 @@ def downloadResourceManifest(self, folder, folders, items, filters):
     return filesToManifest(files, folder["_id"])
 
 
+def _normalizeSegmentationConfig(config):
+    """Canonicalize each IO override before defaults and inherited values merge."""
+    io = config.get("io")
+    if not isinstance(io, dict) or "segmentGroupExtension" not in io:
+        return config
+    extension = io["segmentGroupExtension"]
+    if not isinstance(extension, str):
+        raise RestException("io.segmentGroupExtension must be a string.")
+    if "segmentationExtension" in io and io["segmentationExtension"] != extension:
+        raise RestException(
+            "io.segmentGroupExtension conflicts with io.segmentationExtension. "
+            "Use only io.segmentationExtension."
+        )
+    migrated = {
+        key: value for key, value in io.items() if key != "segmentGroupExtension"
+    }
+    return {**config, "io": {**migrated, "segmentationExtension": extension}}
+
+
 def _mergeDictionaries(a, b):
     """
     Merge two dictionaries recursively.  If the second dictionary (or any
@@ -370,6 +389,8 @@ def _mergeDictionaries(a, b):
     :param b: the second dictionary that gets added to the first.
     :returns: the modified first dictionary.
     """
+    a.update(_normalizeSegmentationConfig(a))
+    b = _normalizeSegmentationConfig(b)
     if b.get("__all__") is True:
         a.clear()
     for key in b:

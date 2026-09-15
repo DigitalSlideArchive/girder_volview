@@ -219,16 +219,16 @@ shortcuts:
 
 In VolView, show a dialog with the configured keyboard shortcuts by pressing the `?` key.
 
-## Saved Segment Group File Format
+## Saved Session Mask File Format
 
-Edited segment groups are saved as separate files within session.volview.zip files.  By default the segment group file format is `nii.gz`.
+Edited segmentations are saved as separate files within session.volview.zip files.  By default the mask file format is `nii.gz`.
 
 ```yml
 io:
   segmentGroupSaveFormat: "nii.gz" # default is nii.gz
 ```
 
-## Automatic Layers and Segment Groups by File Name
+## Automatic Layers and Segmentations by File Name
 
 When loading multiple image files, VolView can automatically associate related images based on file naming patterns.
 For non-DICOM base images, the matching rule is based on the base filename prefix.
@@ -238,18 +238,40 @@ and the filename must start with the same prefix as the base image (everything b
 For example, with a base image `patient.nrrd`:
 
 - Layers: `patient.layer.1.pet.nii`, `patient.layer.2.ct.mha`
-- Segment groups: `patient.seg.1.tumor.nii.gz`, `patient.seg.2.lesion.mha`
+- Segmentations: `patient.seg.1.tumor.nii.gz`, `patient.seg.2.lesion.mha`
 
-When multiple layers or segment groups match a base image, they are sorted alphabetically by filename and added in that order.
+When multiple layers or segmentations match a base image, they are sorted alphabetically by filename and added in that order.
 
-### Segment Groups
+### Configuration migration
 
-Use `segmentGroupExtension` to automatically convert matching non-DICOM images to segment groups.
-For example, `myFile.seg.nrrd` becomes a segment group for `myFile.nii`. Defaults to `"seg"`. To disable set to `""`.
+Use `io.segmentationExtension` in new configuration. The old
+`io.segmentGroupExtension` key is accepted at ingestion and converted to the
+new key. If both keys are present, their values must match; conflicting values
+are rejected. An explicit empty string disables automatic matching.
+
+The value `seg` is the filename marker in `patient.seg.nii.gz`; `nii.gz` is
+its encoding extension. This setting preserves the existing filename matching
+rule and does not add support for additional segmentation formats.
+
+Girder normalizes each configuration fragment before merging defaults, inherited
+folder settings, group settings, and access overrides. Existing overrides retain
+their precedence. Generated configuration contains only the new key.
+
+Deploy a VolView client that accepts `io.segmentationExtension` before updating
+this Girder producer, or deploy both together. Older clients silently ignore the
+new key and will not automatically associate segmentation files. When packaging
+a release, update the `web_client/package.json` VolView dependency to a release
+containing this configuration migration. For local paired-worktree testing,
+`script/deploy` accepts explicit backend and VolView worktree paths.
+
+### Segmentations
+
+Use `segmentationExtension` to automatically convert matching non-DICOM images to segmentations.
+For example, `myFile.seg.nrrd` becomes a segmentation for `myFile.nii`. Defaults to `"seg"`. To disable set to `""`.
 
 ```yml
 io:
-  segmentGroupExtension: "seg" # "seg" is the default
+  segmentationExtension: "seg" # "seg" is the default
 ```
 
 ### Layering

@@ -86,3 +86,42 @@ def test_groups_only_config_is_stripped_for_non_member(server, owner, configFold
     # No membership -> base value stands, and the groups key is still stripped.
     assert config["defaultLayout"] == "axial"
     assert "groups" not in config
+
+
+@pytest.mark.plugin("volview")
+@pytest.mark.parametrize("key", ["segmentationExtension", "segmentGroupExtension"])
+def test_segmentation_config_inheritance_and_access(server, owner, fsAssetstore, key):
+    import yaml
+    from girder.models.folder import Folder
+    from girder.models.upload import Upload
+
+    parent = Folder().createFolder(
+        owner, "segmentation-config", parentType="user", creator=owner
+    )
+    child = Folder().createFolder(parent, "child", creator=owner)
+    for folder, config in [
+        (parent, {"io": {"segmentationExtension": "parent"}}),
+        (
+            child,
+            {
+                "__inherit__": True,
+                "io": {key: "child"},
+                "access": {"user": {"io": {key: ""}}},
+            },
+        ),
+    ]:
+        data = yaml.safe_dump(config).encode()
+        Upload().uploadFromFile(
+            io.BytesIO(data),
+            size=len(data),
+            name=".volview_config.yaml",
+            parentType="folder",
+            parent=folder,
+            user=owner,
+        )
+    config = _get_config(server, child, owner)
+    assert config["io"] == {
+        "segmentationExtension": "",
+        "segmentGroupSaveFormat": "nii.gz",
+        "layerExtension": "layer",
+    }

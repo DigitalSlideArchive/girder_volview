@@ -3,7 +3,7 @@
 VolView can load a base image with two overlay types:
 
 - Layer: scalar image data such as PET, perfusion, probability, or heat maps.
-- Segmentation: integer label maps shown in the Segment Groups panel.
+- Segmentation: integer label maps shown in the Segments section of the Annotation panel.
 
 The overlay must overlap the base image in physical space. VolView resamples it
 into the base image space.
@@ -29,7 +29,7 @@ To change the tokens, put `.volview_config.yaml` at or above the Girder folder:
 
 ```yaml
 io:
-  segmentGroupExtension: "seg"
+  segmentationExtension: "seg"
   layerExtension: "layer"
 ```
 
