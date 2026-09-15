@@ -213,7 +213,7 @@ def _seg_nrrd_header(gc, file_id, tmp_path):
 
 
 def _assert_labelmap_result(gc, folder_id, job_id, final, tmp_path):
-    """Shared assertions: outputs bound + an add-segment-group result resolves,
+    """Shared assertions: outputs bound + an import-segmentation result resolves,
     with the segment names/colors embedded in the `.seg.nrrd`."""
     if final.get("state") != "success":
         job = gc.get("job/%s" % job_id)
@@ -233,8 +233,8 @@ def _assert_labelmap_result(gc, folder_id, job_id, final, tmp_path):
     payload = gc.get("volview_processing/jobs/%s/results" % job_id)
     intents = payload["intents"] if isinstance(payload, dict) else payload
     assert intents, "/results returned no intents for a succeeded job"
-    seg = next((r for r in intents if r.get("intent") == "add-segment-group"), None)
-    assert seg is not None, "no add-segment-group intent in %s" % intents
+    seg = next((r for r in intents if r.get("intent") == "import-segmentation"), None)
+    assert seg is not None, "no import-segmentation intent in %s" % intents
     assert seg.get("source", {}).get("jobId") == job_id
     assert seg.get("source", {}).get("providerId") == (
         "girder-slicer-cli:%s" % folder_id

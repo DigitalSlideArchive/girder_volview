@@ -191,7 +191,7 @@ _HYBRID_RESULTS_PAYLOAD = {
             "size": 12345,
         },
         {
-            "intent": "add-segment-group",
+            "intent": "import-segmentation",
             "url": "/api/v1/file/6600000000000000000000d2/proxiable/s.seg.nrrd",
             "name": "s.seg.nrrd",
             "id": "6600000000000000000000d2",

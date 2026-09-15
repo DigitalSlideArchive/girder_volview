@@ -63,7 +63,7 @@ def test_labelmap_image_maps_to_add_segment_group():
     intent = _intentForOutput(
         _out("image", True), _URL, _NAME, _PROVIDER_ID, _JOB_ID
     )
-    assert intent["intent"] == "add-segment-group"
+    assert intent["intent"] == "import-segmentation"
     assert intent["url"] == _URL and intent["name"] == _NAME
 
 
@@ -72,7 +72,7 @@ def test_labelmap_wins_over_non_image_tag():
     intent = _intentForOutput(
         _out("file", True), _URL, _NAME, _PROVIDER_ID, _JOB_ID
     )
-    assert intent["intent"] == "add-segment-group"
+    assert intent["intent"] == "import-segmentation"
 
 
 def test_plain_image_maps_to_add_base_image():
@@ -198,7 +198,7 @@ def test_labelmap_wins_over_annotations_extension():
         _PROVIDER_ID,
         _JOB_ID,
     )
-    assert intent["intent"] == "add-segment-group"
+    assert intent["intent"] == "import-segmentation"
 
 
 def test_image_output_declaring_annotations_stays_a_base_image():
@@ -289,7 +289,7 @@ def test_base_image_and_ordinary_file_carry_no_source_or_segments():
 # emitted row is a full result-list item the id-required schema accepts.
 _RESULT_ID = "6600000000000000000000ff"
 _EMITTED_CASES = {
-    "add-segment-group.embedded": {
+    "import-segmentation.embedded": {
         **_intentForOutput(
             _out("image", True), _URL, _NAME, _PROVIDER_ID, _JOB_ID
         ),
@@ -351,12 +351,12 @@ def test_unknown_intent_fixture_is_accepted_fail_open():
 
 def test_emitted_add_segment_group_matches_fixture_shape():
     # The backend's emitted labelmap intent has the same key set as the golden
-    # embedded add-segment-group fixture the client validates.
+    # embedded import-segmentation fixture the client validates.
     embedded = _intentForOutput(
         _out("image", True), _URL, _NAME, _PROVIDER_ID, _JOB_ID
     )
     embedded_fixture = contract_loader.load_fixture(
-        "wire/intent.add-segment-group.embedded.json"
+        "wire/intent.import-segmentation.embedded.json"
     )
     # The fixture is a full result-list item (carries `id`); the emitted INTENT
     # never does (the collector adds it), so compare modulo the id key.

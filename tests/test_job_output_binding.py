@@ -523,7 +523,7 @@ def test_collect_labelmap_projects_add_segment_group_with_source(monkeypatch):
 
     results, _ = results_mod._collectJobResults(job, user=None)
 
-    assert results[0]["intent"] == "add-segment-group"
+    assert results[0]["intent"] == "import-segmentation"
     assert results[0]["source"] == {
         "providerId": "girder-slicer-cli:folder-1",
         "jobId": str(job["_id"]),
@@ -534,7 +534,7 @@ def test_collect_labelmap_projects_add_segment_group_with_source(monkeypatch):
 def test_collect_labelmap_carries_no_segments_payload(monkeypatch):
     # A `.seg.nrrd` labelmap embeds its segment names/colors, which the
     # client reads on load. The backend folds no JSON sidecar, so the
-    # add-segment-group intent carries no `segments` payload.
+    # import-segmentation intent carries no `segments` payload.
     _deterministicUrls(monkeypatch)
     fid = ObjectId()
     _installFile(monkeypatch, {str(fid): {"_id": fid, "name": "seg.seg.nrrd"}})
@@ -543,7 +543,7 @@ def test_collect_labelmap_carries_no_segments_payload(monkeypatch):
     results, _ = results_mod._collectJobResults(job, user=None)
 
     assert len(results) == 1
-    assert results[0]["intent"] == "add-segment-group"
+    assert results[0]["intent"] == "import-segmentation"
     assert "segments" not in results[0]
 
 

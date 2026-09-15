@@ -87,7 +87,7 @@ intent from its XML declaration using the rules below.
 | Input     | `<image channel="input" type="label">`                              | Uses the selected segment group's labelmap.                                              |
 | Input     | `<file channel="input" fileExtensions=".annotations.json">`         | Stages every finished ruler, rectangle, and polygon on the selected image as one JSON file. |
 | Output    | `<image channel="output">`; omitted `type` defaults to `scalar`     | `add-base-image`: loads the output as a new base image.                                  |
-| Output    | `<image channel="output" type="label">`                             | `add-segment-group`: adds the output labelmap to the input base image.                   |
+| Output    | `<image channel="output" type="label">`                             | `import-segmentation`: adds the output labelmap to the input base image.                   |
 | Output    | `<file channel="output" fileExtensions=".annotations.json">`        | `add-annotations`: adds the output's rulers, rectangles, and polygons to the input image. |
 | Output    | `<file channel="output">`                                           | No scene intent; downloadable under **Details > Files**.                                 |
 

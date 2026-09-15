@@ -56,12 +56,12 @@ def test_wire_fixtures_load():
 
 def test_add_segment_group_variants_carry_source():
     with_segments = contract_loader.load_fixture(
-        "wire/intent.add-segment-group.with-segments.json"
+        "wire/intent.import-segmentation.with-segments.json"
     )
     embedded = contract_loader.load_fixture(
-        "wire/intent.add-segment-group.embedded.json"
+        "wire/intent.import-segmentation.embedded.json"
     )
-    assert with_segments["intent"] == "add-segment-group"
+    assert with_segments["intent"] == "import-segmentation"
     assert with_segments["segments"]
     assert with_segments["source"] == {
         "providerId": "analysis-provider",
@@ -115,7 +115,7 @@ def test_strict_intent_branch_rejects_wrong_length_color():
     strict = jsonschema.Draft202012Validator(schema["anyOf"][0])
 
     good = contract_loader.load_fixture(
-        "wire/intent.add-segment-group.with-segments.json"
+        "wire/intent.import-segmentation.with-segments.json"
     )
     strict.validate(good)
 

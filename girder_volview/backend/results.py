@@ -228,7 +228,7 @@ def _intentForOutput(out, url, name, providerId, jobId):
         "outputId": out["name"],
     }
     if out.get("isLabel"):
-        return {"intent": "add-segment-group", **fileRef, "source": source}
+        return {"intent": "import-segmentation", **fileRef, "source": source}
     if out.get("tag") == "file" and declares_annotations(out.get("fileExtensions")):
         return {"intent": "add-annotations", **fileRef, "source": source}
     if out.get("tag") == "image":
