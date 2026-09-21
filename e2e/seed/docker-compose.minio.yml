@@ -1,13 +1,12 @@
 # MinIO stands in for S3 so we can exercise Girder's assetstore *import* path
 # rather than plain upload.
 #
-# Bring it up into the EXISTING compose project so it lands on the same network
-# as girder -- otherwise girder cannot resolve the `minio` hostname:
+# script/deploy starts it with the rest of the stack: it is in .env.example's
+# DSA_COMPOSE_FILES. To start it on its own, bring it up into the EXISTING
+# compose project so it lands on the same network as girder -- otherwise girder
+# cannot resolve the `minio` hostname:
 #
-#     docker compose -p dsa-plus --env-file ../../.env -f docker-compose.minio.yml up -d
-#
-# --env-file is required for MINIO_DATA_DIR below to be read: compose looks for
-# .env next to THIS file, never in the working directory.
+#     docker compose -p dsa-plus -f docker-compose.minio.yml up -d
 #
 # Girder reaches it at http://minio:9000 (service name on the compose network).
 # From the host: API on :9000, web console on :9001.
@@ -23,16 +22,17 @@ services:
       - "9000:9000"
       - "9001:9001"
     volumes:
-      # MINIO_DATA_DIR (absolute, from the repo .env) or this file's own
-      # directory. The relative default resolves against WHICHEVER CHECKOUT
-      # started the stack, so bringing it up from a second worktree hands MinIO
-      # an empty data dir while girder still holds every imported file record --
-      # downloads then return 200 with a NoSuchBucket XML body, which VolView
-      # reports as "Not DICOM". Point MINIO_DATA_DIR at the seeded directory to
-      # keep one bucket across worktrees.
-      - ${MINIO_DATA_DIR:-./.minio-data}:/data
+      # A named volume belongs to the compose project, not to whichever checkout
+      # or command started MinIO, so every worktree sees the one seeded bucket
+      # girder's imported file records point into. A bind mount path would
+      # resolve differently per entry point, and an empty bucket serves
+      # NoSuchBucket XML with a 200, which VolView reports as "Not DICOM".
+      - minio-data:/data
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 5s
       timeout: 3s
       retries: 20
+
+volumes:
+  minio-data:
