@@ -27,7 +27,7 @@ import {
   placeRuler,
   readRulerMeasurements,
   paintStrokes,
-  readSegmentGroupNames,
+  readSegmentNames,
   readDatasetNames,
   selectPrimaryVolume,
   addLayer,
@@ -78,7 +78,7 @@ async function saveAndDiffSession(
 type CapturedContent = {
   datasetNames: string[];
   rulers: RulerRecord[];
-  segmentGroupNames: string[];
+  segmentNames: string[];
   petLayer: boolean;
 };
 
@@ -131,12 +131,12 @@ test.describe('compat capture (against main deploy)', () => {
       'single-item',
       fixture.folderId,
       { via: 'item-page', itemId },
-      { datasetNames, rulers, segmentGroupNames: [], petLayer: false },
+      { datasetNames, rulers, segmentNames: [], petLayer: false },
       zip
     );
   });
 
-  test('checked-nrrd: ruler + painted segment group, folder save', async ({ page, request }, info) => {
+  test('checked-nrrd: ruler + painted segment, folder save', async ({ page, request }, info) => {
     const fixture = requireFixture(state, 'checked-nrrd');
     const itemIds = fixture.itemIds;
     await gotoFolder(page, fixture.folderId);
@@ -151,22 +151,27 @@ test.describe('compat capture (against main deploy)', () => {
     expect(rulers.length).toBe(1);
 
     await paintStrokes(launch.popup);
-    const segmentGroupNames = await readSegmentGroupNames(launch.popup);
-    expect(segmentGroupNames.length).toBeGreaterThan(0);
+    const paintedNames = await readSegmentNames(launch.popup);
+    expect(paintedNames.length).toBeGreaterThan(0);
     const datasetNames = await readDatasetNames(launch.popup);
     await shot(launch.popup, info, 'capture-checked-nrrd-content');
 
     const session = await saveAndDiffSession(request, state.token, fixture.folderId, launch.popup);
     const zip = await fetchZipSummary(request, state.token, session.sessionItemId);
     expect(zip.rulerCount).toBe(1);
-    expect(zip.segmentGroupCount).toBeGreaterThan(0);
-    expect(zip.segmentGroupDataBytes, 'painted labelmap should be non-trivial').toBeGreaterThan(0);
+    expect(zip.maskCount).toBeGreaterThan(0);
+    expect(zip.maskDataBytes, 'painted labelmap should be non-trivial').toBeGreaterThan(0);
+    // The zip is what verify compares against, and the two must agree on what
+    // the baseline UI showed.
+    for (const name of paintedNames) {
+      expect(zip.segmentNames, `segment "${name}" is not in the saved manifest`).toContain(name);
+    }
 
     record(
       'checked-nrrd',
       fixture.folderId,
       { via: 'checked-items', itemIds },
-      { datasetNames, rulers, segmentGroupNames, petLayer: false },
+      { datasetNames, rulers, segmentNames: zip.segmentNames, petLayer: false },
       zip,
       session
     );
@@ -204,7 +209,7 @@ test.describe('compat capture (against main deploy)', () => {
       'filtered-dicom',
       fixture.folderId,
       { via: 'checked-rows', rows: [[PATIENT2, CT_DESC]], filterText: PATIENT2 },
-      { datasetNames, rulers, segmentGroupNames: [], petLayer: false },
+      { datasetNames, rulers, segmentNames: [], petLayer: false },
       zip,
       session
     );
@@ -240,7 +245,7 @@ test.describe('compat capture (against main deploy)', () => {
       'study-layered',
       fixture.folderId,
       { via: 'checked-rows', rows },
-      { datasetNames, rulers, segmentGroupNames: [], petLayer: true },
+      { datasetNames, rulers, segmentNames: [], petLayer: true },
       zip,
       session
     );

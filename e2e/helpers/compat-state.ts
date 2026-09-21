@@ -15,10 +15,15 @@ export type RulerRecord = {
 // (counts and presence, not raw JSON equality).
 export type ZipSummary = {
   rulerCount: number;
-  segmentGroupCount: number;
-  // Size of the largest segment-group archive entry: painted voxels make it
+  // One mask carries one segment's voxels on one image. A 6.x segment group
+  // holding N segment descriptors is N masks once it is read.
+  maskCount: number;
+  // Size of the largest labelmap archive entry: painted voxels make it
   // decidedly non-trivial, an empty labelmap does not.
-  segmentGroupDataBytes: number;
+  maskDataBytes: number;
+  // Segment names, which is the identity that survives both generations: 6.x
+  // group names do not exist in 7.0.0.
+  segmentNames: string[];
   hasLayers: boolean;
   version?: string;
 };
@@ -46,7 +51,8 @@ export type FixtureId =
   | 'jobs-failure'
   | 'jobs-annotations'
   | 'jobs-roi-rulers'
-  | 'jobs-annotations-blocked';
+  | 'jobs-annotations-blocked'
+  | 'jobs-overlap';
 
 export type FixtureFolder = {
   folderId: string;
@@ -73,7 +79,7 @@ export type CapturedGesture = {
   expected: {
     datasetNames: string[];
     rulers: RulerRecord[];
-    segmentGroupNames: string[];
+    segmentNames: string[];
     petLayer: boolean;
     zip: ZipSummary;
   };

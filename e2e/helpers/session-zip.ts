@@ -6,7 +6,7 @@ import { ZipSummary } from './compat-state';
 
 // Semantic summary of a saved session.volview.zip: counts and presence pulled
 // from the manifest.json inside the archive (schema keys per VolView's
-// io/state-file/schema.ts — tools.rulers.tools, segmentGroups[].path,
+// io/state-file/schema.ts: tools.rulers.tools, the segment masks, and
 // parentToLayers). Deliberately NOT raw-JSON equality: the branch may migrate
 // the schema, and that must stay a non-failure.
 
@@ -31,6 +31,56 @@ async function newestSessionFile(
   return zips[0];
 }
 
+// What a labelmap contributes to the summary, independent of the manifest
+// generation it was read from.
+type MaskFacts = {
+  segmentNames: string[];
+  maskCount: number;
+  // Archive entry names holding the labelmap voxels.
+  maskPaths: string[];
+};
+
+const texts = (values: unknown[]): string[] =>
+  values.filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
+
+// 6.x kept segment identity inside each segment group's metadata; 7.0.0 lifted
+// it into a top-level `segments` registry that per-image masks point back into.
+// One summary has to read both, because capture writes the older shape.
+const legacyMaskFacts = (groups: any[]): MaskFacts => {
+  const descriptorsOf = (group: any): any[] =>
+    Object.values(group?.metadata?.segments?.byValue ?? {});
+  return {
+    segmentNames: texts(groups.flatMap((g) => descriptorsOf(g).map((d) => d?.name))),
+    // A group that declared no descriptors still restores as at least one mask:
+    // its labelmap values are enumerated when the voxels are read.
+    maskCount: groups.reduce((n, g) => n + Math.max(1, descriptorsOf(g).length), 0),
+    maskPaths: texts(groups.map((g) => g?.path)),
+  };
+};
+
+const currentMaskFacts = (manifest: any): MaskFacts => {
+  const nameById = new Map<string, unknown>(
+    (manifest.segments ?? []).map((s: any) => [s?.id, s?.name])
+  );
+  const masks: any[] = (manifest.segmentations ?? []).flatMap((s: any) => s?.masks ?? []);
+  return {
+    segmentNames: texts(masks.map((m) => nameById.get(m?.segmentId))),
+    maskCount: masks.length,
+    maskPaths: texts(masks.map((m) => m?.representations?.labelmap?.path)),
+  };
+};
+
+const maskFacts = (manifest: any): MaskFacts =>
+  Array.isArray(manifest.segmentGroups)
+    ? legacyMaskFacts(manifest.segmentGroups)
+    : currentMaskFacts(manifest);
+
+const largestEntryBytes = (zip: AdmZip, paths: string[]): number =>
+  zip
+    .getEntries()
+    .filter((e) => paths.some((p) => e.entryName === p || e.entryName.startsWith(`${p}/`)))
+    .reduce((max, e) => Math.max(max, e.header.size), 0);
+
 export async function fetchZipSummary(
   request: APIRequestContext,
   token: string,
@@ -49,18 +99,13 @@ export async function fetchZipSummary(
     throw new Error(`[compat] ${file.name} has no manifest.json (not a VolView session zip?)`);
   }
   const manifest = JSON.parse(manifestEntry.getData().toString('utf8'));
-
-  const segmentGroups: Array<{ path?: string }> = manifest.segmentGroups ?? [];
-  const groupPaths = new Set(segmentGroups.map((g) => g.path).filter(Boolean));
-  const segmentGroupDataBytes = zip
-    .getEntries()
-    .filter((e) => [...groupPaths].some((p) => e.entryName === p || e.entryName.startsWith(`${p}/`)))
-    .reduce((max, e) => Math.max(max, e.header.size), 0);
+  const masks = maskFacts(manifest);
 
   return {
     rulerCount: manifest.tools?.rulers?.tools?.length ?? 0,
-    segmentGroupCount: segmentGroups.length,
-    segmentGroupDataBytes,
+    maskCount: masks.maskCount,
+    maskDataBytes: largestEntryBytes(zip, masks.maskPaths),
+    segmentNames: masks.segmentNames,
     hasLayers: (manifest.parentToLayers?.length ?? 0) > 0,
     version: manifest.version,
   };

@@ -132,6 +132,7 @@ export async function provisionCompat(
   await nrrdFixture('jobs-annotations', 1);
   await nrrdFixture('jobs-roi-rulers', 1);
   await nrrdFixture('jobs-annotations-blocked', 1);
+  await nrrdFixture('jobs-overlap', 1);
 
   return {
     createdAt: new Date().toISOString(),

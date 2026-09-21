@@ -79,7 +79,7 @@ test.describe('compat capture: study drill-down', () => {
       launch: { via: 'row-nav', rowTexts },
       sessionItemId: minted[0]._id,
       sessionItemName: minted[0].name,
-      expected: { datasetNames, rulers, segmentGroupNames: [], petLayer: true, zip },
+      expected: { datasetNames, rulers, segmentNames: [], petLayer: true, zip },
     });
   });
 });
