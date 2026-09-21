@@ -22,11 +22,7 @@ import {
   loginViaUI,
   VolViewLaunch,
 } from '../../helpers/girder-ui';
-import {
-  readRulerMeasurements,
-  readSegmentGroupNames,
-  isLayered,
-} from '../../helpers/annotations';
+import { readRulerMeasurements, readSegmentNames, isLayered } from '../../helpers/annotations';
 import { fetchZipSummary } from '../../helpers/session-zip';
 
 // VERIFY phase — runs against THIS worktree's deploy, after the redeploy.
@@ -52,10 +48,15 @@ async function assertContentRestored(popup: Page, gesture: CapturedGesture): Pro
     'restored ruler measurements must match the capture exactly (world coords live in the zip)'
   ).toEqual(sortedLengths(gesture.expected.rulers));
 
-  if (gesture.expected.segmentGroupNames.length) {
-    const groups = await readSegmentGroupNames(popup);
-    for (const name of gesture.expected.segmentGroupNames) {
-      expect(groups, `segment group "${name}" lost in restore`).toContain(name);
+  // Segment NAMES are the identity that spans the two generations: the branch
+  // migration turns each legacy group into an artifact whose descriptors become
+  // segments carrying those same names, while the group's own name survives
+  // only as the transient artifact's, and the segmentation is renamed after its
+  // parent dataset. So names are asserted, membership in a named group is not.
+  if (gesture.expected.segmentNames.length) {
+    const segments = await readSegmentNames(popup);
+    for (const name of gesture.expected.segmentNames) {
+      expect(segments, `segment "${name}" lost in restore`).toContain(name);
     }
   }
 
@@ -70,11 +71,12 @@ async function assertContentRestored(popup: Page, gesture: CapturedGesture): Pro
 function expectZipRoundTrip(fresh: ZipSummary, gesture: CapturedGesture): void {
   const captured = gesture.expected.zip;
   expect(fresh.rulerCount, 're-saved zip lost rulers').toBe(captured.rulerCount);
-  expect(fresh.segmentGroupCount, 're-saved zip lost segment groups').toBeGreaterThanOrEqual(
-    captured.segmentGroupCount
-  );
-  if (captured.segmentGroupDataBytes > 0) {
-    expect(fresh.segmentGroupDataBytes, 're-saved labelmap is empty').toBeGreaterThan(0);
+  expect(fresh.maskCount, 're-saved zip lost masks').toBeGreaterThanOrEqual(captured.maskCount);
+  for (const name of captured.segmentNames) {
+    expect(fresh.segmentNames, `re-saved zip lost segment "${name}"`).toContain(name);
+  }
+  if (captured.maskDataBytes > 0) {
+    expect(fresh.maskDataBytes, 're-saved labelmap is empty').toBeGreaterThan(0);
   }
   if (gesture.expected.petLayer) {
     expect(fresh.hasLayers, 're-saved zip lost the layer').toBeTruthy();

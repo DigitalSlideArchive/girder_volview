@@ -14,7 +14,12 @@ import {
   waitForJobComplete,
   shot,
 } from '../helpers/volview';
-import { paintStrokes, readDatasetNames, readSegmentGroupNames } from '../helpers/annotations';
+import {
+  paintStrokes,
+  readDatasetNames,
+  readSegmentNames,
+  segmentRows,
+} from '../helpers/annotations';
 
 // The jobs/processing plane in the browser. Setup submits an Otsu job over REST
 // (folder+user scoped to the same admin the tab runs as) and polls it to
@@ -49,20 +54,17 @@ test.describe('jobs come-back path (Load results)', () => {
     );
   });
 
-  test('Load results applies the labelmap as a segment group on the original image', async ({
+  test('Load results merges the labelmap into the original image segmentation', async ({
     page,
     context,
   }, info) => {
     const g = await setupFixture(context, 'jobs-comeback');
     const view = await launchChecked(page, g);
 
-    // The come-back job must NOT auto-apply: before the explicit load there is
-    // no Otsu segment group and the Load action is still available.
+    // The come-back job must NOT auto-apply: before the explicit load the scene
+    // holds no segment and the Load action is still available.
     await openModuleTab(view, 'Annotations');
-    await expect(
-      view.locator('.segment-group-list').getByText(/Otsu/),
-      'a history job auto-applied without "Load"'
-    ).toHaveCount(0);
+    await expect(segmentRows(view), 'a history job auto-applied without "Load"').toHaveCount(0);
 
     await loadJobResults(view);
     await shot(view, info, 'jobs-tab-results');
@@ -71,12 +73,12 @@ test.describe('jobs come-back path (Load results)', () => {
       view.locator('.jobs-module').getByRole('button', { name: 'Load', exact: true })
     ).toHaveCount(0);
 
-    // Intent-honoring apply: the labelmap became an "<image>.<Task>" segment
-    // group on the reconstructed parent image (no manual verb choice).
+    // Intent-honoring apply: the labelmap's segments landed on the
+    // reconstructed parent image (no manual verb choice).
     await openModuleTab(view, 'Annotations');
     await expect(
-      view.locator('.segment-group-list').getByText(/Otsu/).first(),
-      'no Otsu segment group in the segment-group list'
+      segmentRows(view).first(),
+      'the Otsu labelmap produced no segment on the parent image'
     ).toBeVisible();
     await shot(view, info, 'come-back-apply');
   });
@@ -102,19 +104,22 @@ test.describe('live submission + auto-apply (the submission gate)', () => {
       if (/\/file\/[^/]+\/proxiable\//.test(r.url())) fileReads.push(r.url());
     });
 
+    await openModuleTab(view, 'Annotations');
+    await expect(segmentRows(view), 'the test must begin with no segment').toHaveCount(0);
+
     // Drive the VISIBLE submission flow: task picker -> binding -> Submit.
     await selectTask(view, 'Otsu');
     await waitForInputBound(view);
     await submitTaskFromForm(view);
 
     // Poll to live completion (the store's own toast), then confirm LIVE
-    // auto-apply attached the result with NO manual "Load" click:
-    // the Otsu labelmap becomes an "<image>.<Task>" segment group.
+    // auto-apply attached the result with NO manual "Load" click: the Otsu
+    // labelmap's segments land on the active dataset's segmentation.
     await waitForJobComplete(view);
     await openModuleTab(view, 'Annotations');
     await expect(
-      view.locator('.segment-group-list').getByText(/Otsu/).first(),
-      'live auto-apply did not attach a segment group'
+      segmentRows(view).first(),
+      'live auto-apply did not attach a segment'
     ).toBeVisible();
     await shot(view, info, 'live-auto-apply');
 
@@ -130,12 +135,12 @@ test.describe('live submission + auto-apply (the submission gate)', () => {
     const datasetsBefore = await readDatasetNames(view);
 
     await paintStrokes(view);
-    expect(await readSegmentGroupNames(view)).not.toEqual([]);
+    expect(await readSegmentNames(view)).not.toEqual([]);
 
     await selectTask(view, 'MaskedMedianFilter');
     await expect(
-      view.locator('.jobs-module').getByText('Active segment group').first(),
-      'the painted segment group was not bound as the filter mask'
+      view.locator('.jobs-module').getByText('Segmentation on active dataset').first(),
+      'the painted segmentation was not bound as the filter mask'
     ).toBeVisible();
     await submitTaskFromForm(view);
     await waitForJobComplete(view);

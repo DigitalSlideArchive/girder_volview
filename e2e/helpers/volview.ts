@@ -82,9 +82,9 @@ export async function openModuleTab(page: Page, name: string): Promise<void> {
 
 // Open the Jobs tab and click the first succeeded job's "Load" — the come-back
 // path: this fetches the results AND applies them through the same
-// intent-honoring pipeline the live flow uses (labelmap → segment group on the
-// reconstructed parent image, plain image → new dataset). The button is
-// consumed once the scene application finishes.
+// intent-honoring pipeline the live flow uses (labelmap → segments merged into
+// the reconstructed parent image's segmentation, plain image → new dataset).
+// The button is consumed once the scene application finishes.
 export async function loadJobResults(page: Page): Promise<void> {
   await openModuleTab(page, 'Jobs');
   const panel = page.locator('.jobs-module');
