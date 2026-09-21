@@ -30,8 +30,9 @@ CLI_REPO=/path/to/volview-radiology-cli
 When processing routes are present, `script/deploy` calls
 `script/ensure-radiology-cli`. That script builds the local
 `volview-radiology-cli:latest` image if it is missing, registers it with
-`slicer_cli_web`, and verifies the declared tasks are available. It does not
-pull this image from a registry.
+`slicer_cli_web` unless every declared task is already registered from that
+image, and verifies the declared tasks are available. It does not pull this
+image from a registry.
 
 ## Speedup S3 file downloading by disabling proxying
 
