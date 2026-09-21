@@ -1,7 +1,7 @@
 # Which girder_volview checkout the girder container serves.
 #
-# Layered LAST, after the upstream DSA compose files, so this repo owns the one
-# thing it needs to change about the stack without editing a shared checkout.
+# Layered LAST, after the upstream DSA compose files and this repo's other
+# layers, so it can re-point the mount without editing a shared checkout.
 # Upstream's with-dive-volview/docker-compose.override.yml hardcodes
 # `../../../girder_volview:/opt/girder_volview`, pinning the container to the
 # main checkout; script/deploy needs to point it at an arbitrary worktree, or at

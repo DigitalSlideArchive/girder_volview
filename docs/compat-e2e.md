@@ -103,10 +103,11 @@ Machine-specific paths live in a gitignored `.env` at the repo root:
 cp .env.example .env && $EDITOR .env      # DSA_DEVOPS, VOLVIEW_ROOT, ...
 ```
 
-The stack must already be running (see `docs/development.md`) — `script/deploy`
+The stack must already be running (see `docs/development.md`); `script/deploy`
 only swaps the code it serves. `script/girder-volview.override.yml` re-points
 the `/opt/girder_volview` mount at the worktree (or compat baseline) being
-deployed; that's the only change this repo makes to the upstream stack.
+deployed. The layers this repo adds to the upstream stack are listed in
+`.env.example`'s `DSA_COMPOSE_FILES`.
 
 What the harness needs beyond `.env`:
 

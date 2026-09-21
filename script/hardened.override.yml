@@ -1,0 +1,17 @@
+# Runs Girder with anonymous access disabled, the way locked-down deployments
+# run it, so code that relies on DSA's permissive defaults fails here first.
+#
+# Listed in DSA_COMPOSE_FILES (see .env.example) before
+# girder-volview.override.yml. To deploy once with DSA's stock settings:
+#   DSA_DISABLE_ANONYMOUS_ACCESS=false script/deploy <girder-wt> <volview-wt>
+services:
+  girder:
+    environment:
+      # Girder reads GIRDER_SETTING_<KEY> (JSON-parsed) before the database and
+      # never writes it to Mongo. A PUT to /system/setting, which is also what
+      # saving the admin System configuration page sends, stores its value in
+      # Mongo and wins over this layer until the next restart. Dropping the
+      # layer brings back whatever was stored last. This uses Girder's hook, not
+      # DSA's DSA_SETTING_<key>: that one passes the raw string, the boolean
+      # validator rejects it, and provisioning aborts.
+      GIRDER_SETTING_CORE_DISABLE_ANONYMOUS_ACCESS: ${DSA_DISABLE_ANONYMOUS_ACCESS:-true}
