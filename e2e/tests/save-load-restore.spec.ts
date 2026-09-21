@@ -225,8 +225,9 @@ test.describe('save/load/restore F5 lifecycle', () => {
     const newerFileId = await firstFileId(page.request, g.token, newerId);
     expect(olderFileId).not.toBe(newerFileId);
 
-    // Session items are private even though the fixture folder and raw images
-    // are public. Authenticate the Girder client before browsing those rows.
+    // The page is still on this folder, and setting the same hash does not
+    // re-render it. Going back through the app root makes gotoFolder list the
+    // session items the saves just created.
     await loginViaUI(page);
     await gotoFolder(page, g.folderId);
     await checkRowByItemId(page, olderId);
