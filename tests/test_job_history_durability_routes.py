@@ -7,7 +7,7 @@ Needs a live pytest-girder Mongo; the module self-skips when it is unreachable.
 
 import datetime
 import io
-import time
+import threading
 from conftest import _reload, mongo_reachable
 
 import jsonschema
@@ -104,15 +104,14 @@ def _handle_validator():
 def test_job_history_history_index_exists_in_query_order(db, server):
     # The plugin load driven by the server fixture is the production index
     # installation boundary; the database fixture alone does not load plugins.
+    # The load builds the indexes on a background thread.
     from girder_jobs.models.job import Job
 
-    deadline = time.monotonic() + 5
-    while True:
-        index = Job().collection.index_information().get("volview_job_history")
-        if index is not None or time.monotonic() >= deadline:
-            break
-        time.sleep(0.01)
+    for thread in threading.enumerate():
+        if thread.name == routes.JOB_HISTORY_INDEX_THREAD:
+            thread.join()
 
+    index = Job().collection.index_information().get("volview_job_history")
     assert index is not None
     assert index["key"] == [
         (inputs._LAUNCH_FOLDER_FIELD, 1),

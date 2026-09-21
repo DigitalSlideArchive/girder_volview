@@ -12,9 +12,9 @@ exclude = [
 
 [lint]
 # E/W = pycodestyle, F = pyflakes, B = flake8-bugbear, Q = flake8-quotes,
-# N = pep8-naming. Docstring rules (D) are deliberately not selected: the
-# codebase does not satisfy them.
-select = ["E", "W", "F", "B", "Q", "N"]
+# N = pep8-naming, TID251 = the banned APIs below, in tests only. Docstring
+# rules (D) are deliberately not selected: the codebase does not satisfy them.
+select = ["E", "W", "F", "B", "Q", "N", "TID251"]
 ignore = [
     # girder's API surface is intentionally CamelCase / mixedCase.
     "N802",  # function name should be lowercase
@@ -29,7 +29,16 @@ ignore = [
 [lint.flake8-quotes]
 inline-quotes = "double"
 
+# A test waits for the outcome it checks. A pause, or a deadline read off a
+# clock, fails or passes with machine load. The one time limit on a test is
+# pytest's `timeout` in tox.ini.
+[lint.flake8-tidy-imports.banned-api]
+"time.sleep".msg = "Wait for the outcome the test checks, not for time to pass."
+"time.monotonic".msg = "Tests set no deadlines; pytest's timeout in tox.ini is the limit."
+"time.time".msg = "Tests set no deadlines; pytest's timeout in tox.ini is the limit."
+
 [lint.per-file-ignores]
 # Conformance tests deliberately assert against a broad Exception where the
 # precise type is an implementation detail of the validator under test.
 "tests/*" = ["B017"]
+"!tests/**" = ["TID251"]

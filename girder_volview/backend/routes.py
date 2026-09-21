@@ -73,6 +73,7 @@ JOB_HISTORY_PAGE_DEFAULT = 25
 JOB_HISTORY_PAGE_MAX = 100
 JOB_HISTORY_INDEX = "volview_job_history"
 JOB_OUTPUT_FOLDER_INDEX = "volview_output_folder"
+JOB_HISTORY_INDEX_THREAD = "volview-job-history-indexes"
 _SUBMISSION_ID_FIELD = "volviewSubmissionId"
 _SUBMITTED_PARAMETERS_FIELD = "volviewSubmittedParameters"
 
@@ -1018,9 +1019,7 @@ def _ensureJobHistoryIndexesInBackground():
         except Exception:
             logger.exception("Failed to ensure volview job-history indexes")
 
-    threading.Thread(
-        target=build, name="volview-job-history-indexes", daemon=True
-    ).start()
+    threading.Thread(target=build, name=JOB_HISTORY_INDEX_THREAD, daemon=True).start()
 
 
 def addBackendRoutes(info):
