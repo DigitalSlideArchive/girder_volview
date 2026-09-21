@@ -10,7 +10,7 @@ Using the client YAML file, anyone can change:
 - The default view layout
 - Associate files to layer or apply as segmentations via file name
 - Default window and level
-- Default labels for vector annotation tools
+- The segments the painting and vector annotation tools offer
 
 Add a `.volview_config.yaml` file higher in the folder hierarchy. Example file:
 
@@ -18,13 +18,12 @@ Add a `.volview_config.yaml` file higher in the folder hierarchy. Example file:
 layouts:
   Axial:
     gridSize: ["axial"]
-labels:
-  defaultLabels:
-    artifact:
-      color: "gray"
-      strokeWidth: 3
-    needs-review:
-      color: "#FFBF00"
+segments:
+  artifact:
+    color: "gray"
+    strokeWidth: 3
+  needs-review:
+    color: "#FFBF00"
 ```
 
 To merge with `.volview_config.yaml`s higher in the folder hierarchy, include `__inherit__: true`
@@ -151,62 +150,48 @@ disabledViewTypes: []
 
 Valid values: `2D`, `3D`, `Oblique`
 
-## Label Configuration
+## Segment Configuration
 
-To assign labels and their properties, add a `.volview_config.yaml` file higher in the folder hierarchy.
-Example `.volview_config.yaml` file:
-
-```yml
-# defaultLabels are shared by polygon, ruler and rectangle tool
-labels:
-  defaultLabels:
-    artifact:
-      color: "gray"
-      strokeWidth: 3
-    needs-review:
-      color: "#FFBF00"
-```
-
-Labels can be configured per tool:
+Painting, polygons, rulers and rectangles share one registry of segments, keyed
+by name under `segments`. Every appearance field is optional, so an entry states
+only what it changes:
 
 ```yml
-labels:
-  rectangleLabels:
-    lesion: # label name
-      color: "#ff0000"
-      fillColor: "transparent"
-    innocuous:
-      color: "white"
-      fillColor: "#00ff0030"
-    tumor:
-      color: "green"
-      fillColor: "transparent"
-
-  rulerLabels:
-    big:
-      color: "#ff0000"
-    small:
-      color: "white"
+segments:
+  artifact: # segment name
+    color: "gray"
+    strokeWidth: 3
+  needs-review:
+    color: "#FFBF00"
+  lesion:
+    color: "#ff0000"
+    fillOpacity: 0.5
+    outlineOpacity: 0.8
 ```
 
-Label sections could be empty to disable labels for a tool.
+Fields: `color`, `fillOpacity`, `outlineOpacity`, `strokeWidth`.
+
+Omitting `segments` leaves the registry as it is. An empty value clears what an
+earlier config contributed, while keeping any segment the data still references
+with its last configured appearance.
 
 ```yml
-labels:
-  rulerLabels:
-
-  rectangleLabels:
-    lesion:
-      color: "#ff0000"
-      fillColor: "transparent"
-    innocuous:
-      color: "white"
-      fillColor: "#00ff0030"
+segments:
 ```
+
+VolView also accepts the earlier per-tool form, `labels` with its
+`defaultLabels`, `rulerLabels`, `rectangleLabels` and `polygonLabels` records.
+It converts them into `segments` and warns the config's author. All four
+describe the one registry, so a name appearing in more than one becomes a single
+segment whose appearance comes from the first record to declare it, reading
+`rulerLabels`, `rectangleLabels`, `polygonLabels` and then `defaultLabels`. A
+`fillColor` is dropped, since fill is a property of the rectangle rather than of
+the segment. A config carrying both keys is read from `segments` alone and its
+`labels` is ignored.
 
 ## Keyboard Shortcuts Configuration
 
-Configure the keys to activate tools, change selected labels, and more.
+Configure the keys to activate tools, change the selected segment, and more.
 Names for shortcut actions are in [constants.ts](https://github.com/Kitware/VolView/blob/main/src/constants.ts#L53) are under the `ACTIONS` variable.
 
 To configure a key for an action, add its action name and the key(s) under the `shortcuts` section. For key combinations, use `+` like `Ctrl+f`.
@@ -219,16 +204,16 @@ shortcuts:
 
 In VolView, show a dialog with the configured keyboard shortcuts by pressing the `?` key.
 
-## Saved Segment Group File Format
+## Saved Mask File Format
 
-Edited segment groups are saved as separate files within session.volview.zip files.  By default the segment group file format is `nii.gz`.
+Edited segmentations are saved as separate mask files within session.volview.zip files. By default the mask file format is `nii.gz`.
 
 ```yml
 io:
-  segmentGroupSaveFormat: "nii.gz" # default is nii.gz
+  segmentationSaveFormat: "nii.gz" # default is nii.gz
 ```
 
-## Automatic Layers and Segment Groups by File Name
+## Automatic Layers and Segmentations by File Name
 
 When loading multiple image files, VolView can automatically associate related images based on file naming patterns.
 For non-DICOM base images, the matching rule is based on the base filename prefix.
@@ -238,19 +223,26 @@ and the filename must start with the same prefix as the base image (everything b
 For example, with a base image `patient.nrrd`:
 
 - Layers: `patient.layer.1.pet.nii`, `patient.layer.2.ct.mha`
-- Segment groups: `patient.seg.1.tumor.nii.gz`, `patient.seg.2.lesion.mha`
+- Segmentations: `patient.seg.1.tumor.nii.gz`, `patient.seg.2.lesion.mha`
 
-When multiple layers or segment groups match a base image, they are sorted alphabetically by filename and added in that order.
+When multiple layers or segmentations match a base image, they are sorted alphabetically by filename and added in that order.
+An image has one segmentation, so every matched file contributes its segments to that one.
 
-### Segment Groups
+### Segmentations
 
-Use `segmentGroupExtension` to automatically convert matching non-DICOM images to segment groups.
-For example, `myFile.seg.nrrd` becomes a segment group for `myFile.nii`. Defaults to `"seg"`. To disable set to `""`.
+Use `segmentationExtension` to automatically convert matching non-DICOM images to segmentations.
+For example, `myFile.seg.nrrd` becomes a segmentation for `myFile.nii`. Defaults to `"seg"`. To disable set to `""`.
 
 ```yml
 io:
-  segmentGroupExtension: "seg" # "seg" is the default
+  segmentationExtension: "seg" # "seg" is the default
 ```
+
+VolView also accepts the earlier names for these two keys, `segmentGroupExtension` and
+`segmentGroupSaveFormat`. The plugin renames them to the current names as it reads a
+folder's `.volview_config.yaml`, so a config written with either name still overrides the
+defaults above. An `io` block that names one setting both ways is passed through as
+written; the client reads the current name and warns the config's author.
 
 ### Layering
 
@@ -262,9 +254,9 @@ io:
   layerExtension: "layer" # "layer" is the default
 ```
 
-For DICOM-specific association rules, explicit `segmentGroups` /
-`parentToLayers` session manifest examples, and notes on using DICOM tags versus
-file names, see [Loading Layers and Segmentations](./loading_layers_and_segmentations.md).
+For DICOM-specific association rules, explicit session manifests, and notes on
+using DICOM tags versus file names, see
+[Loading Layers and Segmentations](./loading_layers_and_segmentations.md).
 
 ## Default Window Level
 

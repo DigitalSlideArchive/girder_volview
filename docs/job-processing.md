@@ -57,7 +57,7 @@ When a user submits a task, the following happens:
 9. VolView polls the job-addressed status and results endpoints. The backend
    projects Girder's job states into the VolView contract and returns completed
    files as result records with declarative application intents, such as adding
-   a base image or segment group.
+   a base image or importing a segmentation.
 10. VolView applies ready results to the scene. The completed job remains in the
     user's folder-scoped history and can be reopened later. Transient inputs are
     cleaned up when execution settles; deleting a terminal job also deletes its
@@ -121,6 +121,20 @@ Girder VolView then prepares the container argument:
    relay the IDs and credentials to an external workflow service. A CLI that
    assembles DICOM locally must group and order slices from DICOM metadata, not
    from filenames, URI order, or Girder-ID order.
+
+### How segmentations become CLI files
+
+A labelmap input has no file in Girder to point at, so VolView stages one. It
+takes the one segmentation of the active image and writes it as compressed
+`.seg.nrrd` parts, each holding a set of masks that share no voxel, and stages
+one file per part into the `volview-jobs` container. A parameter declared
+`multiple="true"` receives every part; a singular parameter receives the first
+part alone, and the user is told which segments that left out. The staged files
+follow the ordinary input path from there: the backend copies them into the
+job-owned folder and passes them to the container.
+
+See [Reading a labelmap input](./custom-slicer-clis.md#reading-a-labelmap-input)
+for what a CLI can rely on inside those files.
 
 ### Worked example
 

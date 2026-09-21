@@ -3,7 +3,7 @@
 VolView can load a base image with two overlay types:
 
 - Layer: scalar image data such as PET, perfusion, probability, or heat maps.
-- Segmentation: integer label maps shown in the Segment Groups panel.
+- Segmentation: integer label maps, read as the segments of the base image.
 
 The overlay must overlap the base image in physical space. VolView resamples it
 into the base image space.
@@ -25,11 +25,14 @@ For NIfTI/NRRD/MHA files:
 - The configured extension must appear as a dot-separated token.
 - Multiple matches load alphabetically.
 
+An image has one segmentation, so every matching segmentation file contributes
+its segments to that one.
+
 To change the tokens, put `.volview_config.yaml` at or above the Girder folder:
 
 ```yaml
 io:
-  segmentGroupExtension: "seg"
+  segmentationExtension: "seg"
   layerExtension: "layer"
 ```
 

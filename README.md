@@ -13,9 +13,9 @@ Open Items in [VolView](https://github.com/Kitware/VolView) with a "Open in VolV
 ## Configuration
 
 A `.volview_config.yaml` file placed higher in the folder hierarchy configures
-the VolView client: view layouts, annotation labels, keyboard shortcuts,
-default window/level, segment-group save format, and automatic
-layer/segment-group association by file name.
+the VolView client: view layouts, segment names and appearance, keyboard
+shortcuts, default window/level, segmentation save format, and automatic
+layer/segmentation association by file name.
 
 See [Client configuration](./docs/configuration.md), and
 [Loading Layers and Segmentations](./docs/loading_layers_and_segmentations.md)
