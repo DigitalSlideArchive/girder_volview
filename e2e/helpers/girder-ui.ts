@@ -30,37 +30,44 @@ async function toLaunch(popupPromise: Promise<Page>): Promise<VolViewLaunch> {
 // fires a metadata PUT before window.open, so without a real login that PUT
 // 401s and the popup never opens. A UI login sets the client's currentToken, so
 // its restRequest sends the Girder-Token header on writes.
+//
+// The client keeps that token in localStorage, so a page opened in a context
+// that already logged in comes up logged in. Once the client knows which, its
+// header shows either the Log In link or the user menu. Waiting for network idle
+// instead never returns for a logged-in client, which holds its
+// /notification/stream EventSource open.
 export async function loginViaUI(page: Page): Promise<void> {
   await page.goto(`${CONFIG.baseURL}/#`, { waitUntil: 'domcontentloaded' });
-  // DSA's "Log In" is an <a> with no href, so it is NOT a link-role element —
-  // match it by tag + text. Absent → already authenticated.
-  const loginLink = page.locator('a', { hasText: /log ?in/i }).first();
-  await page.waitForLoadState('networkidle').catch(() => undefined);
-  if (!(await loginLink.isVisible({ timeout: 10_000 }).catch(() => false))) {
+  const loginLink = page.locator('a.g-login');
+  const userMenu = page.locator('a.g-user-dropdown-link');
+  await expect(loginLink.or(userMenu)).toBeVisible();
+  if (await userMenu.isVisible()) {
     return;
   }
   await loginLink.click();
   await page.locator('#g-login').fill(CONFIG.user);
   await page.locator('#g-password').fill(CONFIG.pass);
   await page.locator('#g-login-button').click();
-  await expect(
-    page.locator('a', { hasText: /log ?in/i }).first(),
-    'girder UI login did not complete (Log In link still present)'
-  ).toBeHidden({ timeout: 30_000 });
+  await expect(userMenu, 'girder UI login did not complete (no user menu)').toBeVisible();
 }
 
-// Navigate to a folder. When the girder SPA is already loaded (e.g. right after
-// loginViaUI), change the hash IN-APP rather than page.goto — a full reload
-// drops the client's in-memory auth token, and girder keeps no header-usable
-// cookie, so the next write (main's pre-open metadata PUT) would 401.
-export async function gotoFolder(page: Page, folderId: string): Promise<void> {
-  if (page.url().startsWith(CONFIG.baseURL)) {
-    await page.evaluate((id) => {
-      window.location.hash = `#folder/${id}`;
-    }, folderId);
-  } else {
-    await page.goto(`${CONFIG.baseURL}/#folder/${folderId}`, { waitUntil: 'domcontentloaded' });
+// Entering the girder app from any other page logs in first. With Girder's
+// anonymous access disabled an anonymous client lists no folders or items, and
+// the planted girderToken cookie alone does not log it in.
+async function enterSpa(page: Page): Promise<void> {
+  if (!page.url().startsWith(`${CONFIG.baseURL}/#`)) {
+    await loginViaUI(page);
   }
+}
+
+// Navigate to a folder IN-APP by setting the hash. Client state such as checked
+// rows survives the navigation (uncheckAllRows clears it), and setting the hash
+// the page is already on does not re-render the listing.
+export async function gotoFolder(page: Page, folderId: string): Promise<void> {
+  await enterSpa(page);
+  await page.evaluate((id) => {
+    window.location.hash = `#folder/${id}`;
+  }, folderId);
   await expect(page.locator('li.g-item-list-entry').first()).toBeVisible({ timeout: 30_000 });
 }
 
@@ -143,6 +150,7 @@ export async function openInVolView(page: Page): Promise<VolViewLaunch> {
 
 // Open from the item page (the single-item gesture).
 export async function openFromItemPage(page: Page, itemId: string): Promise<VolViewLaunch> {
+  await enterSpa(page);
   await page.goto(`${CONFIG.baseURL}/#item/${itemId}`, { waitUntil: 'domcontentloaded' });
   const button = page.locator('.open-in-volview');
   await expect(button, 'no Open-in-VolView on the item page').toBeVisible();
