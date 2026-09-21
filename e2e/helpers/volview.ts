@@ -1,19 +1,16 @@
 import { Page, TestInfo, expect } from '@playwright/test';
+import { expectJob } from './limits';
 
 // VolView is ready once a vtk view canvas has real (non-zero) dimensions — the
 // same signal the VolView wdio suite uses (waitForViews).
-export async function waitForVolViewReady(page: Page, timeout = 90_000) {
-  await page.locator('[data-testid~="vtk-view"] canvas').first().waitFor({ state: 'attached', timeout });
-  await page.waitForFunction(
-    () => {
-      const canvases = document.querySelectorAll('[data-testid~="vtk-view"] canvas');
-      return Array.from(canvases).some(
-        (c) => (c as HTMLCanvasElement).width > 10 && (c as HTMLCanvasElement).height > 10
-      );
-    },
-    undefined,
-    { timeout }
-  );
+export async function waitForVolViewReady(page: Page) {
+  await page.locator('[data-testid~="vtk-view"] canvas').first().waitFor({ state: 'attached' });
+  await page.waitForFunction(() => {
+    const canvases = document.querySelectorAll('[data-testid~="vtk-view"] canvas');
+    return Array.from(canvases).some(
+      (c) => (c as HTMLCanvasElement).width > 10 && (c as HTMLCanvasElement).height > 10
+    );
+  });
   // Let the first frame settle for a faithful screenshot.
   await page.waitForTimeout(1500);
 }
@@ -42,8 +39,7 @@ export async function remoteSave(page: Page): Promise<string> {
   const savePost = page.waitForResponse(
     (r) =>
       r.request().method() === 'POST' &&
-      /\/(item|folder)\/[^/]+\/volview(\?|$)/.test(r.url()),
-    { timeout: 60_000 }
+      /\/(item|folder)\/[^/]+\/volview(\?|$)/.test(r.url())
   );
   await saveButton.click();
   // Main-era clients ask for a filename in a "Saving Session State" dialog even
@@ -71,7 +67,7 @@ export async function remoteSave(page: Page): Promise<string> {
   // The client repoints urls= via history.replaceState after a resumeUrl.
   if (resumeUrl) {
     await expect
-      .poll(() => urlsParam(page), { timeout: 15_000, message: 'urls= did not repoint to resumeUrl' })
+      .poll(() => urlsParam(page), { message: 'urls= did not repoint to resumeUrl' })
       .toBe(resumeUrl);
   }
   return resumeUrl;
@@ -117,11 +113,11 @@ export async function selectTask(page: Page, titlePrefix: string): Promise<void>
 // Wait for the auto-bound image input to render (FileWidget's "Active dataset"
 // caption under the bound image name) before submit — a volume with no server
 // provenance blocks submit, so this proves the binding step ran.
-export async function waitForInputBound(page: Page, timeout = 30_000): Promise<void> {
+export async function waitForInputBound(page: Page): Promise<void> {
   await expect(
     page.locator('.jobs-module').getByText('Active dataset').first(),
     'the image input never bound to the active dataset'
-  ).toBeVisible({ timeout });
+  ).toBeVisible();
 }
 
 export async function submitTaskFromForm(page: Page): Promise<void> {
@@ -135,9 +131,9 @@ export async function submitTaskFromForm(page: Page): Promise<void> {
 // Wait for the live completion toast ("Job complete: <task>") the store raises
 // once a job submitted THIS session reaches success — the live path, not a
 // re-discovered history row.
-export async function waitForJobComplete(page: Page, timeout = 180_000): Promise<void> {
-  await expect(
+export async function waitForJobComplete(page: Page): Promise<void> {
+  await expectJob(
     page.locator('.Vue-Toastification__toast', { hasText: 'Job complete' }).first(),
     'no "Job complete" toast — did the live job finish?'
-  ).toBeVisible({ timeout });
+  ).toBeVisible();
 }

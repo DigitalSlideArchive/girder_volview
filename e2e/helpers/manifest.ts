@@ -28,7 +28,7 @@ export async function requireManifestJson(response: Response): Promise<any> {
 }
 
 export async function captureManifest(page: Page, navigate: () => Promise<unknown>): Promise<any> {
-  const manifestResp = page.waitForResponse(isManifestGet, { timeout: 60_000 });
+  const manifestResp = page.waitForResponse(isManifestGet);
   await navigate();
   // Validate the manifest response before waiting for a viewer that depends on it.
   const manifest = await requireManifestJson(await manifestResp);

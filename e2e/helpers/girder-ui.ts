@@ -11,7 +11,7 @@ import { isManifestGet, requireManifestJson } from './manifest';
 export type VolViewLaunch = { popup: Page; manifest: Promise<any> };
 
 async function watchManifest(popup: Page): Promise<any> {
-  const response = await popup.waitForResponse(isManifestGet, { timeout: 90_000 });
+  const response = await popup.waitForResponse(isManifestGet);
   return requireManifestJson(response);
 }
 
@@ -68,7 +68,7 @@ export async function gotoFolder(page: Page, folderId: string): Promise<void> {
   await page.evaluate((id) => {
     window.location.hash = `#folder/${id}`;
   }, folderId);
-  await expect(page.locator('li.g-item-list-entry').first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('li.g-item-list-entry').first()).toBeVisible();
 }
 
 export async function checkRowByItemId(page: Page, itemId: string): Promise<void> {
@@ -117,13 +117,12 @@ export async function fillFilterBox(page: Page, text: string): Promise<void> {
 // (ungrouped) row, so absolute row counts are layout-dependent.
 export async function expectRow(page: Page, texts: string[]): Promise<void> {
   await expect(rowByTexts(page, texts).first(), `expected a row containing ${JSON.stringify(texts)}`)
-    .toBeVisible({ timeout: 30_000 });
+    .toBeVisible();
 }
 
 export async function expectNoRow(page: Page, texts: string[]): Promise<void> {
   await expect
     .poll(async () => rowByTexts(page, texts).count(), {
-      timeout: 30_000,
       message: `expected NO row containing ${JSON.stringify(texts)}`,
     })
     .toBe(0);
@@ -137,7 +136,7 @@ export async function expectNoRow(page: Page, texts: string[]): Promise<void> {
 export async function openInVolView(page: Page): Promise<VolViewLaunch> {
   const button = page.locator('.open-in-volview');
   await expect(button, 'Open-in-VolView button not visible').toBeVisible();
-  const popupPromise = page.waitForEvent('popup', { timeout: 60_000 });
+  const popupPromise = page.waitForEvent('popup');
   await button.click();
   const prompt = page.locator('.modal-content:has-text("Will open newest VolView session")');
   const first = await Promise.race([
@@ -156,7 +155,7 @@ export async function openFromItemPage(page: Page, itemId: string): Promise<VolV
   await page.goto(`${CONFIG.baseURL}/#item/${itemId}`, { waitUntil: 'domcontentloaded' });
   const button = page.locator('.open-in-volview');
   await expect(button, 'no Open-in-VolView on the item page').toBeVisible();
-  const popupPromise = page.waitForEvent('popup', { timeout: 60_000 });
+  const popupPromise = page.waitForEvent('popup');
   await button.click();
   return toLaunch(popupPromise);
 }
@@ -169,12 +168,12 @@ export async function drillRowNav(page: Page, rowTexts: string[]): Promise<VolVi
     const row = rowByTexts(page, [text]).first();
     await expect(row, `no drill-down row containing "${text}"`).toBeVisible();
     await row.locator('a.g-item-list-link').first().click();
-    await expect(page.locator('li.g-item-list-entry').first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('li.g-item-list-entry').first()).toBeVisible();
   }
   const lastText = rowTexts[rowTexts.length - 1];
   const last = rowByTexts(page, [lastText]).first();
   await expect(last, `no final row containing "${lastText}"`).toBeVisible();
-  const popupPromise = page.waitForEvent('popup', { timeout: 60_000 });
+  const popupPromise = page.waitForEvent('popup');
   await last.locator('a.g-item-list-link').first().click();
   return toLaunch(popupPromise);
 }

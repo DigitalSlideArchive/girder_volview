@@ -67,7 +67,7 @@ test.describe('vector annotations through a job', () => {
     await expect(
       await rulerMeasurementRows(view),
       'the annotations result did not add the generated rulers to the image'
-    ).toHaveCount(3, { timeout: 30_000 });
+    ).toHaveCount(3);
     await shot(view, info, 'annotations-live-apply');
   });
 
@@ -131,7 +131,7 @@ test.describe('vector annotations through a job', () => {
     await expect(
       await rulerMeasurementRows(view),
       'the generated long- and short-axis rulers were not applied'
-    ).toHaveCount(2, { timeout: 30_000 });
+    ).toHaveCount(2);
     await shot(view, info, 'roi-rulers-generated-without-input-annotations');
   });
 });
