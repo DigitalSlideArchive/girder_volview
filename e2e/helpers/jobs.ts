@@ -1,6 +1,7 @@
 import { APIRequestContext } from '@playwright/test';
 import { CONFIG, apiUrl } from './config';
 import { readJson } from './http';
+import { expectJob } from './limits';
 
 // Processing-job REST helpers — submit a task and poll it to a terminal state,
 // mirroring the requests the browser client mints.
@@ -70,24 +71,26 @@ export async function runTask(
 
 const TERMINAL = new Set(['success', 'error', 'cancelled']);
 
-// Poll a job to a terminal state (success/error/cancelled) or throw on timeout.
+// Poll a job to a terminal state (success/error/cancelled).
 export async function pollJob(
   request: APIRequestContext,
   token: string,
-  jobId: string,
-  timeoutMs = 240_000
+  jobId: string
 ): Promise<{ state: string; [k: string]: unknown }> {
-  const deadline = Date.now() + timeoutMs;
   let last: any;
-  while (Date.now() < deadline) {
-    const res = await request.get(apiUrl(`/volview_processing/jobs/${jobId}`), {
-      headers: { 'Girder-Token': token },
-    });
-    last = await readJson(res, `poll job ${jobId}`);
-    if (TERMINAL.has(last?.state)) return last;
-    await new Promise((r) => setTimeout(r, 2000));
-  }
-  throw new Error(`[e2e] job ${jobId} did not reach a terminal state within ${timeoutMs}ms (last=${last?.state})`);
+  await expectJob
+    .poll(
+      async () => {
+        const res = await request.get(apiUrl(`/volview_processing/jobs/${jobId}`), {
+          headers: { 'Girder-Token': token },
+        });
+        last = await readJson(res, `poll job ${jobId}`);
+        return TERMINAL.has(last?.state) ? 'terminal' : last?.state;
+      },
+      { message: `[e2e] job ${jobId} did not reach a terminal state` }
+    )
+    .toBe('terminal');
+  return last;
 }
 
 // Submit an Otsu segmentation on the given item's image and poll to terminal.

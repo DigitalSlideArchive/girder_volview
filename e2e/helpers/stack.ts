@@ -32,7 +32,7 @@ const BRING_UP_HINT =
 
 async function versionReachable(request: APIRequestContext): Promise<boolean> {
   try {
-    const res = await request.get(VERSION_URL, { timeout: 10_000 });
+    const res = await request.get(VERSION_URL);
     return res.ok();
   } catch {
     return false;
@@ -56,18 +56,18 @@ export async function warmUp(request: APIRequestContext): Promise<void> {
     const headers = { 'Girder-Token': token };
     // The girder web client and the served VolView SPA: the pages a launch
     // gesture opens.
-    await request.get(CONFIG.baseURL, { timeout: 30_000 });
-    await request.get(INDEX_URL, { timeout: 30_000 });
+    await request.get(CONFIG.baseURL);
+    await request.get(INDEX_URL);
     // A mongo-backed folder query, then the plugin's manifest route on a real
     // folder -- the two server paths every launch depends on.
     const res = await request.get(
       apiUrl(`/folder?parentType=user&parentId=${userId}&limit=1`),
-      { headers, timeout: 30_000 }
+      { headers }
     );
     const folders = res.ok() ? await res.json() : [];
     const folderId = folders?.[0]?._id;
     if (folderId) {
-      await request.get(apiUrl(`/folder/${folderId}/volview`), { headers, timeout: 60_000 });
+      await request.get(apiUrl(`/folder/${folderId}/volview`), { headers });
     }
   } catch {
     // Warming is an optimization, not a gate.
@@ -90,7 +90,7 @@ export type DeployReceipt = {
 
 // The receipt as served (compat setup records the deployed SHAs into its state).
 export async function fetchDeployReceipt(request: APIRequestContext): Promise<DeployReceipt> {
-  const res = await request.get(RECEIPT_URL, { timeout: 10_000 });
+  const res = await request.get(RECEIPT_URL);
   if (!res.ok()) throw new Error(`[e2e] no deploy receipt at ${RECEIPT_URL} (HTTP ${res.status()})`);
   return JSON.parse(await res.text());
 }
@@ -140,7 +140,7 @@ function pythonTreeMd5(root: string): string {
 export async function verifyDeployedHeads(request: APIRequestContext): Promise<void> {
   let receipt: DeployReceipt;
   try {
-    const res = await request.get(RECEIPT_URL, { timeout: 10_000 });
+    const res = await request.get(RECEIPT_URL);
     if (!res.ok()) throw new Error(`HTTP ${res.status()}`);
     receipt = JSON.parse(await res.text());
   } catch (e) {
@@ -224,7 +224,7 @@ export async function verifyDeployedHeads(request: APIRequestContext): Promise<v
   if (!receipt.indexMd5) {
     throw new Error(`[e2e] deploy receipt has no indexMd5. ${RECEIPT_HINT}`);
   }
-  const servedIndex = await request.get(INDEX_URL, { timeout: 10_000 });
+  const servedIndex = await request.get(INDEX_URL);
   if (!servedIndex.ok()) {
     throw new Error(
       `[e2e] cannot read deployed VolView index at ${INDEX_URL} (HTTP ${servedIndex.status()})`

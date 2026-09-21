@@ -3,6 +3,7 @@ import { setupFixture, requireHarnessState, Girder } from '../helpers/girder';
 import { requireFixture } from '../helpers/compat-state';
 import { gotoFolder, checkRowByItemId, openInVolView } from '../helpers/girder-ui';
 import { submitOtsu } from '../helpers/jobs';
+import { expectJob } from '../helpers/limits';
 import {
   waitForVolViewReady,
   openModuleTab,
@@ -76,7 +77,7 @@ test.describe('jobs come-back path (Load results)', () => {
     await expect(
       view.locator('.segment-group-list').getByText(/Otsu/).first(),
       'no Otsu segment group in the segment-group list'
-    ).toBeVisible({ timeout: 30_000 });
+    ).toBeVisible();
     await shot(view, info, 'come-back-apply');
   });
 });
@@ -114,7 +115,7 @@ test.describe('live submission + auto-apply (the submission gate)', () => {
     await expect(
       view.locator('.segment-group-list').getByText(/Otsu/).first(),
       'live auto-apply did not attach a segment group'
-    ).toBeVisible({ timeout: 30_000 });
+    ).toBeVisible();
     await shot(view, info, 'live-auto-apply');
 
     expect(fileReads.length, 'no proxiable result file read observed').toBeGreaterThan(0);
@@ -161,9 +162,8 @@ test.describe('live submission + auto-apply (the submission gate)', () => {
 
     const row = view.locator('.job-row').filter({ hasText: 'Threshold Segmentation' }).first();
     await row.getByRole('button', { name: 'Details', exact: true }).click();
-    await expect(row.locator('.job-subtitle'), 'the threshold job did not reach Failed').toContainText(
-      /^Failed\b/,
-      { timeout: 180_000 }
+    await expectJob(row.locator('.job-subtitle'), 'the threshold job did not reach Failed').toContainText(
+      /^Failed\b/
     );
     await expect(row.getByRole('button', { name: 'Load', exact: true })).toHaveCount(0);
     await expect(row.locator('.error-log'), 'the failed job exposes no error details').toContainText(

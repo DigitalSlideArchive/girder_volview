@@ -155,7 +155,7 @@ export async function addLayer(page: Page, seriesDescription: string): Promise<v
         await page.keyboard.press('Escape');
         return text;
       },
-      { timeout: 60_000, message: 'layer never finished loading' }
+      { message: 'layer never finished loading' }
     )
     .toContain('Remove as layer');
   await page.keyboard.press('Escape');
