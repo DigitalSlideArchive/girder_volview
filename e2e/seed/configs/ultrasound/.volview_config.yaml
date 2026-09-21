@@ -45,6 +45,6 @@ windowing:
   level: 127.5
 
 io:
-  segmentGroupExtension: seg
-  segmentGroupSaveFormat: nii.gz
+  segmentationExtension: seg
+  segmentationSaveFormat: nii.gz
   layerExtension: layer
