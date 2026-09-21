@@ -25,6 +25,8 @@ layouts:
           - sagittal
           - volume
 
+# Deliberately written with VolView's earlier io key names, so the e2e proves a
+# site config that has not been rewritten still overrides the plugin defaults.
 io:
   segmentGroupExtension: seg
   segmentGroupSaveFormat: nrrd

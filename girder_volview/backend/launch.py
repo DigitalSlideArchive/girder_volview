@@ -53,8 +53,8 @@ LARGE_IMAGE_CONFIG_FOLDER = "large_image.config_folder"
 
 BASE_CONFIG = {
     "io": {
-        "segmentGroupExtension": "seg",
-        "segmentGroupSaveFormat": "nii.gz",
+        "segmentationExtension": "seg",
+        "segmentationSaveFormat": "nii.gz",
         "layerExtension": "layer",
     },
     "disabledViewTypes": ["3D", "Oblique"],
@@ -359,6 +359,44 @@ def downloadResourceManifest(self, folder, folders, items, filters):
     return filesToManifest(files, folder["_id"])
 
 
+# VolView's earlier names for io keys. The client prefers the current name when
+# one config carries both, so layers are merged by key name only after every
+# layer speaks the current names; otherwise a default written under the current
+# name would outrank a folder's explicit value written under the earlier one.
+_LEGACY_IO_KEYS = {
+    "segmentGroupExtension": "segmentationExtension",
+    "segmentGroupSaveFormat": "segmentationSaveFormat",
+}
+
+
+def _renameLegacyIoKeys(config):
+    """
+    Rename the earlier io key names to their current ones, in every ``io``
+    block of a config: the top level and the blocks nested under ``groups``
+    and ``access``.  An ``io`` block that already carries the current name
+    keeps both, so the client reports the conflict to the config's author.
+
+    :param config: a parsed config value of any type.
+    :returns: a renamed copy.
+    """
+    if isinstance(config, list):
+        return [_renameLegacyIoKeys(value) for value in config]
+    if not isinstance(config, dict):
+        return config
+    renamed = {key: _renameLegacyIoKeys(value) for key, value in config.items()}
+    io = renamed.get("io")
+    if isinstance(io, dict):
+        renamed["io"] = {
+            (
+                _LEGACY_IO_KEYS[key]
+                if key in _LEGACY_IO_KEYS and _LEGACY_IO_KEYS[key] not in io
+                else key
+            ): value
+            for key, value in io.items()
+        }
+    return renamed
+
+
 def _mergeDictionaries(a, b):
     """
     Merge two dictionaries recursively.  If the second dictionary (or any
@@ -432,7 +470,7 @@ def yamlConfigFile(folder, name, user, addConfig):
                     logger.info("Not loading %s -- too large" % file["name"])
                     continue
                 with File().open(file) as fptr:
-                    config = yaml.safe_load(fptr)
+                    config = _renameLegacyIoKeys(yaml.safe_load(fptr))
                     if isinstance(config, list) and len(config) == 1:
                         config = config[0]
                     # combine and adjust config values based on current user
