@@ -65,7 +65,7 @@ async function assertContentRestored(popup: Page, gesture: CapturedGesture): Pro
   }
 }
 
-// The main-era zip's content must round-trip through the BRANCH serializer:
+// The baseline zip's content must round-trip through the BRANCH serializer:
 // re-save and compare semantic summaries (schema migrations are fine; content
 // loss is not).
 function expectZipRoundTrip(fresh: ZipSummary, gesture: CapturedGesture): void {
@@ -87,14 +87,15 @@ async function expectResumedSession(launch: VolViewLaunch, sessionItemName?: str
   const m = await launch.manifest;
   expect(
     isSessionManifest(m),
-    `branch must resume the main-era session: ${resourceNames(m)}`
+    `branch must resume the baseline session: ${resourceNames(m)}`
   ).toBeTruthy();
   if (sessionItemName) {
     expect(resourceNames(m), 'manifest names a different session').toContain(sessionItemName);
   }
 }
 
-// Branch re-save from a resumed main session, then F5 must reload the NEW save.
+// Branch re-save from a resumed baseline session, then F5 must reload the NEW
+// save.
 async function resaveAndReload(
   request: APIRequestContext,
   state: CompatState,
@@ -138,7 +139,7 @@ test.describe('compat verify (against branch deploy)', () => {
     await loginViaUI(page);
   });
 
-  test('single-item: item manifest serves the main-era session', async ({ page, request }, info) => {
+  test('single-item: item manifest serves the baseline session', async ({ page, request }, info) => {
     const gesture = requireGesture(state, 'single-item');
     const { itemId } = gesture.launch as { itemId: string };
 
@@ -158,7 +159,7 @@ test.describe('compat verify (against branch deploy)', () => {
     const gesture = requireGesture(state, 'checked-nrrd');
 
     // Bare folder-open (nothing checked) must resume the newest session — the
-    // one main saved.
+    // one the baseline saved.
     await gotoFolder(page, gesture.folderId);
     const launch = await openInVolView(page);
     await expectResumedSession(launch, gesture.sessionItemName);
@@ -166,7 +167,7 @@ test.describe('compat verify (against branch deploy)', () => {
     await shot(launch.popup, info, 'verify-checked-nrrd-restored');
     await assertContentRestored(launch.popup, gesture);
 
-    // Checking the main-era session item (plus a raw image) in the girder UI
+    // Checking the baseline session item (plus a raw image) in the girder UI
     // must open exactly that session.
     await gotoFolder(page, gesture.folderId);
     await checkRowByItemId(page, gesture.sessionItemId!);

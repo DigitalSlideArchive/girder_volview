@@ -38,8 +38,9 @@ import { fetchZipSummary } from '../../helpers/session-zip';
 // UI gesture, creates content in the baseline client, saves, and records the session
 // item + expected content into .compat-state.json for the verify phase.
 //
-// Only baseline affordances may be used here: the folder save returns no
-// resumeUrl, so session items are discovered by folder-listing diff.
+// Only baseline affordances may be used here. Session items are discovered by
+// folder-listing diff, which works for any baseline, including one whose save
+// returns no resumeUrl.
 
 const PATIENT1 = 'ACRIN-NSCLC-FDG-PET-017';
 const PATIENT2 = 'ACRIN-NSCLC-FDG-PET-022';
@@ -100,7 +101,7 @@ function record(
   });
 }
 
-test.describe('compat capture (against main deploy)', () => {
+test.describe('compat capture (against the baseline deploy)', () => {
   let state: CompatState;
 
   test.beforeEach(async ({ context, page }) => {
