@@ -46,11 +46,16 @@ export async function remoteSave(page: Page): Promise<string> {
     { timeout: 60_000 }
   );
   await saveButton.click();
-  // Main-era clients interpose a "Saving Session State" filename dialog even
-  // for remote saves; confirm it. The branch client saves directly, so the
-  // button simply never appears.
+  // Main-era clients ask for a filename in a "Saving Session State" dialog even
+  // for remote saves and post only once it is confirmed; the branch client
+  // posts directly. The dialog always comes before the POST, so the first of
+  // the two to happen decides.
   const confirmSave = page.locator('[data-testid="save-session-confirm-button"]').first();
-  if (await confirmSave.isVisible({ timeout: 3_000 }).catch(() => false)) {
+  const first = await Promise.race([
+    savePost.then(() => 'posted' as const),
+    confirmSave.waitFor({ state: 'visible' }).then(() => 'dialog' as const),
+  ]);
+  if (first === 'dialog') {
     await confirmSave.click();
   }
   const res = await savePost;
@@ -69,11 +74,6 @@ export async function remoteSave(page: Page): Promise<string> {
       .poll(() => urlsParam(page), { timeout: 15_000, message: 'urls= did not repoint to resumeUrl' })
       .toBe(resumeUrl);
   }
-  // Best-effort: the "Save Successful" toast.
-  await page
-    .getByText('Save Successful', { exact: false })
-    .waitFor({ state: 'visible', timeout: 10_000 })
-    .catch(() => undefined);
   return resumeUrl;
 }
 

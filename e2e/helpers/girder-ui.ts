@@ -130,19 +130,21 @@ export async function expectNoRow(page: Page, texts: string[]): Promise<void> {
 }
 
 // Click the hierarchy header's Open-in-VolView button and hand back the popup.
-// A "Will open newest VolView session" confirm modal may interpose (when a
-// session item is among the checked rows).
+// With a session among several checked rows, or a checked folder, the app asks
+// to confirm resuming the newest session and opens VolView only after that;
+// otherwise it opens VolView right away. It does one or the other, so the first
+// of the two to happen decides.
 export async function openInVolView(page: Page): Promise<VolViewLaunch> {
   const button = page.locator('.open-in-volview');
   await expect(button, 'Open-in-VolView button not visible').toBeVisible();
   const popupPromise = page.waitForEvent('popup', { timeout: 60_000 });
   await button.click();
-  const modal = page.locator('.modal-content:has-text("Will open newest VolView session")');
-  const modalVisible = await Promise.race([
-    modal.waitFor({ state: 'visible', timeout: 2_000 }).then(() => true),
-    popupPromise.then(() => false),
-  ]).catch(() => false);
-  if (modalVisible) {
+  const prompt = page.locator('.modal-content:has-text("Will open newest VolView session")');
+  const first = await Promise.race([
+    popupPromise.then(() => 'popup' as const),
+    prompt.waitFor({ state: 'visible' }).then(() => 'prompt' as const),
+  ]);
+  if (first === 'prompt') {
     await page.locator('#g-confirm-button').click();
   }
   return toLaunch(popupPromise);
