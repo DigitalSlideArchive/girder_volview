@@ -186,15 +186,14 @@ def _run_task(gc, folder_id, task_id, values):
     )
 
 
-def _poll_terminal(gc, job_id, timeout=240):
-    deadline = time.time() + timeout
-    last = None
-    while time.time() < deadline:
-        last = gc.get("volview_processing/jobs/%s" % job_id)
-        if last.get("state") in ("success", "error", "cancelled"):
-            return last
-        time.sleep(2)
-    return last
+def _poll_terminal(gc, job_id):
+    # A job finishes on girder_worker's schedule, so ask for its state every
+    # 2 s. pytest's timeout in tox.ini fails a job that never finishes.
+    while True:
+        job = gc.get("volview_processing/jobs/%s" % job_id)
+        if job.get("state") in ("success", "error", "cancelled"):
+            return job
+        time.sleep(2)  # noqa: TID251
 
 
 def _seg_nrrd_header(gc, file_id, tmp_path):
