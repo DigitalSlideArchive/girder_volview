@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Build the radiology CLI image when absent and idempotently register every task
-# declared by its manifest with slicer_cli_web.
+# Build the radiology CLI image when absent and register every task declared by
+# its manifest with slicer_cli_web, unless all of them are already registered
+# from this image.
 #
 # Usage:
 #   script/ensure-radiology-cli
@@ -136,57 +137,169 @@ if [ -z "$TASK_FOLDER" ] || [ "$TASK_FOLDER" = "null" ]; then
     exit 1
 fi
 
-if ! curl -sf -X PUT -H @"$TOKEN_HEADER" -H "Content-Length: 0" \
-    "$GIRDER_URL/api/v1/slicer_cli_web/docker_image?name=$CLI_IMAGE&pull=false&folder=$TASK_FOLDER" \
-    >/dev/null; then
-    echo "    !! registration PUT for $CLI_IMAGE was rejected by slicer_cli_web" >&2
-    exit 1
-fi
+# slicer_cli_web stores the image's first RepoDigest on each task item as
+# meta.digest and runs jobs by it. Any of the local image's RepoDigests names the
+# same image, and their order changes when the image gains another name, so a
+# task is current when its digest is one of them. An image without a RepoDigest,
+# such as a local build on Docker's classic image store, is registered without
+# meta.digest and runs by tag, so only its stored task XML can go stale. When
+# every required task is current there is nothing to import. That also lets a
+# deploy succeed while Girder's anonymous access is disabled, when every import
+# job fails.
+LOCAL_DIGESTS=$(docker image inspect "$CLI_IMAGE" --format '{{join .RepoDigests " "}}')
 
-echo "==> [4/4] verifying radiology tasks are registered"
-# Exit codes: 0 = all required tasks present; 2 = task list reachable but a task
-# is still missing (keep polling — registration is async); 3 = the endpoint did
-# not return a task list (bad DEMO_FOLDER / access error — retrying won't help).
-tasks_present() {
-    local json
-    json=$(curl -s -H @"$TOKEN_HEADER" \
-        "$GIRDER_URL/api/v1/folder/$DEMO_FOLDER/volview_processing/tasks")
-    REQUIRED="${REQUIRED_TASKS[*]}" TASKS_JSON="$json" python3 - <<'PY'
+# Print how the registered tasks match and succeed when every required task is
+# current.
+registered_from_local_image() {
+    API="$GIRDER_URL/api/v1" TOKEN_FILE="$TOKEN_HEADER" TASK_FOLDER="$TASK_FOLDER" \
+        CLI_IMAGE="$CLI_IMAGE" LOCAL_DIGESTS="$LOCAL_DIGESTS" REQUIRED="${REQUIRED_TASKS[*]}" \
+        python3 - <<'PY'
 import json
 import os
+import subprocess
 import sys
+import urllib.parse
+import urllib.request
+
+with open(os.environ["TOKEN_FILE"], encoding="utf8") as stream:
+    header, token = stream.read().split(":", 1)
+
+
+def get(path, **params):
+    query = "?" + urllib.parse.urlencode(params) if params else ""
+    request = urllib.request.Request(
+        os.environ["API"] + path + query, headers={header.strip(): token.strip()}
+    )
+    with urllib.request.urlopen(request) as response:
+        return json.load(response)
+
+
+def image_xml(task):
+    # The same `docker run <image> <task> --xml` that slicer_cli_web's import
+    # runs, trimmed the same way, so an unchanged spec compares equal.
+    result = subprocess.run(
+        ["docker", "run", "--rm", os.environ["CLI_IMAGE"], task, "--xml"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    text = result.stdout.decode("utf8", "replace")
+    if result.returncode or "<" not in text:
+        return None
+    return "<" + text.split("<", 1)[1].rsplit(">", 1)[0] + ">"
+
 
 try:
-    tasks = json.loads(os.environ["TASKS_JSON"])
-except Exception:
-    sys.exit(3)
-if not isinstance(tasks, list):
-    sys.exit(3)
-names = {task.get("title") or task.get("name") for task in tasks}
-required = set(os.environ["REQUIRED"].split())
-missing = sorted(required - names)
-if missing:
-    print("missing: " + ", ".join(missing), file=sys.stderr)
-    sys.exit(2)
-print(f"{len(tasks)} tasks; radiology CLIs present: " + ", ".join(sorted(required)))
+    metas = {
+        cli["name"]: get(f"/item/{cli['_id']}").get("meta", {})
+        for cli in get("/slicer_cli_web/cli", folder=os.environ["TASK_FOLDER"])
+        if cli.get("image") == os.environ["CLI_IMAGE"]
+    }
+except Exception as exc:
+    print(f"    could not read the registered tasks ({exc})", file=sys.stderr)
+    sys.exit(1)
+required = os.environ["REQUIRED"].split()
+if any(task not in metas for task in required):
+    sys.exit(1)
+local_digests = set(os.environ["LOCAL_DIGESTS"].split())
+if local_digests:
+    stored = {metas[task].get("digest") for task in required}
+    if not stored <= local_digests:
+        sys.exit(1)
+    print("from " + ", ".join(sorted(digest.split("@")[-1] for digest in stored)))
+    sys.exit(0)
+if any("digest" in metas[task] or metas[task].get("xml") != image_xml(task) for task in required):
+    sys.exit(1)
+print("with the task specs this image prints")
 PY
 }
 
-registered=
-endpoint_error=
-for _ in $(seq 1 60); do
-    tasks_present && { registered=1; break; }
-    rc=$?
-    [ "$rc" -eq 3 ] && endpoint_error=1
-    sleep 2
-done
-if [ -z "$registered" ]; then
-    if [ -n "$endpoint_error" ]; then
-        echo "    !! task list at $GIRDER_URL/api/v1/folder/$DEMO_FOLDER/volview_processing/tasks" \
-             "was not readable (check DEMO_FOLDER=$DEMO_FOLDER exists and is accessible)" >&2
-    else
-        echo "    !! radiology tasks (${REQUIRED_TASKS[*]}) did not register within timeout" >&2
+# Print a field of the job JSON on stdin, or nothing if it is unreadable.
+job_field() {
+    python3 -c "import json,sys
+try:
+    value = json.load(sys.stdin)[sys.argv[1]]
+    print(''.join(value) if isinstance(value, list) else value)
+except Exception:
+    pass" "$1"
+}
+
+if MATCH=$(registered_from_local_image); then
+    echo "    every task is already registered $MATCH; nothing to import"
+else
+    # The import registers exactly the tasks the image lists, so a required task
+    # the image lacks would stay missing whether or not the import succeeds.
+    MISSING=$(docker run --rm "$CLI_IMAGE" --list_cli 2>/dev/null \
+        | REQUIRED="${REQUIRED_TASKS[*]}" python3 -c "import json,os,sys
+try:
+    listed = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+print(' '.join(task for task in os.environ['REQUIRED'].split() if task not in listed))") || {
+        echo "    !! could not list the tasks in $CLI_IMAGE (docker run $CLI_IMAGE --list_cli)" >&2
+        exit 1
+    }
+    if [ -n "$MISSING" ]; then
+        echo "    !! $CLI_IMAGE does not list $MISSING, which $CLI_REPO/cli_list.json" \
+             "requires. Pull or rebuild the image to match that checkout." >&2
+        exit 1
     fi
+
+    JOB_ID=$(curl -sf -X PUT -H @"$TOKEN_HEADER" -H "Content-Length: 0" \
+        "$GIRDER_URL/api/v1/slicer_cli_web/docker_image?name=$CLI_IMAGE&pull=false&folder=$TASK_FOLDER" \
+        | job_field _id) || JOB_ID=
+    if ! [[ $JOB_ID =~ ^[0-9a-f]{24}$ ]]; then
+        echo "    !! slicer_cli_web did not queue an import job for $CLI_IMAGE" >&2
+        exit 1
+    fi
+    # The PUT only queues the import job. Tasks with the right names can already
+    # exist from an earlier import, so the job's own status is the only proof
+    # this image was registered. girder_jobs: 3 success, 4 error, 5 canceled.
+    # A failed poll keeps the last job state that was read.
+    job_json=
+    status=
+    for _ in $(seq 1 150); do
+        if polled=$(curl -sf -H @"$TOKEN_HEADER" "$GIRDER_URL/api/v1/job/$JOB_ID"); then
+            job_json=$polled
+            status=$(printf '%s' "$job_json" | job_field status)
+            case $status in 3|4|5) break ;; esac
+        fi
+        sleep 2
+    done
+    if [ "$status" != 3 ]; then
+        job_log=$(printf '%s' "$job_json" | job_field log)
+        case $status in
+            4|5) echo "    !! slicer_cli_web's import job $JOB_ID for $CLI_IMAGE did not" \
+                      "succeed (status $status). Its log:" >&2 ;;
+            *) echo "    !! slicer_cli_web's import job $JOB_ID for $CLI_IMAGE had not" \
+                    "finished after 300 s (status ${status:-unknown}). Its log so far:" >&2 ;;
+        esac
+        printf '%s\n' "$job_log" | sed 's/^/       /' >&2
+        if [[ $job_log == *'(user None)'* ]]; then
+            echo "    !! Girder's anonymous access is disabled" \
+                 "(core.disable_anonymous_access), so the import cannot load its" \
+                 "owner. Register this image once with that setting off." >&2
+        fi
+        exit 1
+    fi
+    echo "    import job $JOB_ID succeeded"
+fi
+
+echo "==> [4/4] verifying radiology tasks are registered"
+TASKS_URL="$GIRDER_URL/api/v1/folder/$DEMO_FOLDER/volview_processing/tasks"
+TASKS_JSON=$(curl -sf -H @"$TOKEN_HEADER" "$TASKS_URL") || {
+    echo "    !! could not read $TASKS_URL" \
+         "(check DEMO_FOLDER=$DEMO_FOLDER exists and is accessible)" >&2
+    exit 1
+}
+# Step 3 either found every task current or waited for the import to finish, so
+# a missing task will not appear later.
+MISSING=$(REQUIRED="${REQUIRED_TASKS[*]}" python3 -c "import json,os,sys
+listed = {task.get('title') or task.get('name') for task in json.load(sys.stdin)}
+print(' '.join(task for task in os.environ['REQUIRED'].split() if task not in listed))" \
+    <<< "$TASKS_JSON")
+if [ -n "$MISSING" ]; then
+    echo "    !! the task list lacks $MISSING" >&2
     exit 1
 fi
 
