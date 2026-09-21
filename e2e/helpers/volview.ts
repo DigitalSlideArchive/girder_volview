@@ -42,18 +42,6 @@ export async function remoteSave(page: Page): Promise<string> {
       /\/(item|folder)\/[^/]+\/volview(\?|$)/.test(r.url())
   );
   await saveButton.click();
-  // Main-era clients ask for a filename in a "Saving Session State" dialog even
-  // for remote saves and post only once it is confirmed; the branch client
-  // posts directly. The dialog always comes before the POST, so the first of
-  // the two to happen decides.
-  const confirmSave = page.locator('[data-testid="save-session-confirm-button"]').first();
-  const first = await Promise.race([
-    savePost.then(() => 'posted' as const),
-    confirmSave.waitFor({ state: 'visible' }).then(() => 'dialog' as const),
-  ]);
-  if (first === 'dialog') {
-    await confirmSave.click();
-  }
   const res = await savePost;
   expect(res.status(), `save POST failed: ${res.status()} ${res.url()}`).toBeLessThan(300);
 
