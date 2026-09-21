@@ -34,6 +34,10 @@ When processing routes are present, `script/deploy` calls
 image, and verifies the declared tasks are available. It does not pull this
 image from a registry.
 
+With `.env.example`'s defaults, Girder's anonymous access is disabled, and
+`slicer_cli_web` cannot import an image then. Registering a new or changed image
+takes one deploy with `DSA_DISABLE_ANONYMOUS_ACCESS=false`.
+
 ## Speedup S3 file downloading by disabling proxying
 
 The VolView plugin proxies request to download files from S3 by default.

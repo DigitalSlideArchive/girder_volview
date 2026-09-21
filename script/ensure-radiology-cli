@@ -276,9 +276,9 @@ print(' '.join(task for task in os.environ['REQUIRED'].split() if task not in li
         esac
         printf '%s\n' "$job_log" | sed 's/^/       /' >&2
         if [[ $job_log == *'(user None)'* ]]; then
-            echo "    !! Girder's anonymous access is disabled" \
-                 "(core.disable_anonymous_access), so the import cannot load its" \
-                 "owner. Register this image once with that setting off." >&2
+            echo "    !! Anonymous access is disabled (script/hardened.override.yml), so" \
+                 "the import cannot load its owner. Deploy once with" \
+                 "DSA_DISABLE_ANONYMOUS_ACCESS=false to register this image." >&2
         fi
         exit 1
     fi
