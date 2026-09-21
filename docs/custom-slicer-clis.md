@@ -84,10 +84,10 @@ intent from its XML declaration using the rules below.
 | Direction | Slicer XML                                                          | VolView behavior                                                                         |
 | --------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | Input     | `<image channel="input">`; omitted `type` defaults to `scalar`      | Uses the selected base scalar image.                                                     |
-| Input     | `<image channel="input" type="label">`                              | Uses the selected segment group's labelmap.                                              |
+| Input     | `<image channel="input" type="label">`                              | Stages the active image's segmentation as one or more labelmap files.                    |
 | Input     | `<file channel="input" fileExtensions=".annotations.json">`         | Stages every finished ruler, rectangle, and polygon on the selected image as one JSON file. |
 | Output    | `<image channel="output">`; omitted `type` defaults to `scalar`     | `add-base-image`: loads the output as a new base image.                                  |
-| Output    | `<image channel="output" type="label">`                             | `add-segment-group`: adds the output labelmap to the input base image.                   |
+| Output    | `<image channel="output" type="label">`                             | `import-segmentation`: adds the output labelmap to the input base image.                 |
 | Output    | `<file channel="output" fileExtensions=".annotations.json">`        | `add-annotations`: adds the output's rulers, rectangles, and polygons to the input image. |
 | Output    | `<file channel="output">`                                           | No scene intent; downloadable under **Details > Files**.                                 |
 
@@ -98,7 +98,7 @@ an opaque input file, so such a task does not load in the Jobs form.
 
 The declared extension is the only signal. VolView never inspects a file's
 content or mime type to decide an intent, and an `<image type="label">` output
-stays a segment group whatever its `fileExtensions` claim.
+is imported into a segmentation whatever its `fileExtensions` claim.
 
 Example labelmap output:
 
@@ -116,6 +116,39 @@ path passed to the CLI; Girder Worker uploads it to the job-owned folder.
 
 See [`ThresholdSegmentation.xml`](https://github.com/PaulHax/volview-radiology-cli/blob/main/ThresholdSegmentation/ThresholdSegmentation.xml)
 for a complete scalar-image-to-labelmap declaration.
+
+### Reading a labelmap input
+
+A labelmap input binds to the one segmentation of the active image. Its masks
+may overlap, so the client stages them as overlap-free parts, each a compressed
+`.seg.nrrd` file:
+
+- `multiple="true"` on the parameter gives the CLI every part, one file per
+  part. Declare it for a task that has to see the whole segmentation.
+- A singular parameter gives the CLI the first part only. Where masks overlap,
+  whole segments are left out of that part and the user is told which ones.
+  Where nothing overlaps, the one part carries every segment of the image.
+- Label values run from 1 within a file and are not stable across files or
+  across runs. Identify a segment by its embedded `Segment{N}_Name`, never by
+  its label value.
+- Part voxels are `uint8`, or `uint16` for a part of more than 255 segments.
+
+### Writing a labelmap output
+
+Every labelmap result for an image joins that image's one segmentation:
+
+- A segment whose name matches one the scene already holds joins it and keeps
+  the color the scene gives it. Any other name mints a segment with the name
+  and color the file declares, as does a name whose segment the image already
+  carries a mask for, since an image holds at most one mask per segment.
+- A result is identified by its provider, job, and output, so loading the same
+  result twice adds nothing while re-running the task adds its results
+  alongside the earlier ones.
+- A segment declared in the file header that carries no voxels arrives as an
+  empty segment.
+- An output whose own segments overlap must be written as a multi-component
+  volume, one component per non-overlapping set. `Segment{N}_Layer` is not
+  read.
 
 ### The annotations JSON format
 
@@ -148,7 +181,7 @@ agree on without knowing each other's image indexing.
   "space": "LPS",
   "labels": {
     "rulers": { "lesion": { "color": "#ff0000", "strokeWidth": 2 } },
-    "rectangles": { "lesion": { "color": "#00ff00", "fillColor": "#00ff0033" } }
+    "rectangles": { "lesion": { "color": "#00ff00" } }
   },
   "tools": {
     "rulers": [
@@ -195,6 +228,11 @@ Rules a producer must follow:
 - Label definitions are strict objects containing only string `color`, numeric
   `strokeWidth`, and string `fillColor` fields. The record key `__proto__` is
   reserved in both label namespaces and tool metadata.
+- `color` is a hex value such as `#d60000` or a CSS color keyword such as
+  `lime`. Any other syntax, including functional forms such as `rgb()` and
+  `hsl()`, is ignored: the label keeps the color the client already holds for
+  it, and the user is told the value was rejected. `fillColor` is accepted and
+  ignored, since every rectangle is drawn unfilled.
 - Label references must resolve. Every nonempty `labelName` has to exist in that
   tool kind's namespace; a dangling reference rejects the whole file. Omit
   `labelName` for an unlabeled tool.

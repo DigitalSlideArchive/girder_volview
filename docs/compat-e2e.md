@@ -48,17 +48,20 @@ content per gesture.
 
 ## What the harness proves
 
-| Gesture                      | Launch (real girder UI, on the baseline)                    | Content saved                 | Verified on the branch                                                                                         |
-| ---------------------------- | ----------------------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `single-item`                | item page → Open in VolView                                 | ruler                         | item manifest serves the session; measurements exact; re-save                                                  |
-| `checked-nrrd`               | check 2 NRRD rows → Open Checked                            | ruler + painted segment group | bare-folder open resumes it; checking the session row opens exactly it; groups + measurements survive; re-save |
-| `filtered-dicom`             | filter box narrows to one patient → check series row → Open | ruler                         | replaying the same filter gesture resumes the matching `session.<filter>.volview.zip`                          |
-| `study-layered`              | check CT + PET series rows of one study → Open              | PET layered over CT + ruler   | replay resumes; the layer survives restore and re-save                                                         |
-| `study-drilldown`            | patient → study drill-down in an isolated small-tier folder | PET layer + ruler             | replay resumes                                                                                                 |
+| Gesture           | Launch (real girder UI, on the baseline)                    | Content saved               | Verified on the branch                                                                                           |
+| ----------------- | ----------------------------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `single-item`     | item page → Open in VolView                                 | ruler                       | item manifest serves the session; measurements exact; re-save                                                    |
+| `checked-nrrd`    | check 2 NRRD rows → Open Checked                            | ruler + painted segments    | bare-folder open resumes it; checking the session row opens exactly it; segments + measurements survive; re-save |
+| `filtered-dicom`  | filter box narrows to one patient → check series row → Open | ruler                       | replaying the same filter gesture resumes the matching `session.<filter>.volview.zip`                            |
+| `study-layered`   | check CT + PET series rows of one study → Open              | PET layered over CT + ruler | replay resumes; the layer survives restore and re-save                                                           |
+| `study-drilldown` | patient → study drill-down in an isolated small-tier folder | PET layer + ruler           | replay resumes                                                                                                   |
 
-Content checks are semantic, not pixel-based: ruler measurement text must match
-exactly, segment-group names must survive, and the re-saved manifest must keep
-rulers/segment groups/layers (schema migrations are fine; content loss is not).
+Content checks are semantic, not pixel-based: a baseline-saved session must
+restore, ruler measurement text must match exactly, every captured segment name
+must survive, and the re-saved session must keep its rulers and layers and carry
+non-empty mask data (schema migrations are fine; content loss is not). How many
+masks a session holds carries no invariant of its own, because every
+segmentation an image receives merges into that image's one segmentation.
 Screenshots are attached to the report as evidence, never asserted on.
 
 The current project also covers what an old-session restore can't prove:
