@@ -3,11 +3,11 @@ import { openModuleTab } from './volview';
 import { RulerRecord } from './compat-state';
 
 // Content creation + readback inside VolView, selector-compatible with both the
-// main-era client (capture) and the branch client (verify/current), grounded on
+// baseline client (capture) and the branch client (verify/current), grounded on
 // ControlsStripTools / AnnotationsModule / MeasurementsToolList /
 // PatientStudyVolumeBrowser markup. The segment surface is the one place the
-// two generations diverge: main nests segments under segment groups and splits
-// the Annotations module into tabs, the branch lists segments directly.
+// two generations diverge: the baseline nests segments under segment groups and
+// splits the Annotations module into tabs, the branch lists segments directly.
 
 async function first2DCanvasBox(page: Page) {
   const canvas = page
@@ -46,9 +46,9 @@ export async function placeRuler(
 }
 
 // Structural markers of the two client generations, both rendered as soon as
-// the Annotations module exists: main always builds the tab strip, the branch
-// never does. Content is not a tell, since an empty segment list looks the
-// same in both.
+// the Annotations module exists: the baseline always builds the tab strip, the
+// branch never does. Content is not a tell, since an empty segment list looks
+// the same in both.
 const LEGACY_SEGMENT_GROUP_TAB = '.v-tab:has-text("Segment Groups")';
 const BRANCH_SEGMENT_LIST = '[data-testid="segment-list"]';
 
@@ -61,7 +61,7 @@ async function openAnnotations(page: Page): Promise<'legacy' | 'branch'> {
   return (await page.locator(LEGACY_SEGMENT_GROUP_TAB).count()) > 0 ? 'legacy' : 'branch';
 }
 
-// Measurements are a tab in the main-era client and a collapsible section, open
+// Measurements are a tab in the baseline client and a collapsible section, open
 // by default, in the branch client.
 async function openMeasurements(page: Page): Promise<void> {
   if ((await openAnnotations(page)) === 'branch') {
@@ -128,7 +128,7 @@ export async function paintStrokes(page: Page): Promise<void> {
 const trimmed = (texts: string[]): string[] =>
   [...new Set(texts.map((t) => t.trim()).filter(Boolean))];
 
-// The main-era client shows only the selected group's segments, so every group
+// The baseline client shows only the selected group's segments, so every group
 // has to be selected in turn; the class pair pins the segment chip list against
 // the identically shaped label chip list in the tool controls above it.
 const LEGACY_SEGMENT_CHIPS = '.v-item-group.my-4 .v-chip:has(.dot-container) .text-truncate';
@@ -173,7 +173,7 @@ export async function lockSegment(page: Page, name: string): Promise<void> {
 }
 
 // Mint a second segment and make it the paint target (the branch client selects
-// what it creates). Branch-only: the main-era client has no such list.
+// what it creates). Branch-only: the baseline client has no such list.
 export async function addSegment(page: Page): Promise<void> {
   await openAnnotations(page);
   const before = await segmentRows(page).count();

@@ -51,7 +51,7 @@ export async function setupFixture(context: BrowserContext, id: FixtureId): Prom
 
 // The session.volview.zip items currently in a folder. countSessionItems proves
 // a save created a NEW session item; the compat capture diffs the listing to
-// discover which item a save minted (main's save response carries no resumeUrl).
+// discover which item a save minted.
 export async function listSessionItems(
   request: APIRequestContext,
   token: string,

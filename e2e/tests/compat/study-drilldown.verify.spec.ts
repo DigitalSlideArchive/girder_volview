@@ -35,7 +35,7 @@ test.describe('compat verify: study drill-down', () => {
     const m = await launch.manifest;
     expect(
       isSessionManifest(m),
-      `study drill-down must resume the main-era session: ${resourceNames(m)}`
+      `study drill-down must resume the baseline session: ${resourceNames(m)}`
     ).toBeTruthy();
     expect(resourceNames(m)).toContain(gesture.sessionItemName);
     await waitForVolViewReady(launch.popup);

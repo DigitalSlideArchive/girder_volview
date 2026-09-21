@@ -24,12 +24,9 @@ async function toLaunch(popupPromise: Promise<Page>): Promise<VolViewLaunch> {
   return { popup, manifest };
 }
 
-// Log the girder WEB CLIENT in through its UI. Planting the girderToken cookie
-// authenticates VolView's cookie-accepting routes, but girder rejects a
-// cookie-only token on state-changing requests (CSRF): main's folder-open path
-// fires a metadata PUT before window.open, so without a real login that PUT
-// 401s and the popup never opens. A UI login sets the client's currentToken, so
-// its restRequest sends the Girder-Token header on writes.
+// Log the girder WEB CLIENT in through its UI. The planted girderToken cookie
+// authenticates VolView's cookie-accepting routes but not the web client, which
+// sends the Girder-Token header only after a UI login sets its currentToken.
 //
 // The client keeps that token in localStorage, so a page opened in a context
 // that already logged in comes up logged in. Once the client knows which, its
