@@ -9,7 +9,8 @@ import { readCompatState, writeCompatState, COMPAT_STATE_PATH } from './helpers/
 //                           E2E_EXPECT_VOLVIEW_SHA carry the expected pair):
 //                           provision the run folder ONCE and write
 //                           .compat-state.json.
-//   COMPAT_PHASE=verify   — against THIS worktree: restore captured sessions.
+//   COMPAT_PHASE=verify   — against THIS worktree: restore captured sessions
+//                           and load the baseline job's result.
 //   COMPAT_PHASE=current  — against THIS worktree: exercise fresh current
 //                           lifecycles and jobs in otherwise untouched folders.
 export default async function compatSetup(_config: FullConfig): Promise<void> {
