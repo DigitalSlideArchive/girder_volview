@@ -45,6 +45,7 @@ export type FixtureId =
   | 'lifecycle-older'
   | 'lifecycle-session-row'
   | 'lifecycle-url-contract'
+  | 'jobs-baseline'
   | 'jobs-comeback'
   | 'jobs-live'
   | 'jobs-staged'
@@ -85,6 +86,11 @@ export type CapturedGesture = {
   };
 };
 
+export type CapturedJob = {
+  jobId: string;
+  segmentNames: string[];
+};
+
 export type CompatState = {
   createdAt: string;
   sourceGirderSha: string;
@@ -97,6 +103,10 @@ export type CompatState = {
   provisioned: boolean;
   dicomSeeded: boolean;
   gestures: CapturedGesture[];
+  // The labelmap job the baseline client submitted in the 'jobs-baseline'
+  // fixture, with the segment names its result applied. The verify phase loads
+  // the same result through the branch.
+  baselineJob?: CapturedJob;
 };
 
 export const COMPAT_STATE_PATH = path.resolve(__dirname, '..', '.compat-state.json');
@@ -134,4 +144,10 @@ export function appendGesture(gesture: CapturedGesture): void {
   if (!state) throw new Error('[compat] no state file — did capture setup run?');
   state.gestures = [...state.gestures.filter((g) => g.id !== gesture.id), gesture];
   writeCompatState(state);
+}
+
+export function recordBaselineJob(job: CapturedJob): void {
+  const state = readCompatState();
+  if (!state) throw new Error('[compat] no state file. Did capture setup run?');
+  writeCompatState({ ...state, baselineJob: job });
 }

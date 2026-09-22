@@ -116,6 +116,7 @@ export async function provisionCompat(
   await dicomFixture('filtered-dicom');
   await dicomFixture('study-layered');
   await dicomFixture('study-drilldown', DICOM_DRILLDOWN_CONFIG);
+  await nrrdFixture('jobs-baseline', 1);
 
   await nrrdFixture('lifecycle-single', 1);
   await nrrdFixture('lifecycle-checked', 2);

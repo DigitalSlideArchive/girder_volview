@@ -2,17 +2,18 @@
 
 This is the project's single browser-test infrastructure. It proves that
 `session.volview.zip` files saved by an **older** girder_volview + VolView client
-still restore and re-save correctly, then exercises fresh current-version
-save/load/restore and job behavior.
+still restore and re-save correctly, and that a job the older pair ran still
+loads its result. It then exercises fresh current-version save/load/restore and
+job behavior.
 
 ```
 e2e/scripts/compat.sh
  ├─ materialize-baseline.sh                          # git archive origin/HEAD -> e2e/.compat/
  ├─ materialize-volview-baseline.sh                  # the client that baseline pins
  ├─ script/deploy <baseline export> <baseline client>  # baseline pair
- ├─ playwright --project capture                     # save sessions on the baseline
+ ├─ playwright --project capture                     # save sessions, run a job on the baseline
  ├─ script/deploy <this worktree> <sibling client>   # branch backend + client
- ├─ playwright --project verify                      # old sessions must restore
+ ├─ playwright --project verify                      # old sessions restore, the old job loads
  └─ playwright --project current                     # fresh lifecycle + jobs
 ```
 
@@ -43,8 +44,8 @@ hard failure, not a warning (`COMPAT_ALLOW_VACUOUS=1` to override).
 Girder's mongo volume survives the redeploy (script/deploy only recreates the
 girder container's code), so the folders and sessions captured in step 2 are
 still there for step 4. `e2e/.compat-state.json` (gitignored) bridges the two
-playwright invocations: session item ids, launch descriptors, and the expected
-content per gesture.
+playwright invocations: session item ids, launch descriptors, the expected
+content per gesture, and the baseline job's id with the segment names it applied.
 
 ## What the harness proves
 
@@ -55,6 +56,7 @@ content per gesture.
 | `filtered-dicom`  | filter box narrows to one patient → check series row → Open | ruler                       | replaying the same filter gesture resumes the matching `session.<filter>.volview.zip`                            |
 | `study-layered`   | check CT + PET series rows of one study → Open              | PET layered over CT + ruler | replay resumes; the layer survives restore and re-save                                                           |
 | `study-drilldown` | patient → study drill-down in an isolated small-tier folder | PET layer + ruler           | replay resumes                                                                                                   |
+| `jobs-baseline`   | check the NRRD row → Open Checked; the Jobs tab runs Otsu   | Otsu labelmap job result    | `/results` answers `import-segmentation`; the result waits for Load, then applies the same segment names         |
 
 Content checks are semantic, not pixel-based: a baseline-saved session must
 restore, ruler measurement text must match exactly, every captured segment name

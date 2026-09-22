@@ -5,10 +5,12 @@ set -euo pipefail
 #
 #   1. materialize the BASELINE girder_volview from git history (no second
 #      checkout required) and deploy it with the client that baseline pins
-#   2. playwright `capture` project — real-UI gestures, content, saves
-#      (expected backend + client shas carry the pins past the deploy guard)
+#   2. playwright `capture` project — real-UI gestures, content, saves, and one
+#      labelmap job run from the baseline client. Expected backend + client
+#      shas carry the pins past the deploy guard.
 #   3. redeploy THIS worktree + its paired VolView
-#   4. playwright `verify` project — sessions must restore + re-save
+#   4. playwright `verify` project — sessions must restore + re-save, and the
+#      baseline job's result must load
 #   5. playwright `current` project — fresh current sessions, restart/history,
 #      grouped DICOM launches, and job submission, all on isolated folders
 #
