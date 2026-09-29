@@ -138,8 +138,8 @@ def test_group_block_earlier_name_overrides_the_folder_current_name(
 def test_one_block_naming_a_key_both_ways_reaches_the_client_intact(
     server, owner, fsAssetstore
 ):
-    # The client prefers the current name and tells the config's author about
-    # the ignored one; the server does not pick a winner on their behalf.
+    # The client rejects conflicting values; the server preserves both names
+    # so that validation can report the conflict.
     folder = _folder_with_config(
         owner,
         b"io:\n  segmentGroupSaveFormat: nrrd\n  segmentationSaveFormat: mha\n",
