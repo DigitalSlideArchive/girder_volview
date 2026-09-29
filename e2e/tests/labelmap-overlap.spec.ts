@@ -5,6 +5,8 @@ import {
   waitForVolViewReady,
   selectTask,
   waitForInputBound,
+  submitTaskFromForm,
+  waitForJobComplete,
   shot,
 } from '../helpers/volview';
 import {
@@ -12,6 +14,8 @@ import {
   addSegment,
   lockSegment,
   readSegmentNames,
+  rulerMeasurementRows,
+  readRulerMeasurements,
 } from '../helpers/annotations';
 
 // A labelmap file gives each voxel one value, so two segments claiming the same
@@ -28,7 +32,7 @@ async function launchChecked(driver: Page, g: Girder): Promise<Page> {
 }
 
 test.describe('overlapping segments staged as a labelmap input', () => {
-  test('names the segments a single-labelmap input omits', async ({ page, context }, info) => {
+  test('warns for one labelmap and measures both overlapping segments', async ({ page, context }, info) => {
     const g = await setupFixture(context, 'jobs-overlap');
     const view = await launchChecked(page, g);
 
@@ -43,7 +47,7 @@ test.describe('overlapping segments staged as a labelmap input', () => {
     await addSegment(view);
     await paintStrokes(view);
     const names = await readSegmentNames(view);
-    expect(names.length, 'the overlap needs two painted segments').toBeGreaterThan(1);
+    expect(names, 'the overlap needs two painted segments').toHaveLength(2);
     for (const name of names) {
       const reveal = view.getByRole('button', {
         name: `Reveal slice for ${name}`,
@@ -52,6 +56,7 @@ test.describe('overlapping segments staged as a labelmap input', () => {
       await expect(reveal).toBeVisible();
       await expect(reveal, `${name} has no painted content`).toBeEnabled();
     }
+    await expect(await rulerMeasurementRows(view)).toHaveCount(0);
 
     const notice = view.locator('.jobs-module [data-testid="staging-omission-notice"]');
 
@@ -81,5 +86,26 @@ test.describe('overlapping segments staged as a labelmap input', () => {
     ).toBeVisible();
     await expect(notice, 'a multi-labelmap input omitted a segment').toHaveCount(0);
     await shot(view, info, 'labelmap-no-omission-notice');
+
+    await submitTaskFromForm(view);
+    await waitForJobComplete(view);
+
+    const rulers = await rulerMeasurementRows(view);
+    await expect(rulers, 'both regions must return long- and short-axis rulers').toHaveCount(4);
+    for (const name of names) {
+      for (const axis of ['LD', 'SAD']) {
+        const title = rulers
+          .filter({ has: view.getByText(`${name} ${axis}`, { exact: true }) })
+          .locator('.v-list-item-title');
+        await expect(title, `missing ruler for ${name} ${axis}`).toHaveCount(1);
+        await expect(title).toBeVisible();
+      }
+    }
+    const measurements = await readRulerMeasurements(view);
+    expect(measurements).toHaveLength(4);
+    for (const { lengthText } of measurements) {
+      expect(Number.parseFloat(lengthText), 'generated rulers must have nonzero length').toBeGreaterThan(0);
+    }
+    await shot(view, info, 'labelmap-overlap-generated-rulers');
   });
 });
