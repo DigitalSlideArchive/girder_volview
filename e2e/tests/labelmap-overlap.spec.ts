@@ -61,7 +61,12 @@ test.describe('overlapping segments staged as a labelmap input', () => {
       notice.first(),
       'the singular labelmap input did not report the segments it leaves out'
     ).toBeVisible();
-    await expect(notice.first().getByRole('img')).toHaveAccessibleName(
+    await notice.first().focus();
+    const tooltip = view.getByRole('tooltip').filter({
+      hasText: `This input accepts one labelmap. Omitted whole segments: ${first}.`,
+    });
+    await expect(tooltip).toBeVisible();
+    await expect(tooltip).toHaveText(
       `This input accepts one labelmap. Omitted whole segments: ${first}.`
     );
     await shot(view, info, 'labelmap-omission-notice');
