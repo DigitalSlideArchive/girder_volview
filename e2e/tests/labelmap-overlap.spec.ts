@@ -32,19 +32,26 @@ test.describe('overlapping segments staged as a labelmap input', () => {
     const g = await setupFixture(context, 'jobs-overlap');
     const view = await launchChecked(page, g);
 
-    // The same strokes twice, under two segments. Painting takes the voxels it
-    // covers from every unlocked segment, so the first is locked before the
-    // second is painted: the two masks then hold identical voxels and cannot be
-    // flattened together.
+    // The same strokes with overlap enabled put both segments in the same voxels.
     await paintStrokes(view);
+    const overlap = view.getByRole('checkbox', { name: 'Allow Overlap', exact: true });
+    await expect(overlap).toBeEnabled();
+    await overlap.check();
+    await expect(overlap).toBeChecked();
     const [first] = await readSegmentNames(view);
     await lockSegment(view, first);
     await addSegment(view);
     await paintStrokes(view);
-    expect(
-      (await readSegmentNames(view)).length,
-      'the overlap needs two painted segments'
-    ).toBeGreaterThan(1);
+    const names = await readSegmentNames(view);
+    expect(names.length, 'the overlap needs two painted segments').toBeGreaterThan(1);
+    for (const name of names) {
+      const reveal = view.getByRole('button', {
+        name: `Reveal slice for ${name}`,
+        exact: true,
+      });
+      await expect(reveal).toBeVisible();
+      await expect(reveal, `${name} has no painted content`).toBeEnabled();
+    }
 
     const notice = view.locator('.jobs-module [data-testid="staging-omission-notice"]');
 
@@ -54,6 +61,9 @@ test.describe('overlapping segments staged as a labelmap input', () => {
       notice.first(),
       'the singular labelmap input did not report the segments it leaves out'
     ).toBeVisible();
+    await expect(notice.first().getByRole('img')).toHaveAccessibleName(
+      `This input accepts one labelmap. Omitted whole segments: ${first}.`
+    );
     await shot(view, info, 'labelmap-omission-notice');
 
     // RegionOfInterestRulers takes many labelmaps, so the same overlap ships
