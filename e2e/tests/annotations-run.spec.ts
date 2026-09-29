@@ -83,7 +83,7 @@ test.describe('vector annotations through a job', () => {
     const panel = view.locator('.jobs-module');
     const submit = panel.getByRole('button', { name: 'Submit', exact: true });
     await expect(
-      panel.getByText('Create a segmentation on the active dataset first.').first(),
+      panel.getByText('Paint a segment on the current image first.').first(),
       'no unbound-labelmap message in the form'
     ).toBeVisible();
     await expect(submit, 'Submit was enabled with nothing painted').toBeDisabled();
