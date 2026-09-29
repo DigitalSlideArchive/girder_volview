@@ -305,8 +305,9 @@ def isTransientStagedFile(file, user=None, itemCache=None):
 def isLaunchFile(file, user=None, itemCache=None, folderCache=None):
     """Whether ``file`` may surface as launch data at all.
 
-    Excludes only working data — session zips (they resume through their own
-    gestures), job outputs, and transient staged inputs. No loadability gate:
+    Requires a readable parent item and excludes working data: session zips
+    (they resume through their own gestures), job outputs, and staged inputs.
+    No loadability gate:
     a filter row owns every file it matched (e.g. extensionless DICOM slices),
     so its manifest leg filters with this predicate alone.
     """
@@ -315,6 +316,8 @@ def isLaunchFile(file, user=None, itemCache=None, folderCache=None):
     itemCache = {} if itemCache is None else itemCache
     folderCache = {} if folderCache is None else folderCache
     if isSessionFile(file):
+        return False
+    if _parentItemForFile(file, user, itemCache) is None:
         return False
     if isJobOutputFolderFile(file, user, itemCache, folderCache):
         return False

@@ -174,6 +174,50 @@ def test_filter_pick_includes_files_the_loadable_gate_would_drop(server, owner, 
 
 
 @pytest.mark.plugin("volview")
+@pytest.mark.parametrize("anonymous", [False, True])
+def test_filter_pick_excludes_unreadable_descendant_files(
+    server, owner, stranger, folder, anonymous
+):
+    from girder.models.folder import Folder
+
+    parent = Folder().setPublic(folder, True, save=True)
+    readable = Folder().createFolder(
+        parent, "public", parentType="folder", creator=owner, public=True
+    )
+    private = Folder().createFolder(
+        parent, "private", parentType="folder", creator=owner, public=False
+    )
+    _, publicFile = _uploadFile(readable, owner, "slice001", meta={"pick": "yes"})
+    _, privateFile = _uploadFile(
+        private, owner, "private-patient.nrrd", meta={"pick": "yes"}
+    )
+    user = None if anonymous else stranger
+
+    response = _folderManifest(
+        server,
+        parent,
+        user,
+        params={"filters": json.dumps({"meta.pick": "yes"})},
+        exception=True,
+    )
+
+    assert response.output_status.startswith(b"200")
+    resources = response.json["resources"]
+    assert {"name": "slice001", "url": makeFileDownloadUrl(publicFile)} in resources
+    assert "private-patient.nrrd" not in _resourceNames(response)
+    assert str(privateFile["_id"]) not in json.dumps(resources)
+
+    ownerResponse = _folderManifest(
+        server,
+        parent,
+        owner,
+        params={"filters": json.dumps({"meta.pick": "yes"})},
+        exception=True,
+    )
+    assert "private-patient.nrrd" in _resourceNames(ownerResponse)
+
+
+@pytest.mark.plugin("volview")
 def test_checked_raw_pick_opens_fresh_despite_matching_session(server, owner, folder):
     # Checking raw images is the "start fresh" gesture: even a NEWER save
     # recorded against exactly this selection set is not substituted.
