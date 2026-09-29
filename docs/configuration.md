@@ -242,7 +242,8 @@ VolView also accepts the earlier names for these two keys, `segmentGroupExtensio
 `segmentGroupSaveFormat`. The plugin renames them to the current names as it reads a
 folder's `.volview_config.yaml`, so a config written with either name still overrides the
 defaults above. An `io` block that names one setting both ways is passed through as
-written; the client reads the current name and warns the config's author.
+written. The client accepts equal values but rejects the config when the values
+differ. Use only the current names to avoid conflicts.
 
 ### Layering
 

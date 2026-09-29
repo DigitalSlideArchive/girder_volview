@@ -359,10 +359,9 @@ def downloadResourceManifest(self, folder, folders, items, filters):
     return filesToManifest(files, folder["_id"])
 
 
-# VolView's earlier names for io keys. The client prefers the current name when
-# one config carries both, so layers are merged by key name only after every
-# layer speaks the current names; otherwise a default written under the current
-# name would outrank a folder's explicit value written under the earlier one.
+# Normalize earlier io key names before merging config layers so a folder's
+# explicit value overrides the default. When one block carries both names,
+# preserve both for the client's conflict validation.
 _LEGACY_IO_KEYS = {
     "segmentGroupExtension": "segmentationExtension",
     "segmentGroupSaveFormat": "segmentationSaveFormat",
