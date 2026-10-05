@@ -1,3 +1,5 @@
+import re
+
 import cherrypy
 
 from girder import plugin
@@ -27,7 +29,15 @@ from .backend.launch import (
     saveToItem,
     saveToFolder,
 )
-from .utils import isLoadableImage, isSessionFile
+from .utils import (
+    LOADABLE_EXTENSIONS, LOADABLE_MIMES, SESSION_EXTENSIONS, isLoadableImage,
+    isSessionFile)
+
+VOLVIEW_LOADABLE_FILE_LIMIT = 1000
+
+_LOADABLE_NAME_RE = re.compile( "(" + "|".join(
+    re.escape(ext) for ext in
+    tuple(LOADABLE_EXTENSIONS) + tuple(SESSION_EXTENSIONS)) + ")$").pattern
 
 
 def hasLoadableFile(files, user=None):
@@ -139,6 +149,22 @@ def volViewLoadableFolder(self, folder):
             },
             {"$unwind": "$__files"},
             {"$replaceRoot": {"newRoot": "$__files"}},
+            {"$match": {
+        "$and": [
+            # Exclude attached files; they should never trigger
+            {"$nor": [{"attachedToId": {"$exists": True}}]},
+            # More filters to reduce total files examines and increase
+            # likelihood of files being loadable
+            {
+                "$or": [
+                    {"name": {"$regex": _LOADABLE_NAME_RE}},
+                    {"mimeType": {"$in": list(LOADABLE_MIMES)}},
+                ]
+            },
+        ]
+    }},
+            # Cap this to make the query manageable
+            {"$limit": VOLVIEW_LOADABLE_FILE_LIMIT},
         ]
     )
     loadable = hasLoadableFile(files, user=self.getCurrentUser())
