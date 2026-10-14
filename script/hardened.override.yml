@@ -1,9 +1,7 @@
-# Runs Girder with anonymous access disabled, the way locked-down deployments
-# run it, so code that relies on DSA's permissive defaults fails here first.
+# Disables anonymous access by default.
 #
 # Listed in DSA_COMPOSE_FILES (see .env.example) before
-# girder-volview.override.yml. To deploy once with DSA's stock settings:
-#   DSA_DISABLE_ANONYMOUS_ACCESS=false script/deploy <girder-wt> <volview-wt>
+# girder-volview.override.yml.
 services:
   girder:
     environment:

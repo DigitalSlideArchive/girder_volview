@@ -2,7 +2,7 @@ import { test, expect, Page } from '@playwright/test';
 import { setupFixture, requireHarnessState, Girder } from '../helpers/girder';
 import { requireFixture } from '../helpers/compat-state';
 import { gotoFolder, checkRowByItemId, openInVolView } from '../helpers/girder-ui';
-import { submitOtsu } from '../helpers/jobs';
+import { exampleTaskOption, expectTaskImages, submitOtsu } from '../helpers/jobs';
 import { expectJob } from '../helpers/limits';
 import {
   waitForVolViewReady,
@@ -95,6 +95,8 @@ test.describe('live submission + auto-apply (the submission gate)', () => {
     context,
   }, info) => {
     const g = await setupFixture(context, 'jobs-live');
+    await expectTaskImages(context.request, g);
+    const task = await exampleTaskOption(context.request, g, 'Otsu');
     const view = await launchChecked(page, g);
 
     // Result-byte reads go through proxiable file URLs; count them to prove the
@@ -108,7 +110,7 @@ test.describe('live submission + auto-apply (the submission gate)', () => {
     await expect(segmentRows(view), 'the test must begin with no segment').toHaveCount(0);
 
     // Drive the VISIBLE submission flow: task picker -> binding -> Submit.
-    await selectTask(view, 'Otsu');
+    await selectTask(view, task.title, task.occurrence);
     await waitForInputBound(view);
     await submitTaskFromForm(view);
 
@@ -126,18 +128,54 @@ test.describe('live submission + auto-apply (the submission gate)', () => {
     expect(fileReads.length, 'no proxiable result file read observed').toBeGreaterThan(0);
   });
 
+  for (const { fixture, title, result } of [
+    { fixture: 'jobs-median', title: 'Median Filter', result: 'image' },
+    { fixture: 'jobs-threshold', title: 'Threshold Segmentation', result: 'segmentation' },
+  ] as const) {
+    test(`${title} applies its ${result} result`, async ({ page, context }, info) => {
+      const g = await setupFixture(context, fixture);
+      const task = await exampleTaskOption(context.request, g, title);
+      const view = await launchChecked(page, g);
+      const datasetsBefore = g.itemNames;
+      await expect.poll(() => readDatasetNames(view)).toEqual(datasetsBefore);
+
+      await openModuleTab(view, 'Annotations');
+      await expect(segmentRows(view)).toHaveCount(0);
+      await selectTask(view, task.title, task.occurrence);
+      await waitForInputBound(view);
+      if (result === 'segmentation') {
+        const thresholds = view.locator('.jobs-module input[type="number"]');
+        await expect(thresholds).toHaveCount(2);
+        await thresholds.nth(0).fill('1000');
+        await thresholds.nth(1).fill('2000');
+      }
+      await submitTaskFromForm(view);
+      await waitForJobComplete(view);
+
+      if (result === 'image') {
+        await expect.poll(() => readDatasetNames(view)).toHaveLength(datasetsBefore.length + 1);
+        expect(await readDatasetNames(view)).toEqual(expect.arrayContaining(datasetsBefore));
+      } else {
+        await expect.poll(() => readSegmentNames(view)).toEqual(['Threshold 1000-2000']);
+        expect(await readDatasetNames(view)).toEqual(datasetsBefore);
+      }
+      await shot(view, info, `${fixture}-applied`);
+    });
+  }
+
   test('stages a painted mask and auto-applies the filtered image result', async ({
     page,
     context,
   }, info) => {
     const g = await setupFixture(context, 'jobs-staged');
+    const task = await exampleTaskOption(context.request, g, 'Masked Median Filter');
     const view = await launchChecked(page, g);
     const datasetsBefore = await readDatasetNames(view);
 
     await paintStrokes(view);
     expect(await readSegmentNames(view)).not.toEqual([]);
 
-    await selectTask(view, 'MaskedMedianFilter');
+    await selectTask(view, task.title, task.occurrence);
     await expect(
       view.locator('.jobs-module').getByText('Segmentation on active dataset').first(),
       'the painted segmentation was not bound as the filter mask'
@@ -155,9 +193,10 @@ test.describe('live submission + auto-apply (the submission gate)', () => {
 
   test('shows a failed job error and deletes the terminal job', async ({ page, context }) => {
     const g = await setupFixture(context, 'jobs-failure');
+    const task = await exampleTaskOption(context.request, g, 'Threshold Segmentation');
     const view = await launchChecked(page, g);
 
-    await selectTask(view, 'ThresholdSegmentation');
+    await selectTask(view, task.title, task.occurrence);
     await waitForInputBound(view);
     const thresholds = view.locator('.jobs-module input[type="number"]');
     await expect(thresholds).toHaveCount(2);

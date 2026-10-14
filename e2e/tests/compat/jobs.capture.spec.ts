@@ -11,6 +11,7 @@ import {
   shot,
 } from '../../helpers/volview';
 import { readSegmentNames } from '../../helpers/annotations';
+import { exampleTaskOption } from '../../helpers/jobs';
 
 // The baseline client submits a labelmap job from its Jobs tab, so the job and
 // its stored outputs are exactly what an upgrade inherits. The verify phase
@@ -21,12 +22,13 @@ test.describe('compat capture: a finished job', () => {
     context,
   }, info) => {
     const g = await setupFixture(context, 'jobs-baseline');
+    const task = await exampleTaskOption(context.request, g, 'Otsu');
     await gotoFolder(page, g.folderId);
     await checkRowByItemId(page, g.itemId);
     const { popup: view } = await openInVolView(page);
     await waitForVolViewReady(view);
 
-    await selectTask(view, 'Otsu');
+    await selectTask(view, task.title, task.occurrence);
     await waitForInputBound(view);
     const submitted = view.waitForResponse(
       (r) =>

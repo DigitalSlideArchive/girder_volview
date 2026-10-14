@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
-# Build the radiology CLI image when absent and register every task declared by
-# its manifest with slicer_cli_web, unless all of them are already registered
-# from this image.
+# Build and register the radiology image, or the opt-in development examples.
 #
 # Usage:
-#   script/ensure-radiology-cli
+#   script/ensure-radiology-cli [--examples]
 #
 # Env overrides:
 #   GIRDER_URL       default http://localhost:8080
 #   DSA_ADMIN_USER   default admin
 #   DSA_ADMIN_PASS   default password
 #   CLI_IMAGE        default volview-radiology-cli:latest
+#   CLI_EXAMPLES_IMAGE  default volview-cli-examples:latest (--examples only)
 #   CLI_REPO         required; the volview-radiology-cli checkout (set in .env)
 #   DEMO_FOLDER      optional folder id used to verify the facade task list;
 #                    defaults to the authenticated user's Public folder
@@ -34,9 +33,25 @@ DSA_ADMIN_PASS=${DSA_ADMIN_PASS:-password}
 CLI_IMAGE=${CLI_IMAGE:-volview-radiology-cli:latest}
 : "${CLI_REPO:?not set — copy .env.example to .env and point CLI_REPO at your volview-radiology-cli checkout}"
 DEMO_FOLDER=${DEMO_FOLDER:-}
+CLI_MANIFEST="$CLI_REPO/cli_list.json"
+BUILD_TARGET=()
+case "${1:-}" in
+    '') [ "$#" -eq 0 ] || exit 2 ;;
+    --examples)
+        [ "$#" -eq 1 ] || exit 2
+        if [ "${CLI_EXAMPLES_IMAGE:-volview-cli-examples:latest}" = "$CLI_IMAGE" ]; then
+            echo "CLI_IMAGE and CLI_EXAMPLES_IMAGE must be different" >&2
+            exit 1
+        fi
+        CLI_IMAGE=${CLI_EXAMPLES_IMAGE:-volview-cli-examples:latest}
+        CLI_MANIFEST="$CLI_REPO/examples/cli_list.json"
+        BUILD_TARGET=(--target examples)
+        ;;
+    *) echo "Usage: $0 [--examples]" >&2; exit 2 ;;
+esac
 
 # The image manifest is the sole task inventory.
-REQUIRED_TASK_TEXT=$(python3 - "$CLI_REPO/cli_list.json" <<'PY'
+REQUIRED_TASK_TEXT=$(python3 - "$CLI_MANIFEST" <<'PY'
 import json
 import sys
 
@@ -58,8 +73,15 @@ else
         echo "    !! no Dockerfile at $CLI_REPO — cannot build $CLI_IMAGE" >&2
         exit 1
     fi
-    (cd "$CLI_REPO" && docker build -t "$CLI_IMAGE" .)
+    (cd "$CLI_REPO" && docker build "${BUILD_TARGET[@]}" -t "$CLI_IMAGE" .)
 fi
+
+docker run --rm "$CLI_IMAGE" --list_cli | REQUIRED="${REQUIRED_TASKS[*]}" \
+    python3 -c 'import json,os,sys
+listed = set(json.load(sys.stdin))
+required = set(os.environ["REQUIRED"].split())
+if listed != required:
+    raise SystemExit(f"Image tasks {sorted(listed)} differ from manifest {sorted(required)}. Rebuild the image.")'
 
 echo "==> [2/4] waiting for Girder at $GIRDER_URL"
 girder_up=
@@ -143,9 +165,7 @@ fi
 # task is current when its digest is one of them. An image without a RepoDigest,
 # such as a local build on Docker's classic image store, is registered without
 # meta.digest and runs by tag, so only its stored task XML can go stale. When
-# every required task is current there is nothing to import. That also lets a
-# deploy succeed while Girder's anonymous access is disabled, when every import
-# job fails.
+# every required task is current there is nothing to import.
 LOCAL_DIGESTS=$(docker image inspect "$CLI_IMAGE" --format '{{join .RepoDigests " "}}')
 
 # Print how the registered tasks match and succeed when every required task is
@@ -199,7 +219,7 @@ except Exception as exc:
     print(f"    could not read the registered tasks ({exc})", file=sys.stderr)
     sys.exit(1)
 required = os.environ["REQUIRED"].split()
-if any(task not in metas for task in required):
+if set(metas) != set(required):
     sys.exit(1)
 local_digests = set(os.environ["LOCAL_DIGESTS"].split())
 if local_digests:
@@ -227,24 +247,6 @@ except Exception:
 if MATCH=$(registered_from_local_image); then
     echo "    every task is already registered $MATCH; nothing to import"
 else
-    # The import registers exactly the tasks the image lists, so a required task
-    # the image lacks would stay missing whether or not the import succeeds.
-    MISSING=$(docker run --rm "$CLI_IMAGE" --list_cli 2>/dev/null \
-        | REQUIRED="${REQUIRED_TASKS[*]}" python3 -c "import json,os,sys
-try:
-    listed = json.load(sys.stdin)
-except Exception:
-    sys.exit(1)
-print(' '.join(task for task in os.environ['REQUIRED'].split() if task not in listed))") || {
-        echo "    !! could not list the tasks in $CLI_IMAGE (docker run $CLI_IMAGE --list_cli)" >&2
-        exit 1
-    }
-    if [ -n "$MISSING" ]; then
-        echo "    !! $CLI_IMAGE does not list $MISSING, which $CLI_REPO/cli_list.json" \
-             "requires. Pull or rebuild the image to match that checkout." >&2
-        exit 1
-    fi
-
     JOB_ID=$(curl -sf -X PUT -H @"$TOKEN_HEADER" -H "Content-Length: 0" \
         "$GIRDER_URL/api/v1/slicer_cli_web/docker_image?name=$CLI_IMAGE&pull=false&folder=$TASK_FOLDER" \
         | job_field _id) || JOB_ID=
@@ -276,31 +278,38 @@ print(' '.join(task for task in os.environ['REQUIRED'].split() if task not in li
         esac
         printf '%s\n' "$job_log" | sed 's/^/       /' >&2
         if [[ $job_log == *'(user None)'* ]]; then
-            echo "    !! Anonymous access is disabled (script/hardened.override.yml), so" \
-                 "the import cannot load its owner. Deploy once with" \
-                 "DSA_DISABLE_ANONYMOUS_ACCESS=false to register this image." >&2
+            echo "    !! Upgrade slicer_cli_web to include" \
+                 "https://github.com/girder/slicer_cli_web/pull/261" \
+                 "for authenticated image imports." >&2
         fi
         exit 1
     fi
     echo "    import job $JOB_ID succeeded"
 fi
 
-echo "==> [4/4] verifying radiology tasks are registered"
+echo "==> [4/4] verifying $CLI_IMAGE tasks are registered"
 TASKS_URL="$GIRDER_URL/api/v1/folder/$DEMO_FOLDER/volview_processing/tasks"
 TASKS_JSON=$(curl -sf -H @"$TOKEN_HEADER" "$TASKS_URL") || {
     echo "    !! could not read $TASKS_URL" \
          "(check DEMO_FOLDER=$DEMO_FOLDER exists and is accessible)" >&2
     exit 1
 }
-# Step 3 either found every task current or waited for the import to finish, so
-# a missing task will not appear later.
-MISSING=$(REQUIRED="${REQUIRED_TASKS[*]}" python3 -c "import json,os,sys
-listed = {task.get('title') or task.get('name') for task in json.load(sys.stdin)}
-print(' '.join(task for task in os.environ['REQUIRED'].split() if task not in listed))" \
-    <<< "$TASKS_JSON")
-if [ -n "$MISSING" ]; then
-    echo "    !! the task list lacks $MISSING" >&2
+# Display titles can differ from executable names; match the registered item IDs.
+CLI_TASKS_JSON=$(curl -sf -G -H @"$TOKEN_HEADER" \
+    --data-urlencode "folder=$TASK_FOLDER" "$GIRDER_URL/api/v1/slicer_cli_web/cli") || {
+    echo "    !! could not read the registered CLI items" >&2
     exit 1
-fi
+}
+REQUIRED="${REQUIRED_TASKS[*]}" CLI_IMAGE="$CLI_IMAGE" CLI_TASKS="$CLI_TASKS_JSON" \
+    python3 -c "import json,os,sys
+registered = {
+    cli['name']: cli['_id'] for cli in json.loads(os.environ['CLI_TASKS'])
+    if cli.get('image') == os.environ['CLI_IMAGE']
+}
+listed = {task['id'] for task in json.load(sys.stdin)}
+required = set(os.environ['REQUIRED'].split())
+if set(registered) != required or not set(registered.values()) <= listed:
+    raise SystemExit('Registered tasks do not match the image manifest or are missing from VolView')" \
+    <<< "$TASKS_JSON"
 
-echo "==> Done — radiology CLIs registered and verified"
+echo "==> Done: $CLI_IMAGE tasks registered and verified"

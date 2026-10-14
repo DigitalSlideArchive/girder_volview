@@ -1,4 +1,4 @@
-import { APIRequestContext } from '@playwright/test';
+import { APIRequestContext, expect } from '@playwright/test';
 import { CONFIG, apiUrl } from './config';
 import { readJson } from './http';
 import { expectJob } from './limits';
@@ -27,26 +27,71 @@ export async function itemInputUris(
   return files.map((f) => proxiableUri(f._id, f.name));
 }
 
-// Find a registered processing task by title prefix (e.g. 'Otsu'), scoped to the
-// folder the run will target. Tasks come from the registered radiology CLI image.
-export async function findTask(
+export type RegisteredTask = { id: string; title: string; dockerImage: string };
+
+export async function listTasks(
   request: APIRequestContext,
   token: string,
-  folderId: string,
-  titlePrefix: string
-): Promise<{ id: string; title: string }> {
+  folderId: string
+): Promise<RegisteredTask[]> {
   const res = await request.get(apiUrl(`/folder/${folderId}/volview_processing/tasks`), {
     headers: { 'Girder-Token': token },
   });
-  const tasks: Array<{ id: string; title: string }> = await readJson(res, 'list tasks');
-  const task = tasks.find((t) => (t.title || '').startsWith(titlePrefix));
-  if (!task) {
-    throw new Error(
-      `[e2e] no "${titlePrefix}*" task registered — register the radiology CLI ` +
-        `image with slicer_cli_web; tasks=${JSON.stringify(tasks.map((t) => t.title))}`
-    );
-  }
-  return task;
+  return readJson(res, 'list tasks');
+}
+
+export type TaskOption = { title: string; occurrence: number };
+
+const RADIOLOGY_IMAGE = process.env.CLI_IMAGE || 'volview-radiology-cli:latest';
+const EXAMPLES_IMAGE = process.env.CLI_EXAMPLES_IMAGE || 'volview-cli-examples:latest';
+
+function taskOption(tasks: RegisteredTask[], task: RegisteredTask): TaskOption {
+  return {
+    title: task.title,
+    occurrence: tasks.filter(({ title }) => title === task.title).findIndex(({ id }) => id === task.id),
+  };
+}
+
+function imageTask(
+  tasks: RegisteredTask[], image: string, titlePrefix: string
+): RegisteredTask {
+  const matches = tasks.filter(({ title, dockerImage }) =>
+    dockerImage === image && title.startsWith(titlePrefix)
+  );
+  expect(matches, `expected one "${titlePrefix}*" task from ${image}`).toHaveLength(1);
+  return matches[0];
+}
+
+export async function expectTaskImages(
+  request: APIRequestContext, g: { token: string; folderId: string }
+): Promise<void> {
+  expect(EXAMPLES_IMAGE).not.toBe(RADIOLOGY_IMAGE);
+  const tasks = await listTasks(request, g.token, g.folderId);
+  const titles = (image: string) => tasks
+    .filter(({ dockerImage }) => dockerImage === image).map(({ title }) => title).sort();
+  expect(titles(RADIOLOGY_IMAGE)).toEqual([
+    'Export Segment Statistics', 'Generate Segment Rulers',
+  ]);
+  expect(titles(EXAMPLES_IMAGE)).toEqual([
+    'Masked Median Filter', 'Median Filter', 'Otsu Multi-level Segmentation', 'Threshold Segmentation',
+  ]);
+}
+
+export async function segmentTaskOptions(
+  request: APIRequestContext, g: { token: string; folderId: string }
+): Promise<{ rulers: TaskOption; report: TaskOption }> {
+  const tasks = await listTasks(request, g.token, g.folderId);
+  return {
+    rulers: taskOption(tasks, imageTask(tasks, RADIOLOGY_IMAGE, 'Generate Segment Rulers')),
+    report: taskOption(tasks, imageTask(tasks, RADIOLOGY_IMAGE, 'Export Segment Statistics')),
+  };
+}
+
+export async function exampleTaskOption(
+  request: APIRequestContext, g: { token: string; folderId: string }, titlePrefix: string
+): Promise<TaskOption> {
+  const tasks = await listTasks(request, g.token, g.folderId);
+  return taskOption(tasks, imageTask(tasks, EXAMPLES_IMAGE, titlePrefix));
 }
 
 // Submit a task run against a folder. `values` is the client-faithful body: the
@@ -102,7 +147,8 @@ export async function submitOtsu(
   itemId: string
 ): Promise<{ jobId: string; state: string }> {
   const uris = await itemInputUris(request, token, itemId);
-  const task = await findTask(request, token, folderId, 'Otsu');
+  const tasks = await listTasks(request, token, folderId);
+  const task = imageTask(tasks, EXAMPLES_IMAGE, 'Otsu');
   const jobId = await runTask(request, token, folderId, task.id, {
     inputVolume: { type: 'image', uris },
     numberOfLevels: 3,

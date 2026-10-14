@@ -49,9 +49,12 @@ export type FixtureId =
   | 'jobs-comeback'
   | 'jobs-live'
   | 'jobs-staged'
+  | 'jobs-median'
+  | 'jobs-threshold'
   | 'jobs-failure'
   | 'jobs-annotations'
-  | 'jobs-roi-rulers'
+  | 'jobs-segment-rulers'
+  | 'jobs-segment-statistics'
   | 'jobs-annotations-blocked'
   | 'jobs-overlap';
 

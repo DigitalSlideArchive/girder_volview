@@ -2,41 +2,9 @@
 
 ## Job processing
 
-See [Job processing design](./job-processing.md) for the processing
-architecture, job execution flow, Slicer CLI registration guidance, and the
-category scoping that keeps VolView tasks separate from HistomicsUI and
-DIVE-DSA tasks in a shared `slicer_cli_web` deployment.
-
-### Production task images
-
-Publish custom task images to a container registry and list immutable versions
-under `slicer-cli-image` in the DSA provision YAML. See
-[Building and deploying custom Slicer CLIs](./custom-slicer-clis.md#publish-and-install-the-image-in-dsa)
-for the complete workflow, including private registries.
-
-### Local reference image
-
-The development stack uses the
-[VolView Radiology CLI](https://github.com/PaulHax/volview-radiology-cli) as
-reference infrastructure to drive and test the processing backend. Clone it
-locally and set `CLI_REPO` in this repository's `.env` to that checkout:
-
-```sh
-git clone https://github.com/PaulHax/volview-radiology-cli
-# In girder_volview/.env:
-CLI_REPO=/path/to/volview-radiology-cli
-```
-
-When processing routes are present, `script/deploy` calls
-`script/ensure-radiology-cli`. That script builds the local
-`volview-radiology-cli:latest` image if it is missing, registers it with
-`slicer_cli_web` unless every declared task is already registered from that
-image, and verifies the declared tasks are available. It does not pull this
-image from a registry.
-
-With `.env.example`'s defaults, Girder's anonymous access is disabled, and
-`slicer_cli_web` cannot import an image then. Registering a new or changed image
-takes one deploy with `DSA_DISABLE_ANONYMOUS_ACCESS=false`.
+[Register Slicer CLI images](./custom-slicer-clis.md#register-the-image-in-dsa)
+to add tasks to VolView. See [Job processing design](./job-processing.md) for
+execution flow and category scoping in a shared Slicer CLI Web deployment.
 
 ## Speedup S3 file downloading by disabling proxying
 

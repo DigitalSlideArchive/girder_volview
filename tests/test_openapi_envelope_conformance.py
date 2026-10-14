@@ -81,6 +81,7 @@ def _stub_cli_item():
     return types.SimpleNamespace(
         _id="6600000000000000000000f1",
         name="OtsuSegmentation",
+        xml="<executable><title>Otsu Segmentation</title></executable>",
         item={"description": "Otsu threshold segmentation"},
         image="dsarchive/histomicstk:latest",
     )
@@ -91,7 +92,18 @@ def test_task_summary_from_real_builder_validates():
     # The advisory `dockerImage`/`description` hints ride through
     # `additionalProperties: true`; only id/title are required.
     _envelope_validator("TaskSummary").validate(summary)
-    assert summary["id"] and summary["title"]
+    assert summary["id"] == "6600000000000000000000f1"
+    assert summary["title"] == "Otsu Segmentation"
+
+
+@pytest.mark.parametrize(
+    "xml",
+    ["<executable/>", "<executable><title> </title></executable>", "<broken"],
+)
+def test_task_summary_without_xml_title_uses_internal_name(xml):
+    cli = _stub_cli_item()
+    cli.xml = xml
+    assert submit._cliItemToSummary(cli)["title"] == cli.name
 
 
 def test_task_summary_requires_id_and_title():

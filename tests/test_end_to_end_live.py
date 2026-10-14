@@ -1,15 +1,16 @@
 """End-to-end live-stack tests: submit a real job and prove the result comes back.
 
 These run against the **real running dsa stack** -- girder on :8080 +
-``girder_worker`` + the registered ``volview-radiology-cli`` docker image -- so
+``girder_worker`` + the registered ``volview-cli-examples`` Docker image, so
 they exercise the one leg no offline test can reach: ``girder_worker`` uploading
 each output under its OWN per-hook token, and the backend correlating that upload
 back to the job.
 
 They run automatically when the dsa stack answers at ``GIRDER_URL`` and skip when
 it does not, so the offline gate stays green with the stack down. Bring the stack
-up with the radiology CLI tasks registered in slicer_cli_web::
+up with the examples registered in slicer_cli_web::
 
+    script/ensure-radiology-cli --examples
     python -m pytest tests/test_end_to_end_live.py -v
 
 Env overrides: ``GIRDER_URL`` (default ``http://localhost:8080``),
@@ -49,7 +50,7 @@ pytestmark = pytest.mark.skipif(
     not _stack_up(),
     reason=(
         "live e2e self-skips unless the dsa stack answers at GIRDER_URL/api/v1 "
-        "(default http://localhost:8080); bring it up with the radiology CLI "
+        "(default http://localhost:8080); bring it up with the examples "
         "tasks registered"
     ),
 )
@@ -170,7 +171,7 @@ def _find_task(gc, folder_id, prefix):
         if (task.get("title") or "").startswith(prefix):
             return task
     pytest.skip(
-        "%s task not registered (register the radiology CLI image with "
+        "%s task not registered (register the examples image with "
         "slicer_cli_web); tasks=%s" % (prefix, [t.get("title") for t in tasks])
     )
 

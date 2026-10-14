@@ -74,7 +74,9 @@ The current project also covers what an old-session restore can't prove:
 - bare-folder newest-session selection and exact older-session selection;
 - the launch button's `urls`, `save`, and `names` contract, including config
   delivery through the manifest;
-- saved-session rows, completed-job loading, and live job auto-apply.
+- saved-session rows, completed-job loading, and live job auto-apply;
+- **Generate Segment Rulers** and **Export Segment Statistics**, including
+  manual ruler preservation and CSV downloads.
 
 Each scenario owns a folder, so state can't leak between tests. Tests run on
 one worker for predictable load, but aren't Playwright `serial` — one failure
@@ -140,6 +142,11 @@ cd e2e && npm test
 ```
 
 `npm run compat` is an alias for the same run.
+
+The harness registers both radiology and examples images after each deploy.
+See [Slicer CLI images](./development.md#slicer-cli-images) for configuration.
+Each example has a successful UI submission and result-application scenario;
+Threshold Segmentation also covers invalid input.
 
 Iterating:
 

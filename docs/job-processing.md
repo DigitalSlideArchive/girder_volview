@@ -138,20 +138,18 @@ for what a CLI can rely on inside those files.
 
 ### Worked example
 
-Administrators build and publish their own CLI images. The VolView Radiology
-CLI is example and test infrastructure, not a required library or base image.
-Its merged [region-of-interest report PR](https://github.com/PaulHax/volview-radiology-cli/pull/4)
-is a compact example of adding one task:
+The reference image's Export Segment Statistics task shows the layout for
+adding a CLI:
 
-- [`RegionOfInterestReport.xml`](https://github.com/PaulHax/volview-radiology-cli/blob/main/RegionOfInterestReport/RegionOfInterestReport.xml)
+- [`ExportSegmentStatistics.xml`](https://github.com/PaulHax/volview-radiology-cli/blob/main/ExportSegmentStatistics/ExportSegmentStatistics.xml)
   declares the labelmap input, CSV file output, Girder parameters, and task
   options.
-- [`RegionOfInterestReport.py`](https://github.com/PaulHax/volview-radiology-cli/blob/main/RegionOfInterestReport/RegionOfInterestReport.py)
+- [`ExportSegmentStatistics.py`](https://github.com/PaulHax/volview-radiology-cli/blob/main/ExportSegmentStatistics/ExportSegmentStatistics.py)
   implements the executable entry point and writes the declared output path.
 - [`cli_list.json`](https://github.com/PaulHax/volview-radiology-cli/blob/main/cli_list.json)
   registers the executable for container discovery.
-- [`test_roi_report.py`](https://github.com/PaulHax/volview-radiology-cli/blob/main/tests/test_roi_report.py)
-  and [`test_roi_report_itk.py`](https://github.com/PaulHax/volview-radiology-cli/blob/main/tests/test_roi_report_itk.py)
+- [`test_segment_report.py`](https://github.com/PaulHax/volview-radiology-cli/blob/main/tests/test_segment_report.py)
+  and [`test_segment_report_itk.py`](https://github.com/PaulHax/volview-radiology-cli/blob/main/tests/test_segment_report_itk.py)
   exercise its report behavior.
 
 Use the same XML, executable, registration, and test structure when creating a

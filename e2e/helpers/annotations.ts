@@ -27,6 +27,7 @@ async function activateTool(page: Page, icon: 'mdi-ruler' | 'mdi-brush'): Promis
   const button = page.locator(`#tools-strip button:has(i.${icon})`).first();
   await expect(button, `no ${icon} tool button`).toBeVisible();
   await button.click();
+  await expect(button, `${icon} did not activate`).toHaveClass(/tool-btn-selected/);
 }
 
 // The default matches VolView's wdio ruler gesture; callers may choose offsets.
@@ -35,14 +36,21 @@ export async function placeRuler(
   firstOffset: readonly [number, number] = [-40, 0],
   secondOffset: readonly [number, number] = [40, 0]
 ): Promise<void> {
+  const rows = await rulerMeasurementRows(page);
+  const before = await rows.count();
   await activateTool(page, 'mdi-ruler');
+  const view = page
+    .locator('div[data-testid~="vtk-two-view"], div[data-testid~="vtk-cine-view"]')
+    .first();
+  const handles = view.locator('svg.overlay-no-events circle');
+  const handlesBefore = await handles.count();
   const box = await first2DCanvasBox(page);
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;
   await page.mouse.click(cx + firstOffset[0], cy + firstOffset[1]);
-  await page.waitForTimeout(300);
+  await expect(handles, 'the ruler did not accept its first point').toHaveCount(handlesBefore + 2);
   await page.mouse.click(cx + secondOffset[0], cy + secondOffset[1]);
-  await page.waitForTimeout(500);
+  await expect(rows, 'the ruler was not completed').toHaveCount(before + 1);
 }
 
 // Structural markers of the two client generations, both rendered as soon as
@@ -109,7 +117,6 @@ export async function rectangleMeasurementRows(page: Page): Promise<Locator> {
 // a segment for the current image when the scene holds none.
 export async function paintStrokes(page: Page): Promise<void> {
   await activateTool(page, 'mdi-brush');
-  await page.waitForTimeout(500);
   const box = await first2DCanvasBox(page);
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;
@@ -121,7 +128,13 @@ export async function paintStrokes(page: Page): Promise<void> {
     await page.mouse.down();
     await page.mouse.move(cx + dx + 40, cy + dy + 10, { steps: 8 });
     await page.mouse.up();
-    await page.waitForTimeout(300);
+  }
+  await openAnnotations(page);
+  if ((await page.locator(BRANCH_SEGMENT_LIST).count()) > 0) {
+    await expect(
+      page.locator(`${BRANCH_SEGMENT_LIST} [data-testid="save-segments-button"]`),
+      'the strokes painted no segment'
+    ).toBeEnabled();
   }
 }
 

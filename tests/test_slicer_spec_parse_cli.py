@@ -1,4 +1,5 @@
-"""Pin ``slicer_spec.parse_cli``: ``parse_cli(xml)["category"]`` (stripped
+"""Pin ``slicer_spec.parse_cli``: stripped display title and
+``parse_cli(xml)["category"]`` (stripped
 ``<category>`` text or ``None``) and ``parse_cli(xml)["outputs"]``
 (``{name, tag, isLabel, fileExtensions}`` descriptors for ``<image>``/``<file>``
 params on the output channel). The real radiology CLI XMLs are exercised
@@ -110,7 +111,24 @@ def test_category_absent_or_blank_is_none():
 
 def test_category_unparseable_is_none_not_raised():
     result = parse_cli("<broken")
-    assert result == {"category": None, "outputs": [], "params": []}
+    assert result == {"title": "", "category": None, "outputs": [], "params": []}
+
+
+@pytest.mark.parametrize(
+    "xml,expected",
+    [
+        (
+            "<executable><title>  Segment Statistics  </title></executable>",
+            "Segment Statistics",
+        ),
+        ("<executable/>", ""),
+        ("<executable><title/></executable>", ""),
+        ("<executable><title>  </title></executable>", ""),
+        (None, ""),
+    ],
+)
+def test_title_is_stripped_or_empty(xml, expected):
+    assert parse_cli(xml)["title"] == expected
 
 
 def test_image_output_descriptor():
