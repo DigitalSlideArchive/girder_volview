@@ -28,6 +28,30 @@ shell:
   - (sleep 30 && girder build --dev --watch-plugin volview)&
 ```
 
+### Slicer CLI images
+
+For the development stack, set `CLI_REPO` in the repo-root `.env` to a checkout
+of [VolView Radiology CLI](https://github.com/PaulHax/volview-radiology-cli):
+
+```sh
+CLI_REPO=/path/to/volview-radiology-cli
+```
+
+`script/deploy` calls `script/ensure-radiology-cli` to build a missing radiology
+image, register its tasks, and verify they are available. Rebuild the image
+after changing its source. `CLI_IMAGE` overrides its default tag,
+`volview-radiology-cli:latest`.
+
+Register the separate examples image with `script/ensure-radiology-cli --examples`;
+`CLI_EXAMPLES_IMAGE` overrides its default tag, `volview-cli-examples:latest`.
+The browser harness registers both images automatically.
+
+Keep anonymous access disabled for development and browser tests. Image
+registration requires Slicer CLI Web with [upstream fix #261](https://github.com/girder/slicer_cli_web/pull/261).
+
+For the general registration workflow, see
+[Register the image in DSA](./custom-slicer-clis.md#register-the-image-in-dsa).
+
 ## API endpoints
 
 - GET folder/:id/volview?items=[itemIds]&folders=[folderIds] -> download JSON with URLS to files or the latest `*.volview.zip` file in the folder
@@ -69,9 +93,7 @@ configuration, and cross-origin targets are never allowed.
 
 See [Job processing design](./job-processing.md) for the execution flow and how
 Girder VolView integrates with Slicer CLI Web. The client-facing recipe is in
-[Building and deploying custom Slicer CLIs](./custom-slicer-clis.md). Local
-reference-image registration is in
-[Server administration](./admin.md#local-reference-image).
+[Building and deploying custom Slicer CLIs](./custom-slicer-clis.md).
 
 ## Updating the VolView client version
 

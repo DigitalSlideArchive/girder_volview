@@ -215,9 +215,8 @@ def getTaskSpec(self, folder, taskId):
     scoped = submit._findScopedCliItem(taskId, user)
     if not scoped:
         raise RestException("Unknown taskId", code=404)
-    # translate_slicer_xml needs the strict <executable> parse (title/description
-    # + ordered params), which ``parse_cli`` does not carry, so it parses the XML
-    # itself; the scoped parse is consumed by runTask.
+    # translate_slicer_xml validates the strict <executable> structure itself;
+    # the tolerant scoped parse is consumed by runTask.
     cliItem, _parsedCli = scoped
     try:
         return validate_task_spec(translate_slicer_xml(cliItem.xml, str(taskId)))

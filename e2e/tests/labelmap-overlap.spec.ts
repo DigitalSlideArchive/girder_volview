@@ -1,4 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
+import { expectJob } from '../helpers/limits';
+import { exampleTaskOption, segmentTaskOptions } from '../helpers/jobs';
 import { setupFixture, Girder } from '../helpers/girder';
 import { gotoFolder, checkRowByItemId, openInVolView } from '../helpers/girder-ui';
 import {
@@ -6,7 +8,6 @@ import {
   selectTask,
   waitForInputBound,
   submitTaskFromForm,
-  waitForJobComplete,
   shot,
 } from '../helpers/volview';
 import {
@@ -34,6 +35,8 @@ async function launchChecked(driver: Page, g: Girder): Promise<Page> {
 test.describe('overlapping segments staged as a labelmap input', () => {
   test('warns for one labelmap and measures both overlapping segments', async ({ page, context }, info) => {
     const g = await setupFixture(context, 'jobs-overlap');
+    const tasks = await segmentTaskOptions(context.request, g);
+    const filter = await exampleTaskOption(context.request, g, 'Masked Median Filter');
     const view = await launchChecked(page, g);
 
     // The same strokes with overlap enabled put both segments in the same voxels.
@@ -60,7 +63,7 @@ test.describe('overlapping segments staged as a labelmap input', () => {
 
     const notice = view.locator('.jobs-module [data-testid="staging-omission-notice"]');
 
-    await selectTask(view, 'MaskedMedianFilter');
+    await selectTask(view, filter.title, filter.occurrence);
     await waitForInputBound(view);
     await expect(
       notice.first(),
@@ -76,9 +79,9 @@ test.describe('overlapping segments staged as a labelmap input', () => {
     );
     await shot(view, info, 'labelmap-omission-notice');
 
-    // RegionOfInterestRulers takes many labelmaps, so the same overlap ships
+    // Generate Segment Rulers takes many labelmaps, so the same overlap ships
     // whole and the notice goes away.
-    await selectTask(view, 'RegionOfInterestRulers');
+    await selectTask(view, tasks.rulers.title, tasks.rulers.occurrence);
     await waitForInputBound(view);
     await expect(
       view.locator('.jobs-module').getByText('Segmentation on active dataset').first(),
@@ -88,19 +91,26 @@ test.describe('overlapping segments staged as a labelmap input', () => {
     await shot(view, info, 'labelmap-no-omission-notice');
 
     await submitTaskFromForm(view);
-    await waitForJobComplete(view);
+    const job = view.locator('.job-row').filter({
+      has: view.locator('.job-title', { hasText: 'Generate Segment Rulers' }),
+    });
+    await expect(job, 'the selected task must generate segment rulers').toHaveCount(1);
+    await job.getByRole('button', { name: 'Details', exact: true }).click();
+    await expectJob(job.locator('.job-subtitle'), 'segment ruler generation did not succeed')
+      .toContainText(/^Succeeded\b/);
+    await expect(job.getByRole('button', { name: 'Load', exact: true })).toHaveCount(0);
+    await expect(job.locator('.result-file-name'), 'ruler generation must not produce a CSV')
+      .toHaveCount(0);
 
     const rulers = await rulerMeasurementRows(view);
     await expect(rulers, 'both regions must return long- and short-axis rulers').toHaveCount(4);
     for (const name of names) {
-      for (const axis of ['LD', 'SAD']) {
-        const title = rulers
-          .filter({ has: view.getByText(`${name} ${axis}`, { exact: true }) })
-          .locator('.v-list-item-title');
-        await expect(title, `missing ruler for ${name} ${axis}`).toHaveCount(1);
-        await expect(title).toBeVisible();
-      }
+      const titles = rulers
+        .filter({ has: view.getByText(name, { exact: true }) })
+        .locator('.v-list-item-title');
+      await expect(titles, `missing rulers for ${name}`).toHaveText([name, name]);
     }
+    expect(await readSegmentNames(view)).toEqual(names);
     const measurements = await readRulerMeasurements(view);
     expect(measurements).toHaveLength(4);
     for (const { lengthText } of measurements) {

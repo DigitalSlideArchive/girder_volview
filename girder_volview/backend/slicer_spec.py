@@ -238,8 +238,9 @@ def _parse_executable(xml_text):
 
 
 def parse_cli(xml_text):
-    """Parse a Slicer CLI XML once into ``{category, outputs, params}``.
+    """Parse a Slicer CLI XML once into ``{title, category, outputs, params}``.
 
+    ``title`` is the stripped display title, or an empty string when absent.
     ``category`` (the stripped ``<category>``, or ``None``) is what task scoping
     reads; ``outputs`` is the ``{name, tag, isLabel, fileExtensions}`` descriptor
     list -- every identified ``<image>``/``<file>`` output-channel param -- that
@@ -248,13 +249,14 @@ def parse_cli(xml_text):
     parsed-param list.
 
     Tolerant: an unparseable document yields
-    ``{category: None, outputs: [], params: []}`` (a malformed CLI is out of
-    scope / autofills nothing). The strict spec path uses ``_parse_executable``.
+    ``{title: "", category: None, outputs: [], params: []}``. A malformed CLI is
+    out of scope and autofills nothing. The strict spec path uses
+    ``_parse_executable``.
     """
     try:
         root = ET.fromstring(xml_text or "")
     except ET.ParseError:
-        return {"category": None, "outputs": [], "params": []}
+        return {"title": "", "category": None, "outputs": [], "params": []}
     category_el = root.find("category")
     if category_el is not None and category_el.text:
         category = category_el.text.strip() or None
@@ -273,7 +275,12 @@ def parse_cli(xml_text):
         and parsed["tag"] in ("image", "file")
         and parsed["id"]
     ]
-    return {"category": category, "outputs": outputs, "params": params}
+    return {
+        "title": _child_text(root, "title").strip(),
+        "category": category,
+        "outputs": outputs,
+        "params": params,
+    }
 
 
 def declared_params(xml_text):

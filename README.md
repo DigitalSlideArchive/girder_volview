@@ -41,8 +41,7 @@ Details, including the launch URL parameters and per-gesture flows, are in
 - [Session Builder](./session_builder/README.md) — generate VolView sessions
   programmatically with Python, e.g. from analysis pipelines.
 - [VolView Radiology CLI](https://github.com/PaulHax/volview-radiology-cli) —
-  reference task image used to drive Girder-VolView processing in development
-  and end-to-end tests.
+  segment rulers and statistics, with a separate development examples image.
 - [Building and deploying custom Slicer CLIs](./docs/custom-slicer-clis.md) —
   package VolView analysis tasks, including external-compute adapters, and
   install their images in DSA.

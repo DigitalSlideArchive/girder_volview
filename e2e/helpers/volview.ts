@@ -83,18 +83,20 @@ export async function loadJobResults(page: Page): Promise<void> {
 }
 
 // Select a registered task in the Jobs tab's TaskPicker (a v-select labelled
-// "Task"), matching by title prefix (e.g. "Otsu"). Vuetify's floating label is
+// "Task"), matching the exact title. Vuetify's floating label is
 // not programmatically associated with the input, so match the v-select itself.
-export async function selectTask(page: Page, titlePrefix: string): Promise<void> {
+export async function selectTask(
+  page: Page, title: string, occurrence = 0
+): Promise<void> {
   await openModuleTab(page, 'Jobs');
   const picker = page.locator('.jobs-module .v-select', { hasText: 'Task' }).first();
   await expect(picker, 'no Task picker — is a processing provider registered?').toBeVisible();
   await picker.click();
   const option = page
     .locator('.v-overlay-container .v-list-item, .v-menu .v-list-item')
-    .filter({ hasText: titlePrefix })
-    .first();
-  await expect(option, `no "${titlePrefix}*" task option in the picker`).toBeVisible();
+    .filter({ has: page.getByText(title, { exact: true }) })
+    .nth(occurrence);
+  await expect(option, `no "${title}" task option in the picker`).toBeVisible();
   await option.click();
 }
 

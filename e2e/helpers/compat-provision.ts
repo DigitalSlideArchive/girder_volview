@@ -129,9 +129,12 @@ export async function provisionCompat(
   await nrrdFixture('jobs-comeback', 1);
   await nrrdFixture('jobs-live', 1);
   await nrrdFixture('jobs-staged', 1);
+  await nrrdFixture('jobs-median', 1);
+  await nrrdFixture('jobs-threshold', 1);
   await nrrdFixture('jobs-failure', 1);
   await nrrdFixture('jobs-annotations', 1);
-  await nrrdFixture('jobs-roi-rulers', 1);
+  await nrrdFixture('jobs-segment-rulers', 1);
+  await nrrdFixture('jobs-segment-statistics', 1);
   await nrrdFixture('jobs-annotations-blocked', 1);
   await nrrdFixture('jobs-overlap', 1);
 

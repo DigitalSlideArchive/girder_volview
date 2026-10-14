@@ -5,9 +5,9 @@ add analysis tasks to Girder VolView. This guide covers VolView-specific
 authoring and DSA deployment.
 
 The [VolView Radiology CLI](https://github.com/PaulHax/volview-radiology-cli)
-is example and test infrastructure with scalar-image, labelmap, and multi-input
-tasks. Administrators build and publish their own CLI images; this repository
-is not a required library or base image.
+provides segment rulers and statistics. Its separate `volview-cli-examples`
+image contains filtering and segmentation examples. Administrators can also
+build their own CLI images; this repository is not a required library or base image.
 
 Related documentation:
 
@@ -42,9 +42,9 @@ The example [`Dockerfile`](https://github.com/PaulHax/volview-radiology-cli/blob
 ```sh
 git clone https://github.com/PaulHax/volview-radiology-cli.git
 cd volview-radiology-cli
-docker build -t volview-radiology-cli:local .
-docker run --rm volview-radiology-cli:local --list_cli
-docker run --rm volview-radiology-cli:local ThresholdSegmentation --xml
+docker build --target examples -t volview-cli-examples:local .
+docker run --rm volview-cli-examples:local --list_cli
+docker run --rm volview-cli-examples:local ThresholdSegmentation --xml
 docker build --target test .
 ```
 
@@ -65,15 +65,18 @@ A Python task named `ExampleTask` needs:
 
 1. `ExampleTask/ExampleTask.xml` with its category, parameters, and I/O.
 2. `ExampleTask/ExampleTask.py` with `--xml` support and the implementation.
-3. `"ExampleTask": {"type": "python"}` in `cli_list.json`.
+3. `"ExampleTask": {"type": "python"}` in the image's manifest
+   (`examples/cli_list.json` for this repository's development examples).
+4. `COPY ExampleTask /opt/cli/ExampleTask/` in the Dockerfile's `examples` target.
 
 The reference image uses `slicer_cli_web.CLIArgumentParser`. Other languages
 are valid if the entrypoint contract and XML match the command line.
 
-[PR #4](https://github.com/PaulHax/volview-radiology-cli/pull/4) shows these
-parts together: the task's
-[`RegionOfInterestReport.xml`](https://github.com/PaulHax/volview-radiology-cli/blob/main/RegionOfInterestReport/RegionOfInterestReport.xml),
-[`RegionOfInterestReport.py`](https://github.com/PaulHax/volview-radiology-cli/blob/main/RegionOfInterestReport/RegionOfInterestReport.py), and [`cli_list.json`](https://github.com/PaulHax/volview-radiology-cli/blob/main/cli_list.json) registration.
+The reference image's
+[`ExportSegmentStatistics.xml`](https://github.com/PaulHax/volview-radiology-cli/blob/main/ExportSegmentStatistics/ExportSegmentStatistics.xml),
+[`ExportSegmentStatistics.py`](https://github.com/PaulHax/volview-radiology-cli/blob/main/ExportSegmentStatistics/ExportSegmentStatistics.py), and
+[`cli_list.json`](https://github.com/PaulHax/volview-radiology-cli/blob/main/cli_list.json)
+show these parts together.
 
 ### Declare inputs and outputs for VolView
 
@@ -352,9 +355,11 @@ See Slicer CLI Web's
 
 ## Verify the image
 
+With the reference Dockerfile:
+
 ```sh
 IMAGE=registry.example.org/team/example-cli:0.1.0
-docker build -t "$IMAGE" .
+docker build --target examples -t "$IMAGE" .
 docker run --rm "$IMAGE" --list_cli
 docker run --rm "$IMAGE" ExampleTask --xml
 docker build --target test .
@@ -369,28 +374,26 @@ In a development DSA deployment, confirm:
 - concurrent jobs keep same-named outputs separate; and
 - cancellation stops downstream work when applicable.
 
-## Publish and install the image in DSA
+## Register the image in DSA
 
-Publish an immutable version accessible to the DSA Docker host. The example
-[`Dockerfile`](https://github.com/PaulHax/volview-radiology-cli/blob/main/Dockerfile)
-shows one way to package the entrypoint and tasks. Push your own image under an
-immutable registry tag.
-
-After publishing, add a container image reference to the DSA provision
-YAML. This is what it would look like for [`volview-radiology-cli`](https://github.com/PaulHax/volview-radiology-cli/):
+Add an image reference to the DSA provision YAML and re-run provisioning:
 
 ```yaml
 slicer-cli-image:
-  - ghcr.io/paulhax/volview-radiology-cli:0.1.0
+  - ghcr.io/paulhax/volview-radiology-cli:0.2.1
 ```
 
-`slicer-cli-image` pulls only when the tag is absent locally. Use
-`slicer-cli-image-pull` only for intentionally mutable tags. Re-run the normal
-provisioning command to pull and register the tasks.
+`slicer-cli-image` uses the image already on the DSA Docker host, pulling it
+from a registry only when the tag is missing. For registry images, publish an
+immutable version accessible to that host. Use `slicer-cli-image-pull` to force
+a pull when updating an intentionally mutable tag.
 
 The Slicer CLI Web admin page can import an image interactively, but provision
 YAML is the repeatable installation path. For private images, configure
 [DSA registry authentication](https://github.com/DigitalSlideArchive/digital_slide_archive/blob/master/devops/dsa/README.rst#using-private-docker-registries-for-cli-images).
 
-For local development without a registry, see
-[Server administration](./admin.md#local-reference-image).
+Reimporting the same tag removes tasks omitted from its new manifest. When
+switching tags, remove the retired image registration to remove its old tasks.
+
+The repository's deployment helpers are documented under
+[Development](./development.md#slicer-cli-images).

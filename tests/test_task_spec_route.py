@@ -102,6 +102,40 @@ def test_radiology_task_spec_returns_200_translated_spec(
 
 
 @pytest.mark.plugin("volview")
+def test_task_list_and_spec_use_xml_title(
+    server, user, folder, stub_slicer, monkeypatch
+):
+    title = "Generate Segment Rulers"
+    cli = types.SimpleNamespace(
+        _id="segmentid",
+        name="GenerateSegmentRulers",
+        xml=_xml("Radiology", title),
+        item={"description": "Segment measurements"},
+        image="radiology:latest",
+    )
+    stub_slicer["segmentid"] = cli
+    monkeypatch.setattr(submit, "_listCliItems", lambda user: [cli])
+    path = f"/folder/{folder['_id']}/volview_processing/tasks"
+    listed = server.request(path=path, method="GET", user=user)
+    spec = server.request(
+        path=_spec_path(folder, "segmentid"), method="GET", user=user
+    )
+
+    assert listed.output_status.startswith(b"200")
+    assert spec.output_status.startswith(b"200")
+    assert listed.json == [
+        {
+            "id": "segmentid",
+            "title": title,
+            "description": "Segment measurements",
+            "dockerImage": "radiology:latest",
+        }
+    ]
+    assert spec.json["id"] == "segmentid"
+    assert spec.json["title"] == title
+
+
+@pytest.mark.plugin("volview")
 def test_semantically_invalid_task_spec_returns_500(server, user, folder, stub_slicer):
     resp = server.request(
         path=_spec_path(folder, "badid"), method="GET", user=user, exception=True

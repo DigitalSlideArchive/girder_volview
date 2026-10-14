@@ -74,6 +74,8 @@ if [[ -f $REPO/.env ]]; then
     . "$REPO/.env"
     set +a
 fi
+export CLI_IMAGE=${CLI_IMAGE:-volview-radiology-cli:latest}
+export CLI_EXAMPLES_IMAGE=${CLI_EXAMPLES_IMAGE:-volview-cli-examples:latest}
 
 [[ -x $DEPLOY ]] || die "deploy script not found/executable: $DEPLOY (set COMPAT_DEPLOY)"
 command -v uv >/dev/null || die "uv is required (seed.py seed-small runs via 'uv run')"
@@ -180,6 +182,7 @@ run_capture() {
             "$DEPLOY" $LINK_FLAG --girder-sha "$BASELINE_SHA" -- "$BASELINE_DIR" "$BASELINE_VOLVIEW"
         fi
     fi
+    "$REPO/script/ensure-radiology-cli" --examples
     echo "compat: running capture specs against the baseline (${BASELINE_SHA:0:9})..."
     (
         cd "$E2E"
@@ -194,6 +197,7 @@ run_verify() {
         echo "compat: deploying THIS worktree..."
         "$DEPLOY" $LINK_FLAG "$REPO" "$BRANCH_VOLVIEW"
     fi
+    "$REPO/script/ensure-radiology-cli" --examples
     echo "compat: running verify specs against this worktree (${BRANCH_SHA:0:9})..."
     (
         cd "$E2E"
@@ -206,6 +210,9 @@ run_verify() {
 }
 
 run_current() {
+    if [[ $PHASE == current ]]; then
+        "$REPO/script/ensure-radiology-cli" --examples
+    fi
     echo "compat: running current-version lifecycle and job scenarios (${BRANCH_SHA:0:9})..."
     (
         cd "$E2E"

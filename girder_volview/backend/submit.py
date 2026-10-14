@@ -57,7 +57,7 @@ def _findCliItem(taskId, user):
 def _cliItemToSummary(cliItem):
     return {
         "id": str(cliItem._id),
-        "title": cliItem.name,
+        "title": parse_cli(cliItem.xml)["title"] or cliItem.name,
         "description": cliItem.item.get("description", ""),
         "dockerImage": cliItem.image,
     }
