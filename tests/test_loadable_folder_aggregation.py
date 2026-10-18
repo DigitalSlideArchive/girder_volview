@@ -68,10 +68,10 @@ def inspectFiles(monkeypatch):
     real = girder_volview.hasLoadableFile
     calls = []
 
-    def spy(files, user=None):
+    def spy(files, user=None, *, batchParents=False):
         docs = list(files)
         calls.append(docs)
-        return real(docs, user=user)
+        return real(docs, user=user, batchParents=batchParents)
 
     monkeypatch.setattr(girder_volview, "hasLoadableFile", spy)
     return calls
@@ -165,6 +165,225 @@ def test_limit_does_not_hide_a_loadable_file_within_bounds(
     _upload(studyFolder, owner, "scan.bin", mimeType="image/png")
 
     assert _loadable(server, studyFolder, owner).json == {"loadable": True}
+
+
+@pytest.mark.plugin("volview")
+@pytest.mark.parametrize(
+    "name,marker,expected",
+    [
+        ("scan.nrrd", None, True),
+        ("scan.tif", None, True),
+        ("scan.tif", "largeImage", False),
+        ("scan.dcm", None, True),
+        ("scan.dcm", "sm", False),
+        ("scan.nrrd", "transient", False),
+        ("scan.nrrd", "jobOutput", False),
+        ("saved.volview.zip", "transient", True),
+        ("saved.volview.zip", "jobOutput", True),
+    ],
+)
+def test_non_admin_folder_loadability_preserves_image_and_working_data_rules(
+    server, owner, stranger, studyFolder, name, marker, expected
+):
+    from girder.constants import AccessType
+    from girder.models.folder import Folder
+    from girder.models.item import Item
+    from girder_volview.utils import (
+        JOB_OUTPUT_FOLDER_META_KEY,
+        TRANSIENT_STAGED_META_KEY,
+    )
+
+    assert not stranger["admin"]
+    Folder().setUserAccess(studyFolder, stranger, AccessType.READ, save=True)
+    file = _upload(studyFolder, owner, name)
+    item = Item().load(file["itemId"], force=True)
+    if marker == "largeImage":
+        Item().collection.update_one(
+            {"_id": item["_id"]}, {"$set": {"largeImage": {"fileId": file["_id"]}}}
+        )
+    elif marker == "sm":
+        Item().setMetadata(item, {"dicom": {"Modality": "SM"}})
+    elif marker == "transient":
+        Item().setMetadata(item, {TRANSIENT_STAGED_META_KEY: True})
+    elif marker == "jobOutput":
+        Folder().setMetadata(studyFolder, {JOB_OUTPUT_FOLDER_META_KEY: True})
+
+    assert _loadable(server, studyFolder, stranger).json == {"loadable": expected}
+
+
+@pytest.mark.plugin("volview")
+@pytest.mark.parametrize("anonymous", [False, True])
+def test_folder_loadability_checks_each_descendants_read_access(
+    server, owner, stranger, studyFolder, anonymous
+):
+    from girder.models.folder import Folder
+
+    assert not stranger["admin"]
+    Folder().setPublic(studyFolder, True, save=True)
+    private = Folder().createFolder(
+        studyFolder, "private", parentType="folder", creator=owner, public=False
+    )
+    _upload(private, owner, "private.nrrd")
+    user = None if anonymous else stranger
+    assert _loadable(server, studyFolder, user).json == {"loadable": False}
+
+    public = Folder().createFolder(
+        private, "public", parentType="folder", creator=owner, public=True
+    )
+    _upload(public, owner, "public.nrrd")
+    assert _loadable(server, studyFolder, user).json == {"loadable": True}
+
+
+@pytest.mark.plugin("volview")
+def test_folder_loadability_observes_group_access_changes(
+    server, owner, stranger, studyFolder, subFolder
+):
+    from girder.constants import AccessType
+    from girder.models.folder import Folder
+    from girder.models.group import Group
+    from girder.models.item import Item
+
+    Folder().setPublic(studyFolder, True, save=True)
+    rejected = _upload(studyFolder, owner, "slide.dcm")
+    Item().setMetadata(
+        Item().load(rejected["itemId"], force=True), {"dicom": {"Modality": "SM"}}
+    )
+    _upload(subFolder, owner, "scan.nrrd")
+    group = Group().createGroup("readers", creator=owner)
+    Group().addUser(group, stranger)
+
+    assert _loadable(server, studyFolder, stranger).json == {"loadable": False}
+    Folder().setGroupAccess(subFolder, group, AccessType.READ, save=True)
+    assert _loadable(server, studyFolder, stranger).json == {"loadable": True}
+    assert _loadable(server, studyFolder, None).json == {"loadable": False}
+    Folder().setGroupAccess(subFolder, group, None, save=True)
+    assert _loadable(server, studyFolder, stranger).json == {"loadable": False}
+
+
+@pytest.mark.plugin("volview")
+@pytest.mark.parametrize(
+    "name,parent,field,value",
+    [
+        ("scan.nrrd", "item", "meta.volviewTransient", True),
+        ("scan.nrrd", "folder", "meta.volviewJobOutputFolder", True),
+        ("scan.dcm", "item", "meta.dicom.Modality", "SM"),
+        ("scan.tif", "item", "largeImage", None),
+    ],
+)
+def test_folder_loadability_observes_parent_marker_changes(
+    server, owner, stranger, studyFolder, name, parent, field, value
+):
+    from girder.constants import AccessType
+    from girder.models.folder import Folder
+    from girder.models.item import Item
+
+    Folder().setUserAccess(studyFolder, stranger, AccessType.READ, save=True)
+    file = _upload(studyFolder, owner, name)
+    assert _loadable(server, studyFolder, stranger).json == {"loadable": True}
+
+    if parent == "item":
+        model, docId = Item(), file["itemId"]
+    else:
+        model, docId = Folder(), studyFolder["_id"]
+    if field == "largeImage":
+        value = {"fileId": file["_id"]}
+    model.collection.update_one({"_id": docId}, {"$set": {field: value}})
+    assert _loadable(server, studyFolder, stranger).json == {"loadable": False}
+
+    model.collection.update_one({"_id": docId}, {"$unset": {field: ""}})
+    assert _loadable(server, studyFolder, stranger).json == {"loadable": True}
+
+
+@pytest.mark.plugin("volview")
+def test_folder_loadability_handles_multiple_files_in_one_item(
+    server, owner, studyFolder
+):
+    from girder.models.file import File
+    from girder.models.item import Item
+
+    tiff = _upload(studyFolder, owner, "slide.tif")
+    Item().collection.update_one(
+        {"_id": tiff["itemId"]}, {"$set": {"largeImage": {"fileId": tiff["_id"]}}}
+    )
+    image = {key: value for key, value in tiff.items() if key != "_id"}
+    image.update(name="scan.nrrd", mimeType="application/octet-stream")
+    File().collection.insert_one(image)
+
+    assert _loadable(server, studyFolder, owner).json == {"loadable": True}
+
+
+@pytest.mark.plugin("volview")
+@pytest.mark.parametrize("rejectedCount", [1, 127, 128, 129])
+def test_folder_loadability_finds_image_after_rejected_candidates(
+    server, owner, studyFolder, subFolder, rejectedCount
+):
+    from bson import ObjectId
+    from girder.models.file import File
+    from girder.models.item import Item
+
+    tiff = _upload(studyFolder, owner, "slide.tif")
+    item = Item().load(tiff["itemId"], force=True)
+    item["largeImage"] = {"fileId": tiff["_id"]}
+    Item().collection.update_one(
+        {"_id": item["_id"]}, {"$set": {"largeImage": item["largeImage"]}}
+    )
+    items, files = [], []
+    for index in range(1, rejectedCount):
+        copiedItem = dict(item, _id=ObjectId(), name=f"slide-{index}")
+        copiedFile = dict(tiff, _id=ObjectId(), itemId=copiedItem["_id"])
+        items.append(copiedItem)
+        files.append(copiedFile)
+    if items:
+        Item().collection.insert_many(items)
+        File().collection.insert_many(files)
+    _upload(subFolder, owner, "scan.nrrd")
+
+    assert _loadable(server, studyFolder, owner).json == {"loadable": True}
+
+
+@pytest.mark.plugin("volview")
+def test_folder_loadability_applies_output_markers_per_folder_across_batches(
+    server, owner, stranger, studyFolder, subFolder
+):
+    from bson import ObjectId
+    from girder.constants import AccessType
+    from girder.models.file import File
+    from girder.models.folder import Folder
+    from girder.models.item import Item
+    from girder_volview.utils import JOB_OUTPUT_FOLDER_META_KEY
+
+    for folder in (studyFolder, subFolder):
+        Folder().setUserAccess(folder, stranger, AccessType.READ, save=True)
+    Folder().setMetadata(studyFolder, {JOB_OUTPUT_FOLDER_META_KEY: True})
+    outputFile = _upload(studyFolder, owner, "output.nrrd")
+    outputItem = Item().load(outputFile["itemId"], force=True)
+    items, files = [], []
+    for index in range(129):
+        item = dict(outputItem, _id=ObjectId(), name=f"output-{index}")
+        items.append(item)
+        files.append(dict(outputFile, _id=ObjectId(), itemId=item["_id"]))
+    Item().collection.insert_many(items)
+    File().collection.insert_many(files)
+    _upload(subFolder, owner, "scan.nrrd")
+
+    assert _loadable(server, studyFolder, stranger).json == {"loadable": True}
+    Folder().setMetadata(subFolder, {JOB_OUTPUT_FOLDER_META_KEY: True})
+    assert _loadable(server, studyFolder, stranger).json == {"loadable": False}
+    Folder().setMetadata(studyFolder, {JOB_OUTPUT_FOLDER_META_KEY: False})
+    assert _loadable(server, studyFolder, stranger).json == {"loadable": True}
+
+
+@pytest.mark.plugin("volview")
+@pytest.mark.parametrize("name,expected", [("orphan.nrrd", False),
+                                           ("saved.volview.zip", True)])
+def test_folder_loadability_preserves_orphan_file_handling(
+    server, owner, studyFolder, name, expected
+):
+    from girder.models.file import File
+
+    File().collection.insert_one({"name": name, "mimeType": "application/octet-stream"})
+
+    assert _loadable(server, studyFolder, owner).json == {"loadable": expected}
 
 
 def test_loadable_file_limit_is_positive():
