@@ -65,7 +65,14 @@ export async function gotoFolder(page: Page, folderId: string): Promise<void> {
   await page.evaluate((id) => {
     window.location.hash = `#folder/${id}`;
   }, folderId);
-  await expect(page.locator('li.g-item-list-entry').first()).toBeVisible();
+  await expect(
+    page.locator(`a.g-download-folder[href$="/folder/${folderId}/download"]`)
+  ).toBeAttached();
+  await expect(
+    page.locator(
+      'li.g-folder-list-entry:visible, li.g-item-list-entry:visible, .g-empty-parent-message:visible'
+    ).first()
+  ).toBeVisible();
 }
 
 export async function checkRowByItemId(page: Page, itemId: string): Promise<void> {

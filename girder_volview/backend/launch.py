@@ -322,7 +322,9 @@ def downloadResourceManifest(self, folder, folders, items, filters):
         # save), checking a session item (exactly that save), or re-entering a
         # filter row (newest filter save).
         selectedFolders = loadModels(user, Folder, folders)
-        files = getFiles(Folder, selectedFolders) + getFiles(Item, selectedItems)
+        files = getFiles(Folder, selectedFolders, user) + getFiles(
+            Item, selectedItems, user
+        )
         primeLoadableImageCaches([f[1] for f in files], user, itemCache, folderCache)
         files = [
             f for f in files if isLoadableImage(f[1], user, itemCache, folderCache)
@@ -348,7 +350,9 @@ def downloadResourceManifest(self, folder, folders, items, filters):
         # Bare folder-open -> resume the folder's newest session.volview.zip,
         # else all its raw images. Filter-linked sessions are excluded (they are
         # only meaningful re-entered through their filter).
-        filesInFolder = list(Folder().fileList(folder, subpath=False, data=False))
+        filesInFolder = list(
+            Folder().fileList(folder, user=user, subpath=False, data=False)
+        )
         files = singleVolViewZipOrImageFiles(
             filesInFolder,
             user=user,

@@ -1,5 +1,11 @@
 import { request as playwrightRequest, FullConfig } from '@playwright/test';
-import { healthCheck, verifyDeployedHeads, fetchDeployReceipt, warmUp } from './helpers/stack';
+import {
+  healthCheck,
+  verifyAnonymousAccessDisabled,
+  verifyDeployedHeads,
+  fetchDeployReceipt,
+  warmUp,
+} from './helpers/stack';
 import { provisionCompat } from './helpers/compat-provision';
 import { readCompatState, writeCompatState, COMPAT_STATE_PATH } from './helpers/compat-state';
 
@@ -25,6 +31,7 @@ export default async function compatSetup(_config: FullConfig): Promise<void> {
   const request = await playwrightRequest.newContext({ ignoreHTTPSErrors: true });
   try {
     await healthCheck(request);
+    await verifyAnonymousAccessDisabled(request);
     await verifyDeployedHeads(request);
     // Each phase runs right after a deploy recreated the girder container.
     await warmUp(request);

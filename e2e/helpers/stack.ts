@@ -45,6 +45,20 @@ export async function healthCheck(request: APIRequestContext): Promise<void> {
   throw new Error(`[e2e] girder is not reachable at ${VERSION_URL}.${BRING_UP_HINT}`);
 }
 
+export async function verifyAnonymousAccessDisabled(request: APIRequestContext): Promise<void> {
+  const { token } = await authenticate(request);
+  const response = await request.get(
+    apiUrl('/system/setting?key=core.disable_anonymous_access'),
+    { headers: { 'Girder-Token': token } }
+  );
+  if (!response.ok()) {
+    throw new Error(`[e2e] cannot read anonymous access setting (HTTP ${response.status()})`);
+  }
+  if ((await response.json()) !== true) {
+    throw new Error('[e2e] core.disable_anonymous_access must be true for browser tests.');
+  }
+}
+
 // The served VolView SPA: warmed below, and the deploy guard's md5 subject.
 const INDEX_URL = `${CONFIG.baseURL}/static/built/plugins/volview/index.html`;
 
