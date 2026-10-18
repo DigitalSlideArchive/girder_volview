@@ -155,6 +155,31 @@ def test_record_nests_file_id_under_identifier_in_mongo(server, owner, _make):
     assert reloaded[outputs._OUTPUTS_FIELD] == {"outVol": str(fileDoc["_id"])}
 
 
+@pytest.mark.plugin("jobs")
+@pytest.mark.plugin("volview")
+def test_output_binding_preserves_large_job_log(server, owner, _make):
+    from girder_jobs.models.job import Job
+
+    job, outputFolder = _make()
+    log = "processing output\n" * (192 * 1024)
+    Job().updateJob(job, log=log, overwrite=True, notify=False)
+
+    fileDoc = _recordOutput(owner, outputFolder, "outVol", "out.nii.gz")
+    result = _getResults(server, owner, _succeed(job)["_id"])
+    assert result.output_status.startswith(b"200")
+    assert result.json["resultState"] == "ready"
+    assert result.json["missing"] == 0
+    assert [intent["id"] for intent in result.json["intents"]] == [
+        str(fileDoc["_id"])
+    ]
+
+    detail = server.request(
+        path="/job/%s" % job["_id"], method="GET", user=owner, isJson=True
+    )
+    assert detail.output_status.startswith(b"200")
+    assert detail.json["log"] == [log]
+
+
 @pytest.mark.plugin("volview")
 def test_n_outputs_each_bind_under_their_own_key(server, owner, _make):
     cli_xml = (

@@ -40,7 +40,7 @@ class _FakeJob:
     def load(self, jobId, force=False, exc=False, user=None, level=None):
         return self._byId.get(str(jobId))
 
-    def findOne(self, query):
+    def findOne(self, query, fields=None):
         for job in self._byId.values():
             if all(job.get(key) == want for key, want in query.items()):
                 return job

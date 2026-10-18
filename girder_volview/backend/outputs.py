@@ -95,7 +95,9 @@ def _jobForOutputFolder(folderId):
 
     if folderId is None:
         return None
-    job = girder_job.Job().findOne({_OUTPUT_FOLDER_ID_FIELD: str(folderId)})
+    job = girder_job.Job().findOne(
+        {_OUTPUT_FOLDER_ID_FIELD: str(folderId)}, fields={"log": False}
+    )
     return job if isinstance(job, dict) else None
 
 
