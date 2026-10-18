@@ -190,9 +190,26 @@ test.describe('save/load/restore F5 lifecycle', () => {
     expect(isSessionManifest(manifest)).toBeTruthy();
   });
 
-  test('bare folder-open resumes the newest folder-scoped save', async ({ page, context }, info) => {
+  test('bare folder-open loads private subfolders and resumes the newest save', async ({ page, context }, info) => {
     const g = await setupFixture(context, 'lifecycle-bare');
-    const seed = await launchGesture(page, g, 'checked');
+    const api = `${CONFIG.baseURL}/${CONFIG.apiRoot}`;
+    const headers = { 'Girder-Token': g.token };
+    const created = await page.request.post(`${api}/folder`, {
+      headers,
+      params: { parentType: 'folder', parentId: g.folderId, name: 'images', public: false },
+    });
+    expect(created.ok()).toBeTruthy();
+    const nested = await created.json();
+    for (const itemId of g.itemIds) {
+      const moved = await page.request.put(`${api}/item/${itemId}`, {
+        headers,
+        params: { folderId: nested._id },
+      });
+      expect(moved.ok()).toBeTruthy();
+    }
+
+    const seed = await launchGesture(page, g, 'bare-folder');
+    expect(resourceNames(seed.manifest)).toEqual(expect.arrayContaining(g.itemNames));
     const seededResume = await remoteSave(seed.view);
     expect(seededResume).toBeTruthy();
     await seed.view.close();

@@ -583,6 +583,55 @@ def test_bare_folder_without_session_opens_raw_images(server, owner, folder):
 
 
 @pytest.mark.plugin("volview")
+@pytest.mark.parametrize("checked", [False, True])
+@pytest.mark.parametrize("viewer", ["owner", "stranger", "anonymous"])
+@pytest.mark.parametrize("disableAnonymous", [False, True])
+def test_folder_launch_respects_descendant_permissions(
+    server, owner, stranger, folder, checked, viewer, disableAnonymous
+):
+    from girder.models.folder import Folder
+    from girder.models.setting import Setting
+    from girder.models.user import User
+    from girder.settings import SettingKey
+
+    owner = User().save({**owner, "admin": False})
+    stranger = User().save({**stranger, "admin": False})
+    assert owner["admin"] is False
+    assert stranger["admin"] is False
+    Setting().set(SettingKey.DISABLE_ANONYMOUS_ACCESS, disableAnonymous)
+
+    parent = Folder().setPublic(folder, True, save=True)
+    study = Folder().createFolder(
+        parent, "study", parentType="folder", creator=owner, public=True
+    )
+    for name, public in (("public", True), ("private", False)):
+        series = Folder().createFolder(
+            study, name, parentType="folder", creator=owner, public=public
+        )
+        _uploadFile(series, owner, f"{name}.nrrd")
+        _uploadFile(series, owner, "nested.volview.zip", data=b"zip")
+
+    user = {"owner": owner, "stranger": stranger, "anonymous": None}[viewer]
+    response = _folderManifest(
+        server,
+        parent,
+        user,
+        params={"folders": str(study["_id"]) if checked else "", "items": ""},
+        exception=True,
+    )
+
+    if disableAnonymous and viewer == "anonymous":
+        assert response.output_status.startswith(b"401")
+        return
+
+    assert response.output_status.startswith(b"200")
+    expectedNames = {"public.nrrd", "config.json"}
+    if viewer == "owner":
+        expectedNames.add("private.nrrd")
+    assert set(_resourceNames(response)) == expectedNames
+
+
+@pytest.mark.plugin("volview")
 def test_filter_save_excluded_from_bare_open_plain_save_resumed(server, owner, folder):
     # Plain save first, then a NEWER filter-gesture save (stamps
     # meta.linkedResources.filter). The bare open excludes the newer filter save

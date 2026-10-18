@@ -502,12 +502,14 @@ def idStringToIdList(idString):
     return idString.split(",")
 
 
-def getFiles(model, docs):
+def getFiles(model, docs, user):
     # Skip docs that did not load (a stale/deleted/inaccessible id makes
     # loadModels yield None); fileList(None) would dereference None["_id"] and
     # 500.
     fileLists = [
-        model().fileList(doc, subpath=False, data=False) for doc in docs if doc
+        model().fileList(doc, user=user, subpath=False, data=False)
+        for doc in docs
+        if doc
     ]
     files = [file for fileList in fileLists for file in fileList]
     return files
