@@ -29,17 +29,46 @@ function setButtonVisibility(button, visible = true) {
     }
 }
 
-function updateButtonVisibility(el, folderId) {
+// Keep at most one folder/:id/volview_loadable request in flight.
+let loadableInFlight = null;
+let loadablePending = null;
+
+function sendLoadableRequest(folderId, buttons) {
+    loadableInFlight = { folderId, buttons };
+    const finish = (visible) => {
+        const done = loadableInFlight.buttons;
+        loadableInFlight = null;
+        if (loadablePending) {
+            const next = loadablePending;
+            loadablePending = null;
+            sendLoadableRequest(next.folderId, next.buttons);
+        }
+        done.forEach((button) => setButtonVisibility(button, visible));
+    };
     restRequest({
         url: `folder/${folderId}/volview_loadable`,
         method: "GET",
-        error: function () {
-            setButtonVisibility(el, false);
-        },
+        error: null,
     }).done((loadableJSON) => {
-        const loadable = loadableJSON.loadable;
-        setButtonVisibility(el, loadable);
+        finish(!!loadableJSON.loadable);
+    }).fail(() => {
+        finish(false);
     });
+}
+
+function updateButtonVisibility(el, folderId) {
+    if (!el.length) {
+        return;
+    }
+    if (loadableInFlight && loadableInFlight.folderId === folderId) {
+        loadableInFlight.buttons.push(el);
+    } else if (!loadableInFlight) {
+        sendLoadableRequest(folderId, [el]);
+    } else if (loadablePending && loadablePending.folderId === folderId) {
+        loadablePending.buttons.push(el);
+    } else {
+        loadablePending = { folderId, buttons: [el] };
+    }
 }
 
 function isGroupedItemList(itemListView) {
