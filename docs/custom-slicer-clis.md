@@ -1,109 +1,101 @@
 # Building and deploying custom Slicer CLIs
 
-Use [Slicer CLI Web](https://github.com/girder/slicer_cli_web) Docker images to
-add analysis tasks to Girder VolView. This guide covers VolView-specific
-authoring and DSA deployment.
+[Slicer CLI Web](https://github.com/girder/slicer_cli_web) Docker images add
+analysis tasks to Girder VolView. VolView builds Jobs forms from CLI XML,
+validates submissions, manages output locations, and loads results into the scene.
 
 The [VolView Radiology CLI](https://github.com/PaulHax/volview-radiology-cli)
-provides segment rulers and statistics. Its separate `volview-cli-examples`
-image contains filtering and segmentation examples. Administrators can also
-build their own CLI images; this repository is not a required library or base image.
-
-Related documentation:
-
-- [Slicer CLI Web Docker CLI specification](https://github.com/girder/slicer_cli_web#docker-clis)
-- [3D Slicer CLI module overview](https://slicer.readthedocs.io/en/latest/developer_guide/module_overview.html#command-line-interface-cli)
-- [3D Slicer Execution Model parameters](https://slicer.readthedocs.io/en/latest/user_guide/modules/executionmodeltour.html)
-- [DSA deployment](https://github.com/DigitalSlideArchive/digital_slide_archive/tree/master/devops/dsa)
-
-## What Girder VolView adds
-
-Slicer CLI Web registers and runs images. Girder VolView filters the shared task
-catalog, builds Jobs forms from CLI XML, validates submissions, owns output
-locations, and applies completed results to the scene.
-
-Requirements:
-
-1. Use unique image and task names. VolView, HistomicsUI, and DIVE-DSA can share
-   one Slicer CLI Web catalog.
-2. Set `<category>` to `Radiology`, `Segmentation`, or `Filtering`.
-3. Declare input and output types for VolView's scene mapping. See
-   [Add a task](#add-a-task).
-4. Write results to the output paths passed to the executable.
-5. Exit nonzero on failure.
-
-See [Job processing design](./job-processing.md) for the complete execution flow.
-
-## Inspect the example image
-
-The example [`Dockerfile`](https://github.com/PaulHax/volview-radiology-cli/blob/main/Dockerfile) packages the image, and
-[`cli_list.py`](https://github.com/PaulHax/volview-radiology-cli/blob/main/cli_list.py) implements its discovery and dispatch entrypoint.
-
-```sh
-git clone https://github.com/PaulHax/volview-radiology-cli.git
-cd volview-radiology-cli
-docker build --target examples -t volview-cli-examples:local .
-docker run --rm volview-cli-examples:local --list_cli
-docker run --rm volview-cli-examples:local ThresholdSegmentation --xml
-docker build --target test .
-```
-
-Slicer CLI Web discovers an image through two entrypoint calls:
-
-```text
-docker run IMAGE --list_cli
-docker run IMAGE CLI_NAME --xml
-```
-
-The first returns the CLI manifest. The second returns a task's Slicer
-Execution Model XML. Ordinary calls run the selected executable and propagate
-its exit code.
+provides rulers and statistics; its `volview-cli-examples` image contains
+filtering and segmentation examples. You can also use your own image and
+implementation language.
 
 ## Add a task
 
-A Python task named `ExampleTask` needs:
+For the reference image, a Python task named `ExampleTask` needs:
 
-1. `ExampleTask/ExampleTask.xml` with its category, parameters, and I/O.
-2. `ExampleTask/ExampleTask.py` with `--xml` support and the implementation.
-3. `"ExampleTask": {"type": "python"}` in the image's manifest
-   (`examples/cli_list.json` for this repository's development examples).
+1. `ExampleTask/ExampleTask.xml` declaring its parameters and I/O.
+2. `ExampleTask/ExampleTask.py` implementing the task and `--xml`.
+3. `"ExampleTask": {"type": "python"}` in `examples/cli_list.json`.
 4. `COPY ExampleTask /opt/cli/ExampleTask/` in the Dockerfile's `examples` target.
 
-The reference image uses `slicer_cli_web.CLIArgumentParser`. Other languages
-are valid if the entrypoint contract and XML match the command line.
+Use unique image/task names because VolView, HistomicsUI, and DIVE-DSA can
+share one catalog. Set `<category>` to `Radiology`, `Segmentation`, or
+`Filtering`. Write results to the supplied output paths and exit nonzero on
+failure.
 
-The reference image's
-[`ExportSegmentStatistics.xml`](https://github.com/PaulHax/volview-radiology-cli/blob/main/ExportSegmentStatistics/ExportSegmentStatistics.xml),
-[`ExportSegmentStatistics.py`](https://github.com/PaulHax/volview-radiology-cli/blob/main/ExportSegmentStatistics/ExportSegmentStatistics.py), and
-[`cli_list.json`](https://github.com/PaulHax/volview-radiology-cli/blob/main/cli_list.json)
-show these parts together.
+Slicer CLI Web calls `IMAGE --list_cli` for the manifest and
+`IMAGE CLI_NAME --xml` for Slicer Execution Model XML. Other calls execute the
+task and propagate its exit code. The reference image uses
+`slicer_cli_web.CLIArgumentParser`:
+
+- [`Dockerfile`](https://github.com/PaulHax/volview-radiology-cli/blob/main/Dockerfile) and [`cli_list.py`](https://github.com/PaulHax/volview-radiology-cli/blob/main/cli_list.py): packaging and dispatch.
+- [`ExportSegmentStatistics.xml`](https://github.com/PaulHax/volview-radiology-cli/blob/main/ExportSegmentStatistics/ExportSegmentStatistics.xml), [implementation](https://github.com/PaulHax/volview-radiology-cli/blob/main/ExportSegmentStatistics/ExportSegmentStatistics.py), and [manifest](https://github.com/PaulHax/volview-radiology-cli/blob/main/cli_list.json): a complete task.
 
 ### Declare inputs and outputs for VolView
 
-VolView uses Slicer XML to build the form and connect job data to the scene.
-Users and CLI authors do not set intents. Girder VolView derives each output
-intent from its XML declaration using the rules below.
+Set each parameter's `<channel>` to `input` or `output`. VolView derives scene
+behavior from these declarations; authors do not set result intents.
 
-| Direction | Slicer XML                                                          | VolView behavior                                                                         |
-| --------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Input     | `<image channel="input">`; omitted `type` defaults to `scalar`      | First image input uses the selected base image; subsequent image inputs use attached layers in order. |
-| Input     | `<image channel="input" type="label">`                              | Stages the active image's segmentation as one or more labelmap files.                    |
-| Input     | `<file channel="input" fileExtensions=".annotations.json">`         | Stages every finished ruler, rectangle, and polygon on the selected image as one JSON file. |
-| Output    | `<image channel="output">`; omitted `type` defaults to `scalar`     | `add-base-image`: loads the output as a new base image.                                  |
-| Output    | `<image channel="output" type="label">`                             | `import-segmentation`: adds the output labelmap to the input base image.                 |
-| Output    | `<file channel="output" fileExtensions=".annotations.json">`        | `add-annotations`: adds the output's rulers, rectangles, and polygons to the input image. |
-| Output    | `<file channel="output">`                                           | No scene intent; downloadable under **Details > Files**.                                 |
+| Channel | Declaration | Behavior |
+| --- | --- | --- |
+| Input | `<image>` or `<image type="scalar">` | Base image first, then attached layers in declaration order. |
+| Input | `<image type="label">` | The base image's segmentation, staged as labelmap files. |
+| Input | `<file fileExtensions=".annotations.json">` | All finished rulers, rectangles, and polygons on the base image. |
+| Output | `<image>` or `<image type="scalar">` | Loads a new base image. |
+| Output | `<image type="label">` | Imports a segmentation onto the input base image. |
+| Output | `<file fileExtensions=".annotations.json">` | Adds annotations to the input base image. |
+| Output | Other `<file>` | Downloadable under **Details > Files**. |
 
-This mapping is VolView-specific; HistomicsUI can interpret the same CLI
-differently. Unknown image types are rejected, and so is a `<file>` **input**
-that does not declare `.annotations.json`: VolView has no binding convention for
-an opaque input file, so such a task does not load in the Jobs form.
+Unknown image types and opaque file inputs are unsupported. Mapping uses the
+XML declaration, not file contents or MIME type; an image declared `type="label"`
+is always imported as a segmentation. HistomicsUI may interpret the same XML
+differently.
 
-The declared extension is the only signal. VolView never inspects a file's
-content or mime type to decide an intent, and an `<image type="label">` output
-is imported into a segmentation whatever its `fileExtensions` claim.
+### Reading additional image layers
 
-Example labelmap output:
+Scalar inputs bind to the active base and then its attached layers in order.
+Labelmap and annotation inputs consume no image slots. Missing required images
+block submission; missing optional images are omitted. Binding does not infer
+modality from parameter names or filenames.
+
+Make a layer optional with a long flag, empty default, and no index:
+
+```xml
+<image type="scalar" reference="_girder_id_">
+  <name>inputOverlay</name>
+  <label>Overlay Volume</label>
+  <channel>input</channel>
+  <longflag>inputOverlay</longflag>
+  <default></default>
+</image>
+```
+
+Each input contains one complete volume, including every source file of a
+DICOM series. Layers retain their original grids, so the CLI must handle
+differing origins, directions, spacing, and dimensions. Use `reference="_girder_id_"` for
+[Girder file IDs](#dicom-and-girder-backed-inputs), or `multiple="true"` for
+comma-separated local file paths. Multi-file inputs declaring neither are
+rejected before job creation. Neither transport assembles a volume; assemble
+each image input separately.
+
+Scene outputs always refer to the first scalar image. Its parameter name is
+saved with the job so restoration does not depend on JSON key order. Routing
+results to later image inputs is unsupported.
+
+### Reading a labelmap input
+
+The client stages the base image's segmentation as compressed `.seg.nrrd`
+parts, each containing non-overlapping masks:
+
+- With `multiple="true"`, it stages every part. A singular input stages only
+  the first; overlapping segments omitted from it are reported to the user.
+- Identify segments by `Segment{N}_Name`. Label values restart at 1 in each
+  file and can change between runs.
+- Voxels are `uint8`, or `uint16` when a part contains more than 255 segments.
+
+### Writing a labelmap output
+
+Use `.seg.nrrd` to preserve segment names and colors:
 
 ```xml
 <image type="label" fileExtensions=".seg.nrrd" reference="inputVolume">
@@ -114,92 +106,22 @@ Example labelmap output:
 </image>
 ```
 
-Use `.seg.nrrd` to carry segment names and colors. Write the file to the output
-path passed to the CLI; Girder Worker uploads it to the job-owned folder.
+Write to the supplied path; Girder Worker uploads the file to the job-owned
+folder. See [ThresholdSegmentation.xml](https://github.com/PaulHax/volview-radiology-cli/blob/main/ThresholdSegmentation/ThresholdSegmentation.xml)
+for a complete declaration.
 
-See [`ThresholdSegmentation.xml`](https://github.com/PaulHax/volview-radiology-cli/blob/main/ThresholdSegmentation/ThresholdSegmentation.xml)
-for a complete scalar-image-to-labelmap declaration.
+Results join the base image's segmentation. A matching segment name reuses
+its scene color, unless that image already has a mask for the segment; then a
+new segment is created with the file's name and color. Empty declared segments
+are preserved. Reopening the same job output adds nothing; rerunning the task
+adds new results.
 
-### Reading additional image layers
-
-Ordinary scalar image inputs bind in parameter order: the first gets the active
-base image, the second gets its first attached layer, the third gets its next
-layer, and so on. Labelmap and annotations inputs do not consume image slots.
-Only layers attached to the active base image qualify. The form shows the
-image name for each input.
-
-Use a long flag and an empty default without an index to make an additional
-image optional:
-
-```xml
-<image type="scalar" reference="_girder_id_">
-  <name>inputOverlay</name>
-  <channel>input</channel>
-  <longflag>inputOverlay</longflag>
-  <default></default>
-</image>
-```
-
-When no layer exists for an optional input, it is omitted. Missing required
-images block submission. Binding follows the attached layer order and does not
-infer modality or purpose from parameter names or filenames.
-
-Each input represents one complete volume. A multi-file DICOM series fills one
-image input with all of its original Girder files; its slices never become
-separate image inputs. Layers use their original source files, so the CLI must
-account for differences between image grids.
-
-An ordinary image input accepts one file. To receive a multi-file DICOM series,
-declare `reference="_girder_id_"` as above and have the CLI fetch and assemble
-the comma-separated Girder file IDs using `girderApiUrl` and `girderToken`.
-Alternatively, `multiple="true"` gives a series-capable CLI comma-separated
-local file paths through Slicer CLI Web. Neither declaration assembles the
-volume automatically. An image input with several files and neither
-declaration is rejected before a job is created.
-
-Segmentation and annotation outputs remain associated with the first, base
-image. Jobs record its parameter name so reopening a job preserves this
-association regardless of JSON parameter ordering. Routing scene outputs to a
-later image input is not supported.
-
-### Reading a labelmap input
-
-A labelmap input binds to the one segmentation of the active image. Its masks
-may overlap, so the client stages them as overlap-free parts, each a compressed
-`.seg.nrrd` file:
-
-- `multiple="true"` on the parameter gives the CLI every part, one file per
-  part. Declare it for a task that has to see the whole segmentation.
-- A singular parameter gives the CLI the first part only. Where masks overlap,
-  whole segments are left out of that part and the user is told which ones.
-  Where nothing overlaps, the one part carries every segment of the image.
-- Label values run from 1 within a file and are not stable across files or
-  across runs. Identify a segment by its embedded `Segment{N}_Name`, never by
-  its label value.
-- Part voxels are `uint8`, or `uint16` for a part of more than 255 segments.
-
-### Writing a labelmap output
-
-Every labelmap result for an image joins that image's one segmentation:
-
-- A segment whose name matches one the scene already holds joins it and keeps
-  the color the scene gives it. Any other name mints a segment with the name
-  and color the file declares, as does a name whose segment the image already
-  carries a mask for, since an image holds at most one mask per segment.
-- A result is identified by its provider, job, and output, so loading the same
-  result twice adds nothing while re-running the task adds its results
-  alongside the earlier ones.
-- A segment declared in the file header that carries no voxels arrives as an
-  empty segment.
-- An output whose own segments overlap must be written as a multi-component
-  volume, one component per non-overlapping set. `Segment{N}_Layer` is not
-  read.
+For overlapping output segments, write a multi-component volume with one
+non-overlapping set per component. `Segment{N}_Layer` is not read.
 
 ### The annotations JSON format
 
-The Slicer Execution Model has no vector-annotation element, so a task declares
-rulers, rectangles, and polygons as `<file>` parameters whose `fileExtensions`
-names `.annotations.json`:
+Declare vector annotations as `.annotations.json` files:
 
 ```xml
 <file fileExtensions=".annotations.json" reference="_girder_id_">
@@ -216,134 +138,86 @@ names `.annotations.json`:
 </file>
 ```
 
-The file is a versioned envelope. Coordinates are **world LPS millimeters** —
-never image indices — because that is the one space the CLI and the client can
-agree on without knowing each other's image indexing.
+Coordinates are **world LPS millimeters**, not image indices:
 
 ```json
 {
   "schemaVersion": 1,
   "space": "LPS",
   "labels": {
-    "rulers": { "lesion": { "color": "#ff0000", "strokeWidth": 2 } },
-    "rectangles": { "lesion": { "color": "#00ff00" } }
+    "rulers": { "lesion": { "color": "#ff0000", "strokeWidth": 2 } }
   },
   "tools": {
-    "rulers": [
-      {
-        "firstPoint": [-30.5, 12.25, -12.5],
-        "secondPoint": [18.75, 44, -12.5],
-        "frameOfReference": {
-          "planeNormal": [0, 0, 1],
-          "planeOrigin": [0, 0, -12.5]
-        },
-        "labelName": "lesion",
-        "name": "Ruler"
-      }
-    ],
+    "rulers": [{
+      "firstPoint": [-30.5, 12.25, -12.5],
+      "secondPoint": [18.75, 44, -12.5],
+      "frameOfReference": {
+        "planeNormal": [0, 0, 1],
+        "planeOrigin": [0, 0, -12.5]
+      },
+      "labelName": "lesion",
+      "name": "Ruler"
+    }],
     "rectangles": [],
     "polygons": []
   }
 }
 ```
 
-Rules a producer must follow:
+Format constraints:
 
-- `schemaVersion` must be `1` and `space` must be `"LPS"`. Any other value is
-  rejected rather than half-understood.
-- `tools` holds up to three arrays: `rulers` and `rectangles` are two points
-  (`firstPoint`, `secondPoint`; a rectangle's points are opposite corners), and
-  `polygons` is a `points` array of at least three points. Rectangle edges follow
-  the referenced image's in-plane axes; use a polygon for a rotated box.
-- Every tool record carries a required `frameOfReference`
-  (`planeNormal`, `planeOrigin`) and may carry `slice`, `frame`, `labelName`,
-  `name`, and a string-to-string `metadata` map. Nothing else is allowed: tool
-  records are strict, so an `id`, `imageID`, `color`, `strokeWidth`,
-  `fillColor`, `hidden`, `placing`, or `source` field makes the file invalid.
-  Styles belong in `labels`; identity and placement state are the session's.
-- `frameOfReference` contains exactly `planeNormal` and `planeOrigin`. `slice`
-  must be finite when present, and `frame` must be a nonnegative JavaScript
+- `schemaVersion` is `1`; `space` is `"LPS"`. Empty tool arrays are valid.
+- Rulers and rectangles use `firstPoint` and `secondPoint`; rectangle points
+  are opposite corners along the image's in-plane axes. Polygons use at least
+  three `points`. Use polygons for rotated boxes.
+- Every tool requires `frameOfReference` containing exactly `planeNormal` and
+  `planeOrigin`. Normals must be finite and nonzero; consumers normalize them.
+- Optional tool fields are `slice`, `frame`, `labelName`, `name`, and
+  string-to-string `metadata`. Other fields, including session IDs and styles,
+  are rejected. `slice` must be finite; `frame` must be a nonnegative JavaScript
   safe integer.
-- `planeNormal` must be a finite, nonzero vector. Its magnitude carries no
-  information: consumers normalize it before matching the plane to an image
-  axis and storing the annotation.
-- `labels` has one namespace per tool kind, each keyed by label name. The same
-  name may carry different styles for different kinds — rulers and polygons are
-  independent — so a style is only ever read from its own kind's namespace.
-- Label definitions are strict objects containing only string `color`, numeric
-  `strokeWidth`, and string `fillColor` fields. The record key `__proto__` is
-  reserved in both label namespaces and tool metadata.
-- `color` is a hex value such as `#d60000` or a CSS color keyword such as
-  `lime`. Any other syntax, including functional forms such as `rgb()` and
-  `hsl()`, is ignored: the label keeps the color the client already holds for
-  it, and the user is told the value was rejected. `fillColor` is accepted and
-  ignored, since every rectangle is drawn unfilled.
-- Label references must resolve. Every nonempty `labelName` has to exist in that
-  tool kind's namespace; a dangling reference rejects the whole file. Omit
-  `labelName` for an unlabeled tool.
-- An empty `tools` set is valid and applies nothing.
+- Each tool kind has its own `labels` namespace. Nonempty `labelName` values
+  must resolve there. Labels allow only string `color`, numeric `strokeWidth`,
+  and string `fillColor`; `__proto__` is reserved in labels and metadata.
+- Colors accept hex values and CSS keywords, not `rgb()` or `hsl()`. Invalid
+  colors produce a warning and retain the scene color. `fillColor` is accepted
+  but ignored; rectangles remain unfilled.
 
-Rules specific to **output** in this version:
+For output, normalized plane normals must match a referenced image axis
+within the `vec3.equals` tolerance (`1e-6`). Oblique planes reject the whole
+result. Echoing an input's `frameOfReference` is usually simplest.
+`planeOrigin` determines placement: between-slice origins are rejected;
+out-of-bounds slice origins are accepted. `slice` and `frame` are advisory,
+and an out-of-range cine frame is dropped. Loading the same output twice
+adds no duplicate tools.
 
-- Every output frame must align to an axis of the referenced image. The client
-  normalizes `planeNormal` and matches it against the image's own axes within a
-  small tolerance (gl-matrix `vec3.equals`, a relative epsilon of `1e-6`), so a
-  normal that is an axis up to floating-point noise still matches while a
-  genuinely oblique plane matches none of them. An oblique plane rejects the
-  entire result — no partial apply — with a diagnostic that the plane is not
-  axis-aligned, because the viewers cannot render an unaligned frame. The
-  simplest correct producer echoes the `frameOfReference` of an input
-  annotation.
-- Placement comes from `planeOrigin` along that axis. An origin outside the
-  image's slice range is accepted as it stands — the annotation lands on that
-  out-of-bounds slice, matching how the renderer treats a position past the
-  volume. An origin that falls *between* slices rejects the result with a
-  diagnostic saying so, since an annotation can only be drawn on a slice.
-- `slice` and `frame` are advisory echoes of where the producer saw the
-  annotation. The client re-derives placement and never trusts them; on a cine
-  image a `frame` outside the image's range is dropped rather than failing the
-  result.
-- Applying a result is idempotent: the client records the job's provenance on
-  each added tool, so loading the same output twice adds nothing.
+The normative files in the `volview` package are:
 
-The normative definition is the `volview` package's neutral backend contract:
-the JSON Schema at `backend-contract/generated/annotations-file.schema.json`,
-the TypeScript source at `backend-contract/processing/annotations.ts`, and the
-worked interchange example at `backend-contract/fixtures/wire/annotations-file.json`
-(one ruler, one rectangle, one polygon, per-kind labels, and tool metadata). See
-[Backend contract and tests](./development.md#backend-contract-and-tests) for
-where that package lives in a checkout.
-`tests/slicer_xml/annotations-measure.xml` in this repository is a complete
-annotations-in, annotations-out task declaration, and
-[`RulerToRectangle`](https://github.com/PaulHax/volview-radiology-cli/tree/main/RulerToRectangle)
-is a runnable task that reads and writes the format.
+- `backend-contract/generated/annotations-file.schema.json`
+- `backend-contract/processing/annotations.ts`
+- `backend-contract/fixtures/wire/annotations-file.json`
 
-This wire format is **not** VolView's session manifest. In particular
-`session_builder`'s [`add_annotation`](../session_builder/README.md) writes the
-manifest's annotation shape — different keys (`imageID`, a flat `planeNormal` /
-`planeOrigin`, a label name under `label`, per-tool colors) inside a
-`.volview.zip`. Do not use one as a template for the other.
+See [Backend contract and tests](./development.md#backend-contract-and-tests)
+for their location, [annotations-measure.xml](../tests/slicer_xml/annotations-measure.xml)
+for a complete declaration, and [RulerToRectangle](https://github.com/PaulHax/volview-radiology-cli/tree/main/RulerToRectangle)
+for an implementation. This format differs from the session-manifest format
+written by [`session_builder.add_annotation`](../session_builder/README.md);
+do not interchange them.
 
 ### DICOM and Girder-backed inputs
 
-To receive every file in a DICOM series, pass Girder IDs instead of staging one
-file:
+Use `reference="_girder_id_"` to receive comma-separated Girder file IDs:
 
 ```xml
-<image reference="_girder_id_">
-  <name>inputVolume</name>
-  <label>Input Volume</label>
-  <channel>input</channel>
-  <index>0</index>
-</image>
-```
-
-See [`OtsuSegmentation.xml`](https://github.com/PaulHax/volview-radiology-cli/blob/main/OtsuSegmentation/OtsuSegmentation.xml)
-for the complete input and credential declarations.
-
-Declare the reserved parameters that Slicer CLI Web populates at run time:
-
-```xml
+<parameters>
+  <label>Inputs</label>
+  <image reference="_girder_id_">
+    <name>inputVolume</name>
+    <label>Input Volume</label>
+    <channel>input</channel>
+    <index>0</index>
+  </image>
+</parameters>
 <parameters advanced="true">
   <label>Girder API</label>
   <string>
@@ -359,45 +233,30 @@ Declare the reserved parameters that Slicer CLI Web populates at run time:
 </parameters>
 ```
 
-The input argument is a comma-separated list of file IDs. The example's
-[`girder_input`](https://github.com/PaulHax/volview-radiology-cli/blob/main/volview_cli_base/girder_input.py)
-downloads them, and
-[`assemble`](https://github.com/PaulHax/volview-radiology-cli/blob/main/volview_cli_base/assemble.py)
-sorts and assembles the DICOM series from metadata.
-Do not rely on ID or filename order.
+Girder VolView supplies a one-day token for the submitting user, scoped to
+data read/write; Slicer CLI Web injects it and the API URL into the reserved
+parameters.
 
-Girder VolView mints a new one-day token for the submitting user, scoped to
-data read and write. Slicer CLI Web injects that token and the Girder API URL
-into the declared parameters.
-
-See [How image inputs become CLI files](./job-processing.md#how-image-inputs-become-cli-files)
-for the complete VolView-to-container translation.
+The reference [`girder_input`](https://github.com/PaulHax/volview-radiology-cli/blob/main/volview_cli_base/girder_input.py)
+downloads files, and [`assemble`](https://github.com/PaulHax/volview-radiology-cli/blob/main/volview_cli_base/assemble.py)
+orders DICOM slices by metadata. Do not rely on ID or filename order. See
+[OtsuSegmentation.xml](https://github.com/PaulHax/volview-radiology-cli/blob/main/OtsuSegmentation/OtsuSegmentation.xml)
+and [How image inputs become CLI files](./job-processing.md#how-image-inputs-become-cli-files).
 
 ## Dispatching to an external compute service
 
-The CLI container can relay Girder inputs to a GPU or
-workflow service without downloading and re-uploading them:
+A CLI can forward the injected Girder URL/token, file IDs, and task parameters
+to a service that downloads inputs directly. Wait for completion, write each
+result to its declared output path, and exit nonzero on failure. Configure
+service credentials separately and ensure the service can reach Girder.
 
-1. Submit the injected Girder API URL, per-job token, file IDs, and task parameters.
-2. Let the workflow service download the inputs directly from Girder.
-3. Wait for completion and report progress.
-4. Download each result to its declared CLI output path.
-5. Validate results and exit zero; exit nonzero on failure.
-
-Configure the workflow endpoint and its own credentials in the deployment.
-Girder access uses the injected per-job token; the workflow service only needs
-network access to the Girder API.
-
-Handle container termination by cancelling downstream work. Set downstream
-timeouts and retry limits; otherwise the outer job waits for the adapter.
-
-For progress reporting, print `<filter-progress>` and `<filter-comment>` tags.
-See Slicer CLI Web's
-[`ExampleProgress`](https://github.com/girder/slicer_cli_web/tree/master/small-docker/ExampleProgress).
+Cancel downstream work when the container terminates; set downstream timeouts
+and retry limits. For progress, print `<filter-progress>` and `<filter-comment>`
+tags as shown in [ExampleProgress](https://github.com/girder/slicer_cli_web/tree/master/small-docker/ExampleProgress).
 
 ## Verify the image
 
-With the reference Dockerfile:
+Using the reference Dockerfile:
 
 ```sh
 IMAGE=registry.example.org/team/example-cli:0.1.0
@@ -407,35 +266,31 @@ docker run --rm "$IMAGE" ExampleTask --xml
 docker build --target test .
 ```
 
-In a development DSA deployment, confirm:
-
-- the task appears only in the intended application;
-- image and labelmap controls accept the correct sources;
-- outputs load into the scene or appear under **Details > Files**;
-- invalid parameters and failures produce failed jobs;
-- concurrent jobs keep same-named outputs separate; and
-- cancellation stops downstream work when applicable.
+In DSA, check catalog visibility, input bindings, scene results/downloads,
+failed-job reporting, isolation of concurrent outputs, and cancellation of
+any downstream service.
 
 ## Register the image in DSA
 
-Add an image reference to the DSA provision YAML and re-run provisioning:
+Add the image to the provision YAML and rerun provisioning:
 
 ```yaml
 slicer-cli-image:
   - ghcr.io/paulhax/volview-radiology-cli:0.2.1
 ```
 
-`slicer-cli-image` uses the image already on the DSA Docker host, pulling it
-from a registry only when the tag is missing. For registry images, publish an
-immutable version accessible to that host. Use `slicer-cli-image-pull` to force
-a pull when updating an intentionally mutable tag.
+The host uses an existing local image or pulls it when the tag is missing.
+Publish immutable versions; use `slicer-cli-image-pull` to refresh a mutable
+tag. The admin page also supports interactive import. For private images,
+configure [registry authentication](https://github.com/DigitalSlideArchive/digital_slide_archive/blob/master/devops/dsa/README.rst#using-private-docker-registries-for-cli-images).
 
-The Slicer CLI Web admin page can import an image interactively, but provision
-YAML is the repeatable installation path. For private images, configure
-[DSA registry authentication](https://github.com/DigitalSlideArchive/digital_slide_archive/blob/master/devops/dsa/README.rst#using-private-docker-registries-for-cli-images).
+Reimporting a tag removes tasks omitted from its new manifest. When switching
+tags, remove the retired registration to remove its tasks. See
+[deployment helpers](./development.md#slicer-cli-images).
 
-Reimporting the same tag removes tasks omitted from its new manifest. When
-switching tags, remove the retired image registration to remove its old tasks.
+## Further reading
 
-The repository's deployment helpers are documented under
-[Development](./development.md#slicer-cli-images).
+- [Slicer CLI Web Docker CLI specification](https://github.com/girder/slicer_cli_web#docker-clis)
+- [Slicer CLI module overview](https://slicer.readthedocs.io/en/latest/developer_guide/module_overview.html#command-line-interface-cli) and [Execution Model parameters](https://slicer.readthedocs.io/en/latest/user_guide/modules/executionmodeltour.html)
+- [Job processing design](./job-processing.md)
+- [DSA deployment](https://github.com/DigitalSlideArchive/digital_slide_archive/tree/master/devops/dsa)
