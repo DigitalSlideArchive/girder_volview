@@ -482,9 +482,13 @@ test.describe('Segment rulers and statistics reports', () => {
     const tasks = await segmentTaskOptions(context.request, { token: state.token, folderId });
     await selectTask(view, tasks.report.title, tasks.report.occurrence);
     const panel = view.locator('.jobs-module');
-    await expect(panel.locator('.file-widget').filter({ hasText: 'Active dataset' }))
+    await expect(panel.locator('.file-widget').filter({
+      has: view.getByText('Active dataset', { exact: true }),
+    }))
       .toContainText('Report CT');
-    await expect(panel.locator('.file-widget').filter({ hasText: 'Image layer 1' }))
+    await expect(panel.locator('.file-widget').filter({
+      has: view.getByText('Image layer 1 (optional)', { exact: true }),
+    }))
       .toContainText('Report PET');
 
     const submission = view.waitForRequest((request) =>
