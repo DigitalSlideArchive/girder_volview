@@ -86,7 +86,7 @@ intent from its XML declaration using the rules below.
 
 | Direction | Slicer XML                                                          | VolView behavior                                                                         |
 | --------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Input     | `<image channel="input">`; omitted `type` defaults to `scalar`      | Uses the selected base scalar image.                                                     |
+| Input     | `<image channel="input">`; omitted `type` defaults to `scalar`      | First image input uses the selected base image; subsequent image inputs use attached layers in order. |
 | Input     | `<image channel="input" type="label">`                              | Stages the active image's segmentation as one or more labelmap files.                    |
 | Input     | `<file channel="input" fileExtensions=".annotations.json">`         | Stages every finished ruler, rectangle, and polygon on the selected image as one JSON file. |
 | Output    | `<image channel="output">`; omitted `type` defaults to `scalar`     | `add-base-image`: loads the output as a new base image.                                  |
@@ -119,6 +119,48 @@ path passed to the CLI; Girder Worker uploads it to the job-owned folder.
 
 See [`ThresholdSegmentation.xml`](https://github.com/PaulHax/volview-radiology-cli/blob/main/ThresholdSegmentation/ThresholdSegmentation.xml)
 for a complete scalar-image-to-labelmap declaration.
+
+### Reading additional image layers
+
+Ordinary scalar image inputs bind in parameter order: the first gets the active
+base image, the second gets its first attached layer, the third gets its next
+layer, and so on. Labelmap and annotations inputs do not consume image slots.
+Only layers attached to the active base image qualify. The form shows the
+image name for each input.
+
+Use a long flag and an empty default without an index to make an additional
+image optional:
+
+```xml
+<image type="scalar" reference="_girder_id_">
+  <name>inputOverlay</name>
+  <channel>input</channel>
+  <longflag>inputOverlay</longflag>
+  <default></default>
+</image>
+```
+
+When no layer exists for an optional input, it is omitted. Missing required
+images block submission. Binding follows the attached layer order and does not
+infer modality or purpose from parameter names or filenames.
+
+Each input represents one complete volume. A multi-file DICOM series fills one
+image input with all of its original Girder files; its slices never become
+separate image inputs. Layers use their original source files, so the CLI must
+account for differences between image grids.
+
+An ordinary image input accepts one file. To receive a multi-file DICOM series,
+declare `reference="_girder_id_"` as above and have the CLI fetch and assemble
+the comma-separated Girder file IDs using `girderApiUrl` and `girderToken`.
+Alternatively, `multiple="true"` gives a series-capable CLI comma-separated
+local file paths through Slicer CLI Web. Neither declaration assembles the
+volume automatically. An image input with several files and neither
+declaration is rejected before a job is created.
+
+Segmentation and annotation outputs remain associated with the first, base
+image. Jobs record its parameter name so reopening a job preserves this
+association regardless of JSON parameter ordering. Routing scene outputs to a
+later image input is not supported.
 
 ### Reading a labelmap input
 

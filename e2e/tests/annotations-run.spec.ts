@@ -1,11 +1,16 @@
-import { readFile } from 'fs/promises';
+import { execFileSync } from 'child_process';
+import { mkdtemp, readFile, readdir, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { gunzipSync } from 'zlib';
 import { test, expect, Locator, Page } from '@playwright/test';
 import { expectJob } from '../helpers/limits';
 import { segmentTaskOptions, TaskOption } from '../helpers/jobs';
-import { setupFixture, Girder } from '../helpers/girder';
+import { setupFixture, plantCookie, requireHarnessState, Girder } from '../helpers/girder';
+import { apiUrl } from '../helpers/config';
 import { makeNrrd } from '../helpers/nrrd';
-import { gotoFolder, checkRowByItemId, openInVolView } from '../helpers/girder-ui';
+import { createFolderUnder, uploadFile } from '../helpers/provision';
+import { gotoFolder, checkRowByItemId, checkRowByTexts, openInVolView } from '../helpers/girder-ui';
 import {
   waitForVolViewReady,
   openModuleTab,
@@ -132,7 +137,61 @@ const segmentColumns = [
   'input_image_path', 'segment_name', 'labelmap_index', 'volume_mm3', 'warnings',
   'intensity_min', 'intensity_max', 'intensity_mean', 'intensity_median',
   'intensity_stddev', 'intensity_sum',
+  'pet_intensity_min', 'pet_intensity_max', 'pet_intensity_mean',
+  'pet_intensity_median', 'pet_intensity_stddev', 'pet_intensity_sum',
 ];
+
+const petColumns = segmentColumns.filter((column) => column.startsWith('pet_'));
+
+async function makeDicomReportFixture(directory: string): Promise<void> {
+  // Both grids cover [0, 15] mm on each axis. Every CT sample is 100 and
+  // every PET sample is 8 after applying the DICOM rescale tags.
+  execFileSync('uv', ['run', '--no-project', '--with', 'pydicom', 'python', '-c', `
+from pathlib import Path
+import sys
+from pydicom import Dataset, FileMetaDataset, dcmwrite
+from pydicom.uid import (
+    CTImageStorage, ExplicitVRLittleEndian,
+    PositronEmissionTomographyImageStorage, generate_uid,
+)
+
+study, frame = generate_uid(), generate_uid()
+for modality, count, spacing, raw, slope, intercept, sop in [
+    ('CT', 16, 1, 1124, 1, -1024, CTImageStorage),
+    ('PT', 6, 3, 32, 0.25, 0, PositronEmissionTomographyImageStorage),
+]:
+    series = generate_uid()
+    for z in range(count):
+        data = Dataset()
+        data.file_meta = FileMetaDataset()
+        data.file_meta.MediaStorageSOPClassUID = sop
+        data.file_meta.MediaStorageSOPInstanceUID = generate_uid()
+        data.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
+        data.SOPClassUID = sop
+        data.SOPInstanceUID = data.file_meta.MediaStorageSOPInstanceUID
+        data.StudyInstanceUID, data.SeriesInstanceUID = study, series
+        data.FrameOfReferenceUID = frame
+        data.PatientID, data.PatientName = 'REPORT-PET', 'Report^PET'
+        data.StudyDate, data.StudyTime = '20200101', '120000'
+        data.StudyDescription = 'Report CT and PET'
+        data.Modality = modality
+        data.SeriesDescription = 'Report CT' if modality == 'CT' else 'Report PET'
+        data.SeriesNumber, data.InstanceNumber = (1 if modality == 'CT' else 2), z + 1
+        data.Rows = data.Columns = count
+        data.PixelSpacing, data.SliceThickness = [spacing, spacing], spacing
+        data.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
+        data.ImagePositionPatient = [0, 0, z * spacing]
+        data.SamplesPerPixel, data.PhotometricInterpretation = 1, 'MONOCHROME2'
+        data.BitsAllocated = data.BitsStored = 16
+        data.HighBit, data.PixelRepresentation = 15, 1
+        data.RescaleSlope, data.RescaleIntercept = slope, intercept
+        if modality == 'PT':
+            data.Units = 'BQML'
+        data.PixelData = raw.to_bytes(2, 'little', signed=True) * count * count
+        destination = Path(sys.argv[1]) / f'{modality}-{count - z:02d}.dcm'
+        dcmwrite(destination, data, enforce_file_format=True)
+`, directory], { stdio: ['ignore', 'ignore', 'inherit'] });
+}
 
 function expectReportedRulers(
   row: Record<string, string>, lengths: number[], maxRulers = lengths.length
@@ -259,6 +318,7 @@ test.describe('Segment rulers and statistics reports', () => {
     expectSegmentStatistics(unmeasured[0], expectedStatistics);
     expect(unmeasured[0].segment_name).toBe(namesBefore[0]);
     expectReportedRulers(unmeasured[0], []);
+    expect(petColumns.map((column) => unmeasured[0][column])).toEqual(petColumns.map(() => ''));
     expect(Number(unmeasured[0].volume_mm3)).toBeGreaterThan(0);
     expect(unmeasured[0].warnings).toContain('No rulers are assigned');
     await expect(await rulerMeasurementRows(view)).toHaveCount(0);
@@ -363,5 +423,97 @@ test.describe('Segment rulers and statistics reports', () => {
     expect(await readRulerMeasurements(view)).toEqual(allRulers);
     expect(await readSegmentNames(view)).toEqual(namesWithOrphan);
     await shot(view, info, 'segment-manual-rulers-preserved');
+  });
+
+  test('reports CT and its PET layer when both inputs are multi-file DICOM series', async ({
+    page, context,
+  }, info) => {
+    const state = requireHarnessState();
+    await plantCookie(context, state.token);
+    const folderId = await createFolderUnder(
+      context.request, state.token, 'folder', state.runRootFolderId, 'jobs-report-dicom'
+    );
+    const dataFolderId = await createFolderUnder(
+      context.request, state.token, 'folder', folderId, 'dicom'
+    );
+    const directory = await mkdtemp(join(tmpdir(), 'segment-report-dicom-'));
+    try {
+      await makeDicomReportFixture(directory);
+      const headers = { 'Girder-Token': state.token };
+      const key = 'large_image.auto_set';
+      const setting = await context.request.get(apiUrl('/system/setting'), {
+        headers, params: { key },
+      });
+      expect(setting.ok(), 'could not read the DICOM auto-conversion setting').toBeTruthy();
+      const previous = await setting.json();
+      const setAutoSet = async (value: unknown) => {
+        const response = await context.request.put(apiUrl('/system/setting'), {
+          headers, params: { key, value: JSON.stringify(value) },
+        });
+        expect(response.ok(), 'could not update the DICOM auto-conversion setting').toBeTruthy();
+      };
+      try {
+        await setAutoSet(false);
+        for (const filename of (await readdir(directory)).sort()) {
+          await uploadFile(
+            context.request, state.token, dataFolderId, filename,
+            await readFile(join(directory, filename))
+          );
+        }
+      } finally {
+        await setAutoSet(previous);
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+    await uploadFile(
+      context.request, state.token, folderId, '.large_image_config.yaml',
+      await readFile(join(__dirname, '..', 'fixtures', 'dicom.large_image_config.yaml'))
+    );
+
+    await gotoFolder(page, folderId);
+    await checkRowByTexts(page, ['REPORT-PET', 'Report CT']);
+    await checkRowByTexts(page, ['REPORT-PET', 'Report PET']);
+    const { popup: view } = await openInVolView(page);
+    await waitForVolViewReady(view);
+    await paintStrokes(view);
+    const names = await readSegmentNames(view);
+    expect(names).toHaveLength(1);
+    const tasks = await segmentTaskOptions(context.request, { token: state.token, folderId });
+    await selectTask(view, tasks.report.title, tasks.report.occurrence);
+    const panel = view.locator('.jobs-module');
+    await expect(panel.locator('.file-widget').filter({ hasText: 'Active dataset' }))
+      .toContainText('Report CT');
+    await expect(panel.locator('.file-widget').filter({ hasText: 'Image layer 1' }))
+      .toContainText('Report PET');
+
+    const submission = view.waitForRequest((request) =>
+      request.method() === 'POST' &&
+      /\/volview_processing\/tasks\/[^/]+\/run$/.test(new URL(request.url()).pathname)
+    );
+    const job = await submitSegmentJob(view, tasks.report);
+    const { inputVolume, inputPETVolume } = (await submission).postDataJSON().values;
+    expect(inputVolume.uris).toHaveLength(16);
+    expect(inputPETVolume.uris).toHaveLength(6);
+    expect(inputPETVolume.uris.some((uri: string) => inputVolume.uris.includes(uri))).toBeFalsy();
+    const rows = await downloadReport(view, job);
+    expect(rows).toHaveLength(1);
+    const row = rows[0];
+    expect(row.segment_name).toBe(names[0]);
+    expectReportedRulers(row, []);
+    const voxelCount = Number(row.volume_mm3);
+    expect(voxelCount).toBeGreaterThan(0);
+    expect(row.warnings).not.toContain('outside');
+    for (const [prefix, value] of [['', 100], ['pet_', 8]] as const) {
+      expectSegmentStatistics(row, {
+        [`${prefix}intensity_min`]: value,
+        [`${prefix}intensity_max`]: value,
+        [`${prefix}intensity_mean`]: value,
+        [`${prefix}intensity_median`]: value,
+        [`${prefix}intensity_stddev`]: 0,
+        [`${prefix}intensity_sum`]: value * voxelCount,
+      });
+    }
+    await shot(view, info, 'segment-report-ct-pet-dicom');
   });
 });

@@ -18,7 +18,7 @@ stays green.
 """
 
 import json
-from conftest import mongo_reachable
+from conftest import _uploadFile, mongo_reachable
 import types
 
 import pytest
@@ -256,6 +256,72 @@ def test_run_task_under_item_launch_stamps_and_outputs_to_parent_folder(
     assert job["volviewSubmittedParameters"] == {
         "outputVolume": {"name": serverName}
     }
+
+
+@pytest.mark.plugin("volview")
+@pytest.mark.parametrize("pet_attributes,status", [
+    ('reference="_girder_id_"', b"200"), ("", b"400"),
+])
+def test_image_series_are_grouped_or_rejected_before_creating_a_job(
+    server, owner, parentFolder, runStub, monkeypatch, pet_attributes, status
+):
+    from girder_volview.utils import makeFileDownloadUrl
+
+    xml = """<executable><category>Radiology</category><title>Report</title>
+      <parameters>
+        <image reference="_girder_id_"><name>inputVolume</name>
+          <channel>input</channel><index>0</index></image>
+        <image {pet_attributes}><name>inputPETVolume</name><channel>input</channel>
+          <longflag>inputPETVolume</longflag><default></default></image>
+        <file fileExtensions=".csv"><name>outputReport</name>
+          <channel>output</channel><index>1</index></file>
+      </parameters></executable>""".format(pet_attributes=pet_attributes)
+    cli = types.SimpleNamespace(name="Report", xml=xml)
+    monkeypatch.setattr(
+        submit, "_findScopedCliItem",
+        lambda taskId, user: (cli, slicer_spec.parse_cli(xml)),
+    )
+    series = {
+        parameter: [
+            _uploadFile(parentFolder, owner, f"{modality}-{index}.dcm")[1]
+            for index in range(count)
+        ]
+        for parameter, modality, count in (
+            ("inputVolume", "ct", 3), ("inputPETVolume", "pet", 2),
+        )
+    }
+    values = {
+        parameter: {
+            "type": "image", "uris": [makeFileDownloadUrl(file) for file in files],
+        }
+        for parameter, files in series.items()
+    }
+
+    response = server.request(
+        path=RUN_PATH % parentFolder["_id"], method="POST", user=owner,
+        body=json.dumps({"values": values}, sort_keys=True),
+        type="application/json", isJson=True, exception=False,
+    )
+
+    assert response.output_status.startswith(status)
+    if status == b"400":
+        assert "inputPETVolume" in response.json["message"]
+        assert runStub == {}
+        history = _get(
+            server, "/folder/%s/volview_processing/jobs" % parentFolder["_id"], owner
+        ).json
+        assert history["jobs"] == []
+        return
+    for parameter, files in series.items():
+        assert runStub["params"][parameter] == ",".join(
+            str(file["_id"]) for file in files
+        )
+    detail = _get(
+        server, "/volview_processing/jobs/%s/detail" % response.json["jobId"], owner
+    ).json
+    assert detail["referenceImageParameter"] == "inputVolume"
+    for parameter in series:
+        assert detail["parameters"][parameter] == values[parameter]
 
 
 @pytest.mark.plugin("volview")
