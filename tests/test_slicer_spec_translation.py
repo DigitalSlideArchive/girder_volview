@@ -149,6 +149,27 @@ def test_input_image_label_type_accepts_labelmap():
     assert "multiple" not in source_ref
 
 
+def test_optional_second_image_preserves_generic_image_binding_order():
+    xml = """<executable><title>Segment report</title><parameters>
+      <image reference="_girder_id_">
+        <name>inputVolume</name><channel>input</channel><index>0</index>
+      </image>
+      <image type="scalar" reference="_girder_id_">
+        <name>inputOverlay</name><channel>input</channel>
+        <longflag>inputOverlay</longflag><default></default>
+      </image>
+    </parameters></executable>"""
+    spec = translate_slicer_xml(xml, "ExportSegmentStatistics")
+    _task_spec_validator().validate(spec)
+    image, overlay = spec["parameters"]
+    assert image["accepts"] == ["image"]
+    assert image["required"] is True
+    assert overlay["accepts"] == ["image"]
+    assert not overlay.get("required")
+    assert overlay["id"] == "inputOverlay"
+    assert image["order"] < overlay["order"]
+
+
 def test_multiple_labelmap_input_preserves_arity():
     xml = _LABELMAP_INPUT_XML.replace(
         '<image type="label">', '<image type="label" multiple="true">'

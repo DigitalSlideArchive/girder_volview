@@ -339,6 +339,39 @@ def test_validate_rejects_input_without_uris_list():
     _assert_value_rejected({"inputVolume": {"uris": [1, 2]}}, "inputVolume")
 
 
+def test_validate_rejects_multifile_image_without_file_list_declaration():
+    _assert_value_rejected(
+        {"inputVolume": {"type": "image", "uris": ["/ct/1.dcm", "/ct/2.dcm"]}},
+        "inputVolume", "accepts one file", 'reference="_girder_id_"',
+        'multiple="true"',
+    )
+
+
+@pytest.mark.parametrize(
+    "attributes",
+    ('reference="_girder_id_"', 'multiple="true"', 'multiple="True"', 'multiple="1"'),
+)
+def test_validate_accepts_multifile_image_with_file_list_declaration(attributes):
+    xml = _VALUES_CLI_XML.replace("<image>", "<image %s>" % attributes, 1)
+    declared = slicer_spec.declared_params(xml)
+
+    submit._validateDeclaredSubmitValues(
+        {"inputVolume": {"type": "image", "uris": ["/ct/1.dcm", "/ct/2.dcm"]}},
+        declared,
+    )
+
+
+def test_validate_preserves_multifile_file_input_handling():
+    declared = slicer_spec.declared_params(
+        "<executable><parameters><file><name>inputFiles</name>"
+        "<channel>input</channel></file></parameters></executable>"
+    )
+
+    submit._validateDeclaredSubmitValues(
+        {"inputFiles": {"uris": ["/first.json", "/second.json"]}}, declared,
+    )
+
+
 def test_validate_rejects_output_smuggling_uris():
     # An output object carrying ``uris`` would shape-match the translator's
     # INPUT branch, losing its output-folder param and dying as an internal

@@ -174,6 +174,7 @@ def _parse_param(param_el, section):
         "section": section,
         "required": required,
         "imageType": param_el.get("type"),  # input <image> type -> accepts
+        "reference": param_el.get("reference"),
         "multiple": param_el.get("multiple") in ("true", "True", "1"),
         "fileExtensions": param_el.get("fileExtensions"),
         "values": values,
@@ -296,7 +297,8 @@ def declared_params(xml_text):
     Each entry carries what submit-time value validation needs: ``tag`` (the raw
     Slicer element), ``widget`` (its ``_TYPE_MAP`` type), ``channel``,
     ``constraints`` (``{min,max,step}``), ``options`` (converted enumeration
-    members, or ``None``) and ``required`` (the param is indexed). Tolerant: an
+    members, or ``None``), ``required`` (the param is indexed), and
+    ``reference``/``multiple`` (image input file-list handling). Tolerant: an
     unparseable document declares nothing.
     """
     try:
@@ -320,6 +322,8 @@ def declared_params(xml_text):
                 # Indexed (positional) params are required on the CLI command
                 # line; the submit boundary enforces presence for inputs.
                 "required": parsed["required"],
+                "reference": parsed["reference"],
+                "multiple": parsed["multiple"],
             }
     return params
 

@@ -519,6 +519,14 @@ def _submitValueProblem(decl, value):
         uris = value.get("uris") if isinstance(value, dict) else None
         if not isinstance(uris, list) or not all(isinstance(u, str) for u in uris):
             return "expected an input object with a uris list"
+        if (
+            decl["tag"] == "image" and len(uris) > 1
+            and decl["reference"] != "_girder_id_" and not decl["multiple"]
+        ):
+            return (
+                "this image input accepts one file; multi-file volumes require "
+                'reference="_girder_id_" or multiple="true" and CLI file-list handling'
+            )
         return None
     return _scalarProblem(decl, value)
 

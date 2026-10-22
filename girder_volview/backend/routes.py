@@ -76,6 +76,7 @@ JOB_OUTPUT_FOLDER_INDEX = "volview_output_folder"
 JOB_HISTORY_INDEX_THREAD = "volview-job-history-indexes"
 _SUBMISSION_ID_FIELD = "volviewSubmissionId"
 _SUBMITTED_PARAMETERS_FIELD = "volviewSubmittedParameters"
+_REFERENCE_IMAGE_PARAMETER_FIELD = "volviewReferenceImageParameter"
 
 
 def ensureJobHistoryIndexes(jobModel=None):
@@ -618,7 +619,8 @@ def _genDockerJob(cliItem, params, user, initialJobFields):
 
 
 def _prepareSubmissionFields(
-    submissionId, folder, taskId, values, outputSpecs, transientItemIds, outputFolder
+    submissionId, folder, taskId, values, outputSpecs, transientItemIds, outputFolder,
+    parameters,
 ):
     """Build every job association field before task publication.
 
@@ -638,6 +640,14 @@ def _prepareSubmissionFields(
         outputs._OUTPUTS_FIELD: {},
         _SUBMITTED_PARAMETERS_FIELD: copy.deepcopy(values),
     }
+    referenceImage = next((
+        parameter["id"] for parameter in parameters
+        if parameter["id"] and parameter["tag"] == "image"
+        and parameter["channel"] == "input"
+        and parameter["imageType"] in (None, "scalar")
+    ), None)
+    if referenceImage:
+        fields[_REFERENCE_IMAGE_PARAMETER_FIELD] = referenceImage
     if transientItemIds:
         fields[TRANSIENT_STAGED_META_KEY] = list(transientItemIds)
     return fields
@@ -742,6 +752,7 @@ def runTask(self, folder, taskId, body):
             outputSpecs,
             transientItemIds,
             outputFolder,
+            parsedCli["params"],
         )
         job_doc = _genDockerJob(cliItem, params, user, initialFields)
     except Exception:
@@ -834,11 +845,15 @@ def getJobHistoryDetail(self, jobId):
     parameters = job.get(_SUBMITTED_PARAMETERS_FIELD) or {}
     if not isinstance(parameters, dict):
         parameters = {}
-    return {
+    detail = {
         "jobId": str(job["_id"]),
         "log": [str(line) for line in log],
         "parameters": parameters,
     }
+    referenceImage = job.get(_REFERENCE_IMAGE_PARAMETER_FIELD)
+    if isinstance(referenceImage, str) and referenceImage:
+        detail["referenceImageParameter"] = referenceImage
+    return detail
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_WRITE)

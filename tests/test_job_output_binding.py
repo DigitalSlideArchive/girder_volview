@@ -389,6 +389,7 @@ def test_prepare_submission_fields_records_specs_folder_and_empty_map():
         slicer_spec.parse_cli(xml)["outputs"],
         [],
         outputFolder,
+        slicer_spec.parse_cli(xml)["params"],
     )
     assert fields[_OUTPUTS] == {}
     assert fields[_SPECS] == [
@@ -400,6 +401,31 @@ def test_prepare_submission_fields_records_specs_folder_and_empty_map():
     assert fields[inputs._LAUNCH_FOLDER_FIELD] == str(folder["_id"])
     assert fields["volviewSubmittedParameters"] == {"threshold": 3}
     assert fields["volviewSubmissionId"] == "sub-1"
+
+
+def test_submission_reference_image_uses_declared_order_despite_sorted_json_keys():
+    xml = """<executable><parameters>
+      <image type="label"><name>inputLabelmap</name><channel>input</channel></image>
+      <image><name>inputVolume</name><channel>input</channel><index>0</index></image>
+      <image type="scalar"><name>inputPETVolume</name><channel>input</channel>
+        <longflag>inputPETVolume</longflag><default></default></image>
+    </parameters></executable>"""
+    values = json.loads(json.dumps({
+        "inputVolume": {"type": "image", "uris": ["/ct/1.dcm", "/ct/2.dcm"]},
+        "inputPETVolume": {"type": "image", "uris": ["/pet/1.dcm", "/pet/2.dcm"]},
+    }, sort_keys=True))
+    parsed = slicer_spec.parse_cli(xml)
+
+    fields = routes._prepareSubmissionFields(
+        "sub-1", {"_id": ObjectId()}, "report", values, parsed["outputs"], [],
+        {"_id": ObjectId()}, parsed["params"],
+    )
+
+    persisted = json.loads(json.dumps(fields, sort_keys=True))
+    assert persisted["volviewReferenceImageParameter"] == "inputVolume"
+    assert persisted["volviewSubmittedParameters"]["inputVolume"]["uris"] == [
+        "/ct/1.dcm", "/ct/2.dcm",
+    ]
 
 
 def test_status_success_with_unrecorded_declared_output_is_incomplete():

@@ -386,7 +386,10 @@ def test_job_history_batch_preserves_readable_and_missing_counts(
 
 
 @pytest.mark.plugin("volview")
-def test_job_history_detail_reads_logs_and_parameters_on_demand(server, owner, folderA):
+@pytest.mark.parametrize("reference_image", [None, "inputVolume"])
+def test_job_history_detail_reads_logs_and_parameters_on_demand(
+    server, owner, folderA, reference_image
+):
     """Sensitive/heavy fields require a job-addressed read."""
     job = _makeStampedJob(owner, folderA)
     from girder_jobs.models.job import Job
@@ -397,6 +400,7 @@ def test_job_history_detail_reads_logs_and_parameters_on_demand(server, owner, f
             "$set": {
                 "log": ["detail-only"],
                 "volviewSubmittedParameters": {"threshold": 42},
+                "volviewReferenceImageParameter": reference_image,
                 "kwargs": {"girderToken": "must-not-leak"},
             }
         },
@@ -406,11 +410,14 @@ def test_job_history_detail_reads_logs_and_parameters_on_demand(server, owner, f
         "/volview_processing/jobs/%s/detail" % job["_id"],
         owner,
     )
-    assert response.json == {
+    expected = {
         "jobId": str(job["_id"]),
         "log": ["detail-only"],
         "parameters": {"threshold": 42},
     }
+    if reference_image:
+        expected["referenceImageParameter"] = reference_image
+    assert response.json == expected
 
 
 @pytest.mark.plugin("volview")
