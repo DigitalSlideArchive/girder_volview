@@ -1,13 +1,13 @@
 # Building and deploying custom Slicer CLIs
 
-[Slicer CLI Web](https://github.com/girder/slicer_cli_web) Docker images add
-analysis tasks to Girder VolView. VolView builds Jobs forms from CLI XML,
-validates submissions, manages output locations, and loads results into the scene.
+Use [Slicer CLI Web](https://github.com/girder/slicer_cli_web) Docker images to
+add analysis tasks to Girder VolView. This guide covers VolView-specific
+authoring and DSA deployment.
 
 The [VolView Radiology CLI](https://github.com/PaulHax/volview-radiology-cli)
-provides rulers and statistics; its `volview-cli-examples` image contains
-filtering and segmentation examples. You can also use your own image and
-implementation language.
+provides segment rulers and statistics. Its separate `volview-cli-examples`
+image contains filtering and segmentation examples. Administrators can also
+build their own CLI images; this repository is not a required library or base image.
 
 ## Add a task
 
