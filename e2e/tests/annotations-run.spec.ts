@@ -482,14 +482,16 @@ test.describe('Segment rulers and statistics reports', () => {
     const tasks = await segmentTaskOptions(context.request, { token: state.token, folderId });
     await selectTask(view, tasks.report.title, tasks.report.occurrence);
     const panel = view.locator('.jobs-module');
-    await expect(panel.locator('.file-widget').filter({
-      has: view.getByText('Active dataset', { exact: true }),
-    }))
-      .toContainText('Report CT');
-    await expect(panel.locator('.file-widget').filter({
-      has: view.getByText('Image layer 1 (optional)', { exact: true }),
-    }))
-      .toContainText('Report PET');
+    const ctInput = panel.locator('.file-widget').filter({
+      has: view.getByText('Input Volume', { exact: true }),
+    });
+    await expect(ctInput).toContainText('Active dataset');
+    await expect(ctInput).toContainText('Report CT');
+    const petInput = panel.locator('.file-widget').filter({
+      has: view.getByText('PET Volume (optional)', { exact: true }),
+    });
+    await expect(petInput).toContainText('Image layer 1');
+    await expect(petInput).toContainText('Report PET');
 
     const submission = view.waitForRequest((request) =>
       request.method() === 'POST' &&
