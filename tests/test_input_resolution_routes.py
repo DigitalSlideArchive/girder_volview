@@ -33,7 +33,8 @@ _CLI_XML = (
     '<?xml version="1.0"?>'
     "<executable><category>Radiology</category><title>Median</title>"
     "<parameters>"
-    "<image><name>inputVolume</name><channel>input</channel></image>"
+    '<image reference="_girder_id_">'
+    "<name>inputVolume</name><channel>input</channel></image>"
     '<image type="label"><name>outputVolume</name><channel>output</channel></image>'
     "</parameters></executable>"
 )
