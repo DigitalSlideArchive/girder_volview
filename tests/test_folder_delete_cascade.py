@@ -700,3 +700,34 @@ def test_live_job_blocks_resource_rest_delete(server, owner, launchFolder):
     assert not _folderExists(colOutput["_id"])
     assert not _jobExists(job["_id"])
     assert not _jobExists(colJob["_id"])
+
+
+@pytest.mark.plugin("volview")
+def test_rest_delete_guards_allow_non_admin_users(server, admin, fsAssetstore):
+    # The guards are rest.*.before handlers; without an access decorator girder
+    # requires site admin for them, which 403'd every non-admin delete. The
+    # member owns everything deleted here so only the guards can refuse.
+    from girder.models.folder import Folder
+    from girder.models.item import Item
+
+    member = makeUser("member")
+    assert not member["admin"]
+    folder = Folder().createFolder(
+        member, "own", parentType="user", creator=member, public=False
+    )
+    items = [Item().createItem("item%d" % idx, member, folder) for idx in range(2)]
+
+    resp = server.request(
+        path="/resource",
+        method="DELETE",
+        user=member,
+        params={"resources": json.dumps({"item": [str(i["_id"]) for i in items]})},
+        isJson=False,
+        exception=True,
+    )
+    assert resp.output_status.startswith(b"200")
+    assert not any(_itemExists(i["_id"]) for i in items)
+
+    resp = _restDeleteFolder(server, folder["_id"], member)
+    assert resp.output_status.startswith(b"200")
+    assert not _folderExists(folder["_id"])

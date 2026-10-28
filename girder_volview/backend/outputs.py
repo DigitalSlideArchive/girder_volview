@@ -18,6 +18,7 @@ removal and retains the job record as the discoverable owner of whatever is left
 
 import json
 
+from girder.api import access
 from girder.exceptions import RestException
 from girder.models.folder import Folder
 from girder.models.item import Item
@@ -340,6 +341,7 @@ def _refuseIfLiveJobUnder(folderIds=(), baseParents=()):
         )
 
 
+@access.user
 def _refuseLiveJobFolderRestDelete(event):
     """``rest.delete.folder/:id.before`` guard: 409 a live job's folder delete.
 
@@ -357,6 +359,7 @@ def _refuseLiveJobFolderRestDelete(event):
         _refuseIfLiveJobUnder(folderIds=[folderId])
 
 
+@access.user
 def _refuseLiveJobCollectionRestDelete(event):
     """``rest.delete.collection/:id.before``: the same preflight for collection
     deletion, which recursively removes every folder inside without ever
@@ -367,6 +370,7 @@ def _refuseLiveJobCollectionRestDelete(event):
         _refuseIfLiveJobUnder(baseParents=[("collection", collectionId)])
 
 
+@access.user
 def _refuseLiveJobUserRestDelete(event):
     """``rest.delete.user/:id.before``: the same preflight for user deletion
     (removes the user's whole folder tree)."""
@@ -376,6 +380,7 @@ def _refuseLiveJobUserRestDelete(event):
         _refuseIfLiveJobUnder(baseParents=[("user", userId)])
 
 
+@access.user
 def _refuseLiveJobResourceRestDelete(event):
     """``rest.delete.resource.before``: the same preflight for the batch
     ``DELETE /resource`` route (arbitrary folder/collection/user ids).
