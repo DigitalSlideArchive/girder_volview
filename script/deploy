@@ -233,12 +233,16 @@ if [ "$MODE" = pack ]; then
     # Install the tarball with production dependencies and the published files allowlist.
     STAGE=$(mktemp -d)
     CLEANUP_STAGE=$STAGE
-    TARBALL=$( cd "$VOLVIEW_WT" && npm pack --pack-destination "$STAGE" 2>/dev/null )
-    [ -n "$TARBALL" ] && [ -f "$STAGE/$TARBALL" ] || { echo "    !! npm pack produced no tarball" >&2; exit 1; }
+    ( cd "$VOLVIEW_WT" && npm pack --pack-destination "$STAGE" )
+    # Lifecycle hooks can write to stdout; the empty stage must hold one tarball.
+    TARBALLS=("$STAGE"/*.tgz)
+    [ "${#TARBALLS[@]}" -eq 1 ] && [ -f "${TARBALLS[0]}" ] || {
+        echo "    !! npm pack did not produce exactly one tarball" >&2; exit 1; }
+    TARBALL=${TARBALLS[0]}
     mkdir "$STAGE/consumer"
     ( cd "$STAGE/consumer" \
-        && printf '{"name":"c","version":"1.0.0","private":true,"dependencies":{"volview":"file:%s"}}\n' "$STAGE/$TARBALL" > package.json \
-        && npm install --no-audit --no-fund >/dev/null 2>&1 )
+        && printf '{"name":"c","version":"1.0.0","private":true,"dependencies":{"volview":"file:%s"}}\n' "$TARBALL" > package.json \
+        && npm install --no-audit --no-fund >/dev/null )
     # The pre-built dist is self-contained; additional runtime dependencies are leaks.
     LEAKED=$( cd "$STAGE/consumer/node_modules" && ls -1 | grep -v '^\.' | grep -vx 'volview' || true )
     [ -z "$LEAKED" ] || { echo "    !! volview leaked runtime deps into the client build:" $LEAKED >&2; exit 1; }

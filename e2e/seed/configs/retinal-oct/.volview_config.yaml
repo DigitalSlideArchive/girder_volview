@@ -1,0 +1,3 @@
+layouts:
+  __all__: true
+  Coronal and En face: [[coronal], [enface]]
