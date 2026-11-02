@@ -35,7 +35,7 @@ For **Open Checked in VolView**, select `prostate/dicom` with its segmentation,
 or select both files in `fetus`. The fetal segmentation is generated test data,
 not a clinical annotation.
 
-The retinal OCT folder opens with a Coronal view above an En face projection.
+The retinal OCT folder opens with an Axial view above an En face projection.
 Its two NRRDs load together, automatically attaching the eight named tissue
 layers from the companion `.seg.nrrd`. Its folder config replaces the default
 layouts.

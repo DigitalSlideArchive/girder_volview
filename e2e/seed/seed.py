@@ -80,7 +80,7 @@ EXPECTED_ACTIVE_LAYOUT = {
     "patients": "Axial Coronal Sagittal",
     "prostate": "Axial Coronal Sagittal",
     "ultrasound": "1 Cine (single pane)",
-    "retinal-oct": "Coronal and En face",
+    "retinal-oct": "Axial and En face",
 }
 
 # The collection name carries the ingestion path: everything in these three
@@ -1258,7 +1258,7 @@ def verify_retinal_example(gc, folder: dict) -> None:
     if served.get("layouts") != expected_layouts:
         die(
             "Retinal folder did not replace the default layouts "
-            "with Coronal and En face"
+            "with Axial and En face"
         )
     launch = gc.get(
         f"folder/{folder['_id']}/volview",
