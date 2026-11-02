@@ -170,6 +170,7 @@ fi
 run_capture() {
     echo "compat: ensuring the small-tier DICOM cache (fetch --small is idempotent)..."
     uv run "$E2E/seed/seed.py" fetch --small
+    uv run "$E2E/seed/seed.py" fetch-retinal
 
     if [[ $SKIP_DEPLOY -eq 0 ]]; then
         echo "compat: deploying the baseline..."

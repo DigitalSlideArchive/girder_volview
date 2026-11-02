@@ -1,0 +1,21 @@
+{
+  "dataset": "JHU IACL retinal OCT, healthy control hc01, right eye",
+  "citation": "Y. He, A. Carass, S. D. Solomon, S. Saidha, P. A. Calabresi, and J. L. Prince. Retinal layer parcellation of optical coherence tomography images: Data resource for Multiple Sclerosis and Healthy Controls. Data in Brief 22 (2019), 601-604. DOI: 10.1016/j.dib.2018.12.073.",
+  "dataset_url": "https://iacl.ece.jhu.edu/index.php/OCT_Data",
+  "provenance_url": "https://github.com/Kitware/VolView/blob/a08aabf4891167ec00cae556e1cbb2552a4e0db2/scripts/samples/jhu-oct-provenance.json",
+  "url": "https://data.kitware.com/api/v1/file/6ae786c91747c43eb290172f/download",
+  "name": "jhu-retinal-layers.zip",
+  "sha512": "396715df66104a57d27c9f2cf1c7bb6d799b46b75c5c461122bd58598ac85a754ec6479de5141247804680aaec5efbce567ac2efd3db941f7894ed1ac915dc69",
+  "files": [
+    {
+      "name": "jhu-hc01.nrrd",
+      "bytes": 8320884,
+      "sha256": "6f4fdf19c612b52f604f2468361b5fd4249d36dbed0657db97722bbf716dd729"
+    },
+    {
+      "name": "jhu-hc01.seg.nrrd",
+      "bytes": 98980,
+      "sha256": "22de13e912b3b3dd47cad11bfef76efdc4b74749e45f47e99846e2e11bc74837"
+    }
+  ]
+}

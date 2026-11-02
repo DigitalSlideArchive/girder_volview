@@ -11,7 +11,7 @@
 # ]
 # ///
 """
-Seed a local DSA/Girder with public CC-BY DICOM via a simulated S3 import.
+Seed a local DSA/Girder with public imaging examples through S3 imports.
 The collections it creates are named for that ingestion path; the browser e2e
 fixtures are uploaded directly and live in the running user's own folders.
 
@@ -24,9 +24,10 @@ Pipeline (each step is idempotent and re-runnable):
     uv run seed.py reseed     # delete + recreate collections from staged data
     uv run seed.py verify     # assert the whole thing actually works
     uv run seed.py reset      # tear down the Girder side
+    uv run seed.py seed-retinal  # add only the retinal OCT example
 
-Data is NOT vendored: `select` pins SeriesInstanceUIDs, `fetch` downloads them
-from IDC's public bucket. See ATTRIBUTION.md for the terms that ride along.
+Data is not vendored: IDC series and developer examples are pinned by series
+identifiers or checksums. See ATTRIBUTION.md for their sources and terms.
 """
 
 from __future__ import annotations
@@ -45,6 +46,7 @@ DATA_DIR = HERE / "data"
 DOWNLOAD_DIR = DATA_DIR / "downloads"
 DEVELOPER_DATA_DIR = DATA_DIR / "developer"
 MANIFEST_PATH = HERE / "manifest" / "series.json"
+RETINAL_MANIFEST_PATH = HERE / "manifest" / "retinal-oct.json"
 STAGED_PATH = DATA_DIR / ".staged.json"
 CONFIGS_DIR = HERE / "configs"
 ATTRIBUTION_PATH = HERE / "ATTRIBUTION.md"
@@ -67,8 +69,8 @@ VOLVIEW_CONFIG_NAME = ".volview_config.yaml"
 # VolView validates its config with zod and silently drops values that don't
 # match, so an invalid-but-plausible entry looks like it applied and does
 # nothing. Mirrored from src/io/import/configJson.ts and utils/layoutParsing.ts.
-VALID_DISABLED_VIEW_TYPES = {"2D", "3D", "Oblique"}
-VALID_LAYOUT_VIEWS = {"axial", "coronal", "sagittal", "volume", "oblique"}
+VALID_DISABLED_VIEW_TYPES = {"2D", "3D", "Oblique", "EnFace"}
+VALID_LAYOUT_VIEWS = {"axial", "coronal", "sagittal", "volume", "oblique", "enface"}
 
 # VolView opens whichever layout comes first in the map it receives, and Girder
 # serializes config keys alphabetically -- so the layout that opens is decided by
@@ -78,6 +80,7 @@ EXPECTED_ACTIVE_LAYOUT = {
     "patients": "Axial Coronal Sagittal",
     "prostate": "Axial Coronal Sagittal",
     "ultrasound": "1 Cine (single pane)",
+    "retinal-oct": "Axial and En face",
 }
 
 # The collection name carries the ingestion path: everything in these three
@@ -87,6 +90,7 @@ EXPECTED_ACTIVE_LAYOUT = {
 UNFILTERED_COLLECTION_NAME = "Trial (MinIO Import)"
 FILTERED_COLLECTION_NAME = "Trial (Large Image Filter, MinIO Import)"
 DEVELOPER_COLLECTION_NAME = "Developer (MinIO Import)"
+RETINAL_FOLDER_NAME = "retinal-oct"
 COLLECTION_NAMES = (
     UNFILTERED_COLLECTION_NAME,
     FILTERED_COLLECTION_NAME,
@@ -446,6 +450,36 @@ def download_verified(source: dict, force: bool = False) -> Path:
     return destination
 
 
+def prepare_retinal_example(force: bool = False) -> dict[str, Path]:
+    """Extract the pinned image and companion segmentation without conversion."""
+    manifest = json.loads(RETINAL_MANIFEST_PATH.read_text())
+    archive_path = download_verified(manifest, force)
+    with zipfile.ZipFile(archive_path) as archive:
+        expected_names = {entry["name"] for entry in manifest["files"]}
+        if set(archive.namelist()) != expected_names:
+            die(f"Unexpected members in {archive_path.name}")
+        contents = {}
+        for entry in manifest["files"]:
+            data = archive.read(entry["name"])
+            if (
+                len(data) != entry["bytes"]
+                or hashlib.sha256(data).hexdigest() != entry["sha256"]
+            ):
+                die(f"Checksum or size mismatch for {entry['name']}")
+            contents[entry["name"]] = data
+
+    directory = DEVELOPER_DATA_DIR / RETINAL_FOLDER_NAME
+    directory.mkdir(parents=True, exist_ok=True)
+    for name, data in contents.items():
+        (directory / name).write_bytes(data)
+    log(f"  retinal OCT image + segmentation: {', '.join(contents)}")
+    return {name: directory / name for name in contents}
+
+
+def cmd_fetch_retinal(args) -> None:
+    prepare_retinal_example(args.force)
+
+
 def add_segmentation_metadata(image, segments: list[tuple[int, str, str]]) -> None:
     """Add the core 3D Slicer segmentation fields understood by VolView."""
     fields = {
@@ -467,7 +501,7 @@ def add_segmentation_metadata(image, segments: list[tuple[int, str, str]]) -> No
 
 
 def prepare_developer_examples(force: bool = False) -> None:
-    """Fetch VolView's prostate/fetus examples and create associated NRRDs."""
+    """Fetch VolView's developer examples and prepare their companion NRRDs."""
     import SimpleITK as sitk
 
     log("\nFetching developer examples...")
@@ -524,6 +558,7 @@ def prepare_developer_examples(force: bool = False) -> None:
     log(f"  prostate: {len(list(prostate_dicom_dir.glob('*.dcm')))} DICOM slices")
     log(f"  prostate segmentation: {prostate_seg.name}")
     log(f"  fetus image + segmentation: {fetus_image.name}, {fetus_seg.name}")
+    prepare_retinal_example(force)
 
 
 def cmd_fetch(args) -> None:
@@ -668,6 +703,25 @@ downloaded from Kitware's public VolView example-data folder:
 The fetal segmentation is generated locally with Otsu thresholding; it is not
 a clinical annotation.
 
+## Retinal OCT example
+
+`seed.py seed-retinal` adds the image and companion segmentation from
+[VolView's retinal layer sample](https://data.kitware.com/api/v1/file/6ae786c91747c43eb290172f/download).
+The archive is pinned by SHA-512 in `manifest/retinal-oct.json`; its two NRRDs
+are also checked against the published SHA-256 values before staging.
+
+The sample is healthy control hc01 from the
+[JHU IACL OCT dataset](https://iacl.ece.jhu.edu/index.php/OCT_Data). Please cite
+He, Y., Carass, A., Solomon, S. D., Saidha, S., Calabresi, P. A., and Prince,
+J. L. (2019). *Retinal layer parcellation of optical coherence tomography
+images: Data resource for Multiple Sclerosis and Healthy Controls.*
+Data in Brief, 22, 601-604. https://doi.org/10.1016/j.dib.2018.12.073.
+
+[Conversion, source checksums, redistribution notes, and limitations](https://github.com/Kitware/VolView/blob/a08aabf4891167ec00cae556e1cbb2552a4e0db2/scripts/samples/jhu-oct-provenance.json)
+are recorded with the published sample. The eight tissue labels are derived
+from manually delineated boundaries. The converted volumes use local scan
+coordinates; patient anatomical orientation is not inferred.
+
 ## IDC
 
 Fedorov, A., Longabaugh, W. J. R., Pot, D., et al. *National Cancer Institute
@@ -677,7 +731,7 @@ https://doi.org/10.1148/rg.230180
 
 ## Terms that travel with this data
 
-Per the TCIA Data Usage Policy
+For the TCIA datasets above, the TCIA Data Usage Policy
 (https://www.cancerimagingarchive.net/data-usage-policies-and-restrictions/):
 
 - Attribute each individual dataset used, and link to that policy.
@@ -793,6 +847,14 @@ def build_staging_plan(manifest: dict, max_slices: int) -> dict:
         ),
         "developer/fetus/fetus.seg.nrrd": (
             DEVELOPER_DATA_DIR / "fetus" / "fetus.seg.nrrd",
+            "application/octet-stream",
+        ),
+        "developer/retinal-oct/jhu-hc01.nrrd": (
+            DEVELOPER_DATA_DIR / RETINAL_FOLDER_NAME / "jhu-hc01.nrrd",
+            "application/octet-stream",
+        ),
+        "developer/retinal-oct/jhu-hc01.seg.nrrd": (
+            DEVELOPER_DATA_DIR / RETINAL_FOLDER_NAME / "jhu-hc01.seg.nrrd",
             "application/octet-stream",
         ),
     }
@@ -1075,7 +1137,7 @@ def cmd_seed(args) -> None:
         log(f"Collection {DEVELOPER_COLLECTION_NAME!r}: {developer['_id']}")
         developer_roots = {
             name: ensure_folder(gc, developer["_id"], "collection", name)["_id"]
-            for name in ("prostate", "fetus", "ultrasound")
+            for name in ("prostate", "fetus", "ultrasound", RETINAL_FOLDER_NAME)
         }
         image_regex = r".*\.(dcm|mha|nrrd)$"
         import_prefix(
@@ -1095,6 +1157,13 @@ def cmd_seed(args) -> None:
         import_prefix(
             gc,
             assetstore["_id"],
+            f"developer/{RETINAL_FOLDER_NAME}/",
+            developer_roots[RETINAL_FOLDER_NAME],
+            image_regex,
+        )
+        import_prefix(
+            gc,
+            assetstore["_id"],
             "ultrasound/",
             developer_roots["ultrasound"],
         )
@@ -1102,6 +1171,15 @@ def cmd_seed(args) -> None:
         for name in ("prostate", "fetus"):
             upload_config(gc, developer_roots[name], developer_config)
             log(f"  {DEVELOPER_COLLECTION_NAME}/{name}/{VOLVIEW_CONFIG_NAME}")
+        upload_config(
+            gc,
+            developer_roots[RETINAL_FOLDER_NAME],
+            CONFIGS_DIR / RETINAL_FOLDER_NAME / VOLVIEW_CONFIG_NAME,
+        )
+        log(
+            f"  {DEVELOPER_COLLECTION_NAME}/"
+            f"{RETINAL_FOLDER_NAME}/{VOLVIEW_CONFIG_NAME}"
+        )
         ultrasound_config = CONFIGS_DIR / "ultrasound" / VOLVIEW_CONFIG_NAME
         upload_config(gc, developer_roots["ultrasound"], ultrasound_config)
         log(f"  {DEVELOPER_COLLECTION_NAME}/ultrasound/{VOLVIEW_CONFIG_NAME}")
@@ -1112,6 +1190,109 @@ def cmd_seed(args) -> None:
     log("\nSeeded collections:")
     for name, collection in collections.items():
         log(f"  {name}: {GIRDER_URL}/#collection/{collection['_id']}")
+
+
+def cmd_seed_retinal(args) -> None:
+    """Add only the retinal pair through the developer collection's S3 import."""
+    if not minio_up():
+        die(f"MinIO not reachable at {MINIO_HOST_URL}. Is the dsa-plus stack up?")
+    gc = girder_client()
+    files = prepare_retinal_example(args.force)
+    s3 = s3_client()
+    if BUCKET not in {entry["Name"] for entry in s3.list_buckets().get("Buckets", [])}:
+        s3.create_bucket(Bucket=BUCKET)
+    prefix = f"developer/{RETINAL_FOLDER_NAME}/"
+    for name, path in files.items():
+        s3.upload_file(
+            str(path),
+            BUCKET,
+            prefix + name,
+            ExtraArgs={"ContentType": "application/octet-stream"},
+        )
+
+    assetstore = ensure_assetstore(gc)
+    developer = ensure_collection(gc, DEVELOPER_COLLECTION_NAME)
+    folder = ensure_folder(gc, developer["_id"], "collection", RETINAL_FOLDER_NAME)
+    previous_auto_set = get_setting(gc, "large_image.auto_set")
+    try:
+        set_setting(gc, "large_image.auto_set", False)
+        import_prefix(gc, assetstore["_id"], prefix, folder["_id"], r".*\.nrrd$")
+        upload_config(
+            gc,
+            folder["_id"],
+            CONFIGS_DIR / RETINAL_FOLDER_NAME / VOLVIEW_CONFIG_NAME,
+        )
+    finally:
+        set_setting(gc, "large_image.auto_set", previous_auto_set)
+    verify_retinal_example(gc, folder)
+    log(
+        f"\n{DEVELOPER_COLLECTION_NAME}/{RETINAL_FOLDER_NAME}: "
+        f"{GIRDER_URL}/#folder/{folder['_id']}"
+    )
+
+
+def verify_retinal_example(gc, folder: dict) -> None:
+    import yaml
+
+    manifest = json.loads(RETINAL_MANIFEST_PATH.read_text())
+    items = list(gc.listItem(folder["_id"]))
+    selected = []
+    for entry in manifest["files"]:
+        matches = [item for item in items if item["name"] == entry["name"]]
+        if len(matches) != 1:
+            die(f"Expected one retinal item named {entry['name']}")
+        files = [
+            file for file in gc.listFile(matches[0]["_id"])
+            if file["name"] == entry["name"]
+        ]
+        if len(files) != 1 or files[0]["size"] != entry["bytes"]:
+            die(f"Unexpected stored files for {entry['name']}")
+        selected.append(matches[0]["_id"])
+
+    config_path = CONFIGS_DIR / RETINAL_FOLDER_NAME / VOLVIEW_CONFIG_NAME
+    local = yaml.safe_load(config_path.read_text())
+    expected_layouts = {
+        key: value for key, value in local["layouts"].items() if key != "__all__"
+    }
+    served = gc.get(f"folder/{folder['_id']}/volview_config/{VOLVIEW_CONFIG_NAME}")
+    if served.get("layouts") != expected_layouts:
+        die(
+            "Retinal folder did not replace the default layouts "
+            "with Axial and En face"
+        )
+    launch = gc.get(
+        f"folder/{folder['_id']}/volview",
+        parameters={"items": ",".join(selected)},
+    )
+    resources = {entry["name"]: entry for entry in launch.get("resources", [])}
+    if not {entry["name"] for entry in manifest["files"]} <= resources.keys():
+        die("Retinal launch manifest is missing the image or companion segmentation")
+    if any(
+        "/proxiable/" not in resources[entry["name"]].get("url", "")
+        for entry in manifest["files"]
+    ):
+        die("Retinal image and segmentation must stream through Girder")
+    log("  retinal OCT pair, launch manifest, and served two-pane layout verified")
+
+
+def cmd_verify_retinal(args) -> None:
+    gc = girder_client()
+    developer = find_collection(gc, DEVELOPER_COLLECTION_NAME)
+    folder = None
+    if developer:
+        folder = next(
+            (
+                folder for folder in gc.listFolder(developer["_id"], "collection")
+                if folder["name"] == RETINAL_FOLDER_NAME
+            ),
+            None,
+        )
+    if folder is None:
+        die(
+            f"No {DEVELOPER_COLLECTION_NAME}/{RETINAL_FOLDER_NAME}. "
+            "Run `seed.py seed-retinal`."
+        )
+    verify_retinal_example(gc, folder)
 
 
 def cmd_seed_small(args) -> None:
@@ -1361,12 +1542,16 @@ def cmd_verify(args) -> None:
     }
     check(
         "developer sibling folders",
-        set(developer_roots) == {"prostate", "fetus", "ultrasound"},
+        set(developer_roots)
+        == {"prostate", "fetus", "ultrasound", RETINAL_FOLDER_NAME},
         f"got {sorted(developer_roots)}",
     )
     prostate = developer_roots.get("prostate")
     fetus = developer_roots.get("fetus")
     developer_ultrasound = developer_roots.get("ultrasound")
+    retinal = developer_roots.get(RETINAL_FOLDER_NAME)
+    if retinal:
+        verify_retinal_example(gc, retinal)
     if developer_ultrasound:
         names = {item["name"] for item in gc.listItem(developer_ultrasound["_id"])}
         check(
@@ -1448,6 +1633,10 @@ def cmd_verify(args) -> None:
         config_targets.append(
             ("ultrasound", ultrasound["_id"], CONFIGS_DIR / "ultrasound")
         )
+    if retinal:
+        config_targets.append(
+            (RETINAL_FOLDER_NAME, retinal["_id"], CONFIGS_DIR / RETINAL_FOLDER_NAME)
+        )
     for name, folder_id, config_dir in config_targets:
         local = yaml.safe_load((config_dir / VOLVIEW_CONFIG_NAME).read_text())
         bad_types = set(local.get("disabledViewTypes", [])) - VALID_DISABLED_VIEW_TYPES
@@ -1455,11 +1644,12 @@ def cmd_verify(args) -> None:
         bad_views = collect_layout_views(local.get("layouts", {})) - VALID_LAYOUT_VIEWS
         check(f"{name}: layout views valid", not bad_views, f"invalid {bad_views}")
         served = gc.get(f"folder/{folder_id}/volview_config/{VOLVIEW_CONFIG_NAME}")
-        check(
-            f"{name}: disabledViewTypes applied",
-            served.get("disabledViewTypes") == local.get("disabledViewTypes"),
-            f"served {served.get('disabledViewTypes')}",
-        )
+        if "disabledViewTypes" in local:
+            check(
+                f"{name}: disabledViewTypes applied",
+                served.get("disabledViewTypes") == local["disabledViewTypes"],
+                f"served {served.get('disabledViewTypes')}",
+            )
         authored = set(local.get("layouts", {})) - {"__all__"}
         check(
             f"{name}: layouts applied",
@@ -1632,6 +1822,24 @@ def main() -> None:
         "--slices", type=int, default=3, help="Slices per series (uniform stride)"
     )
 
+    fetch_retinal = sub.add_parser(
+        "fetch-retinal",
+        help="Download and verify the retinal OCT image and segmentation",
+    )
+    fetch_retinal.add_argument(
+        "--force", action="store_true", help="Re-download the pinned archive"
+    )
+    seed_retinal = sub.add_parser(
+        "seed-retinal",
+        help="Add only the retinal OCT pair and two-pane folder config through MinIO",
+    )
+    seed_retinal.add_argument(
+        "--force", action="store_true", help="Re-download the pinned archive"
+    )
+    sub.add_parser(
+        "verify-retinal", help="Verify the retinal OCT pair and served folder config"
+    )
+
     sub.add_parser("verify", help="Assert the seeded hierarchy actually works")
 
     reset = sub.add_parser("reset", help="Delete the seeded Girder collections")
@@ -1647,6 +1855,9 @@ def main() -> None:
         "seed": cmd_seed,
         "reseed": cmd_reseed,
         "seed-small": cmd_seed_small,
+        "fetch-retinal": cmd_fetch_retinal,
+        "seed-retinal": cmd_seed_retinal,
+        "verify-retinal": cmd_verify_retinal,
         "verify": cmd_verify,
         "reset": cmd_reset,
     }[args.command](args)

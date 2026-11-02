@@ -27,6 +27,25 @@ downloaded from Kitware's public VolView example-data folder:
 The fetal segmentation is generated locally with Otsu thresholding; it is not
 a clinical annotation.
 
+## Retinal OCT example
+
+`seed.py seed-retinal` adds the image and companion segmentation from
+[VolView's retinal layer sample](https://data.kitware.com/api/v1/file/6ae786c91747c43eb290172f/download).
+The archive is pinned by SHA-512 in `manifest/retinal-oct.json`; its two NRRDs
+are also checked against the published SHA-256 values before staging.
+
+The sample is healthy control hc01 from the
+[JHU IACL OCT dataset](https://iacl.ece.jhu.edu/index.php/OCT_Data). Please cite
+He, Y., Carass, A., Solomon, S. D., Saidha, S., Calabresi, P. A., and Prince,
+J. L. (2019). *Retinal layer parcellation of optical coherence tomography
+images: Data resource for Multiple Sclerosis and Healthy Controls.*
+Data in Brief, 22, 601-604. https://doi.org/10.1016/j.dib.2018.12.073.
+
+[Conversion, source checksums, redistribution notes, and limitations](https://github.com/Kitware/VolView/blob/a08aabf4891167ec00cae556e1cbb2552a4e0db2/scripts/samples/jhu-oct-provenance.json)
+are recorded with the published sample. The eight tissue labels are derived
+from manually delineated boundaries. The converted volumes use local scan
+coordinates; patient anatomical orientation is not inferred.
+
 ## IDC
 
 Fedorov, A., Longabaugh, W. J. R., Pot, D., et al. *National Cancer Institute
@@ -36,7 +55,7 @@ https://doi.org/10.1148/rg.230180
 
 ## Terms that travel with this data
 
-Per the TCIA Data Usage Policy
+For the TCIA datasets above, the TCIA Data Usage Policy
 (https://www.cancerimagingarchive.net/data-usage-policies-and-restrictions/):
 
 - Attribute each individual dataset used, and link to that policy.

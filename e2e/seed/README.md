@@ -15,6 +15,7 @@ Trial (Large Image Filter, MinIO Import)
 Developer (MinIO Import)
 ├── prostate/{dicom/,5.seg.total-segmentator.nrrd}
 ├── fetus/{fetus.mha,fetus.seg.nrrd}
+├── retinal-oct/{jhu-hc01.nrrd,jhu-hc01.seg.nrrd}
 └── ultrasound/clip-{01,02,03}.dcm
 ```
 
@@ -33,6 +34,11 @@ Developer ultrasound folders do not use large-image filtering.
 For **Open Checked in VolView**, select `prostate/dicom` with its segmentation,
 or select both files in `fetus`. The fetal segmentation is generated test data,
 not a clinical annotation.
+
+The retinal OCT folder opens with an Axial view above an En face projection.
+Its two NRRDs load together, automatically attaching the eight named tissue
+layers from the companion `.seg.nrrd`. Its folder config replaces the default
+layouts.
 
 ## Run
 
@@ -56,6 +62,19 @@ uv run seed.py stage
 uv run seed.py seed
 uv run seed.py verify
 ```
+
+To add only the retinal example to an existing stack:
+
+```bash
+uv run seed.py seed-retinal
+uv run seed.py verify-retinal
+```
+
+This downloads the pinned 8.4 MB archive, verifies and extracts the image and
+segmentation, stages two MinIO objects, and imports only
+`Developer (MinIO Import)/retinal-oct` with its folder config. It preserves the
+other collections and the full staging plan. `fetch-retinal` only prepares the
+download cache; `--force` on either fetch or seed downloads the archive again.
 
 To clean and recreate all three managed collections while keeping the download
 cache and staged MinIO objects:

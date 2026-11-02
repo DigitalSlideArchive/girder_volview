@@ -1,0 +1,3 @@
+layouts:
+  __all__: true
+  Axial and En face: [[axial], [enface]]
