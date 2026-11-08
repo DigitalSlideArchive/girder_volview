@@ -42,7 +42,10 @@ export async function loginViaUI(page: Page): Promise<void> {
     return;
   }
   await loginLink.click();
-  await page.locator('#g-login').fill(CONFIG.user);
+  const login = page.locator('#g-login');
+  // The modal focuses the login field after its opening transition.
+  await expect(login).toBeFocused();
+  await login.fill(CONFIG.user);
   await page.locator('#g-password').fill(CONFIG.pass);
   await page.locator('#g-login-button').click();
   await expect(userMenu, 'girder UI login did not complete (no user menu)').toBeVisible();
