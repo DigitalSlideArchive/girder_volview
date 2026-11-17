@@ -45,7 +45,8 @@ const texts = (values: unknown[]): string[] =>
 
 // 6.x kept segment identity inside each segment group's metadata; 7.0.0 lifted
 // it into a top-level `segments` registry that per-image masks point back into.
-// One summary has to read both, because capture writes the older shape.
+// One summary has to read every generation, because capture writes an older
+// shape than the branch re-saves.
 const legacyMaskFacts = (groups: any[]): MaskFacts => {
   const descriptorsOf = (group: any): any[] =>
     Object.values(group?.metadata?.segments?.byValue ?? {});
@@ -70,10 +71,24 @@ const currentMaskFacts = (manifest: any): MaskFacts => {
   };
 };
 
-const maskFacts = (manifest: any): MaskFacts =>
-  Array.isArray(manifest.segmentGroups)
-    ? legacyMaskFacts(manifest.segmentGroups)
-    : currentMaskFacts(manifest);
+// 8.0.0 scopes segments to their image, and each segment holds at most one
+// labelmap.
+const imageSegmentMaskFacts = (imageSegments: any[]): MaskFacts => {
+  const masked = imageSegments
+    .flatMap((image: any) => image?.segments ?? [])
+    .filter((segment: any) => segment?.labelmap);
+  return {
+    segmentNames: texts(masked.map((segment: any) => segment?.name)),
+    maskCount: masked.length,
+    maskPaths: texts(masked.map((segment: any) => segment?.labelmap?.path)),
+  };
+};
+
+const maskFacts = (manifest: any): MaskFacts => {
+  if (Array.isArray(manifest.segmentGroups)) return legacyMaskFacts(manifest.segmentGroups);
+  if (Array.isArray(manifest.imageSegments)) return imageSegmentMaskFacts(manifest.imageSegments);
+  return currentMaskFacts(manifest);
+};
 
 const largestEntryBytes = (zip: AdmZip, paths: string[]): number =>
   zip
