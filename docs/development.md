@@ -113,8 +113,13 @@ the package's `files`).
 
   ```sh
   npm --prefix girder_volview/web_client install
-  tox -e test        # or: pytest
+  script/test        # or: tox -e test, or pytest, with a MongoDB on localhost:27017
   ```
+
+  The database tests need a MongoDB and skip without one. `script/test` starts a
+  throwaway MongoDB container on a free port, passes it to the suite with
+  `--mongo-uri`, and removes it afterwards. Extra arguments go to pytest
+  (`script/test -n auto`). Set `TEST_MONGO_URI` to use an existing MongoDB.
 
 - **Against an unreleased VolView branch** (developing the two together) — link
   a local VolView checkout so the tests read that branch's contract:
@@ -127,7 +132,7 @@ the package's `files`).
   Or point the tests straight at a checkout, no link required:
 
   ```sh
-  GIRDER_VOLVIEW_CONTRACT_DIR=<VolView checkout>/backend-contract pytest
+  GIRDER_VOLVIEW_CONTRACT_DIR=<VolView checkout>/backend-contract script/test
   ```
 
 CI installs the **pinned published** `volview`, so when the backend is developed
