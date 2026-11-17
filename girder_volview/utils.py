@@ -1,15 +1,14 @@
 import json
+import logging
 import re
 
 from datetime import datetime, timezone
-from girder import logger
 from girder.exceptions import RestException
-from girder.utility.server import getApiRoot
 from girder.constants import AccessType
 from girder.models.folder import Folder
 from girder.models.item import Item
 
-from .handles import mintFileHandle
+from .handles import getApiRoot, mintFileHandle
 
 SESSION_ZIP_EXTENSION = ".volview.zip"
 SESSION_JSON_EXTENSION = ".volview.json"
@@ -192,6 +191,8 @@ LOADABLE_MIMES = (
     "application/vnd.unknown.scanco",
     "application/vnd.unknown.fdf",
 )
+
+logger = logging.getLogger(__name__)
 
 
 def isSessionItem(item):

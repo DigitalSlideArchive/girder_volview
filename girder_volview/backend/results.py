@@ -6,9 +6,9 @@ enum on the wire). Results come from the file ids recorded ON the job by
 """
 
 import functools
+import logging
 
 from bson.objectid import ObjectId
-from girder import logger
 from girder_jobs.constants import JobStatus
 
 from ..utils import makeFileDownloadUrl, _toIso
@@ -20,6 +20,8 @@ from .outputs import (
     _declaredOutputIdentifiers,
 )
 from .slicer_spec import declares_annotations
+
+logger = logging.getLogger(__name__)
 
 
 @functools.cache

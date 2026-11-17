@@ -6,7 +6,7 @@ Both URLs derive from the runtime ``getApiRoot()`` so a non-default API mount
 still resolves.
 """
 
-from girder.utility.server import getApiRoot
+from ..handles import getApiRoot
 
 # The mount segment of every processing route: the folder-tree routes
 # (``/folder/:id/volview_processing/...``) and the folder-free job resource

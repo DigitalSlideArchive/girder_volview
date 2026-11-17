@@ -1,4 +1,4 @@
-import { getApiRoot } from "@girder/core/rest";
+const getApiRoot = girder.rest.getApiRoot;
 
 const openButton = `<a class="btn btn-sm btn-primary open-in-volview hidden" style="margin-left: 10px" role="button">
                                 <i class="icon-link-ext"></i>Open in VolView</a>`;
@@ -16,7 +16,7 @@ export function addButton($el, parentSelector) {
     return button;
 }
 
-const volViewPath = `static/built/plugins/volview/index.html`;
+const volViewPath = "/volview";
 
 // Launch URL legs: `urls=` loads exactly what was picked, except a bare
 // folder-open, which resumes the folder's newest session.volview.zip. `save=`
@@ -25,7 +25,7 @@ const volViewPath = `static/built/plugins/volview/index.html`;
 // registers the processing provider used by the Jobs tab.
 
 export function openItemURL(item) {
-    const itemRoute = `/${getApiRoot()}/item/${item.id}`;
+    const itemRoute = `${getApiRoot()}/item/${item.id}`;
     const saveParam = `&save=${itemRoute}/volview`;
     const manifestUrl = `${itemRoute}/volview`;
     const downloadParams = `&names=[manifest.json]&urls=${encodeURIComponent(manifestUrl)}`;
@@ -40,12 +40,12 @@ export function openItem(item) {
 function resourcesToDownloadParams(folderId, resources) {
     const items = (resources.item || []).join(",");
     const folders = (resources.folder || []).join(",");
-    const manifestUrl = `/${getApiRoot()}/folder/${folderId}/volview?folders=${folders}&items=${items}`;
+    const manifestUrl = `${getApiRoot()}/folder/${folderId}/volview?folders=${folders}&items=${items}`;
     return `&names=[manifest.json]&urls=${encodeURIComponent(manifestUrl)}`;
 }
 
 export function openResourcesURL(folder, resources) {
-    const folderRoute = `/${getApiRoot()}/folder/${folder.id}`;
+    const folderRoute = `${getApiRoot()}/folder/${folder.id}`;
     const metaData = {
         linkedResources: {
             items: resources.item,
@@ -76,12 +76,12 @@ export function groupingFilterForItem(item) {
 }
 
 function volViewURLWithFilter(folderId, filterPayload) {
-    const folderRoute = `/${getApiRoot()}/folder/${folderId}`;
+    const folderRoute = `${getApiRoot()}/folder/${folderId}`;
     const metaData = { linkedResources: { filter: filterPayload } };
     const saveParam = `&save=${folderRoute}/volview?metadata=${encodeURIComponent(
         JSON.stringify(metaData),
     )}`;
-    const manifestUrl = `/${getApiRoot()}/folder/${folderId}/volview?filters=${encodeURIComponent(
+    const manifestUrl = `${getApiRoot()}/folder/${folderId}/volview?filters=${encodeURIComponent(
         JSON.stringify(filterPayload),
     )}`;
     const downloadParams = `&names=[manifest.json]&urls=${encodeURIComponent(manifestUrl)}`;

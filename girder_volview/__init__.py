@@ -1,4 +1,5 @@
 from itertools import islice
+from pathlib import Path
 import re
 
 import cherrypy
@@ -296,10 +297,32 @@ def downloadProxiableFile(self, file, name):
 
 class GirderPlugin(plugin.GirderPlugin):
     DISPLAY_NAME = "VolView"
-    CLIENT_SOURCE_PATH = "web_client"
 
     def load(self, info):
         plugin.getPlugin("large_image").load(info)
+
+        plugin.registerPluginStaticContent(
+            plugin="volview",
+            css=[],
+            js=["/girder-plugin-volview.umd.cjs"],
+            staticDir=Path(__file__).parent / "web_client" / "dist",
+            tree=info["serverRoot"],
+        )
+
+        info["serverRoot"].mount(
+            None, "/volview",
+            config={
+                "/": {
+                    "tools.staticdir.on": True,
+                    "tools.staticdir.index": "index.html",
+                    "tools.staticdir.dir": (
+                        Path(__file__).parent
+                        / "web_client" / "dist" / "VolView" / "dist"
+                    ),
+                }
+            }
+        )
+
         setupEventHandlers()
 
         info["apiRoot"].item.route(

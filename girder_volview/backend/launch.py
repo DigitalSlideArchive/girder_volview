@@ -10,11 +10,11 @@ folder saves mint a new ``session.volview.zip`` item per save.
 
 import copy
 import errno
+import logging
 
 import cherrypy
 import yaml
 
-from girder import logger
 from girder.api import access
 from girder.api.describe import Description, autoDescribeRoute
 from girder.api.rest import boundHandler
@@ -27,8 +27,8 @@ from girder.models.item import Item
 from girder.models.setting import Setting
 from girder.models.upload import Upload
 from girder.utility import RequestBodyStream
-from girder.utility.server import getApiRoot
 
+from ..handles import getApiRoot
 from .config import buildProcessingConfigBlock
 from ..utils import (
     SESSION_ZIP_EXTENSION,
@@ -48,6 +48,8 @@ from ..utils import (
     normalizeLinkedResources,
     sessionNameFromFilter,
 )
+
+logger = logging.getLogger(__name__)
 
 LARGE_IMAGE_CONFIG_FOLDER = "large_image.config_folder"
 

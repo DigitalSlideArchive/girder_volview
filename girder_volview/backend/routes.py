@@ -12,12 +12,13 @@ import binascii
 import copy
 import datetime
 import json
+import logging
 import threading
 import time
 import uuid
 
 import cherrypy
-from girder import events, logger
+from girder import events
 from girder.api import access
 from girder.api.describe import Description, autoDescribeRoute
 from girder.api.rest import Resource, boundHandler
@@ -40,6 +41,8 @@ from ..utils import (
 from .config import PROCESSING_ROUTE_NAME
 from .slicer_spec import declared_params, translate_slicer_xml, validate_task_spec
 from . import inputs, submit, outputs, results
+
+logger = logging.getLogger(__name__)
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
@@ -1055,26 +1058,10 @@ def addBackendRoutes(info):
         "girder_volview.backend.outputs",
         outputs._recordJobOutput,
     )
-    # Ownership cascade: each job owns one private output folder + its staged
-    # inputs. Running before the DB delete, this refuses to remove a nonterminal
-    # owned job and cascade-deletes its owned resources, so the DELETE route,
-    # Girder's built-in job route, and any direct Job.remove caller all
-    # honor the same terminal guard and cleanup.
-    events.bind(
-        "model.job.remove",
-        "girder_volview.backend.outputs",
-        outputs._cascadeDeleteJobOwnedResources,
-    )
-    # Reverse ownership cascade: deleting a job's output folder in the Girder
-    # hierarchy deletes the job record too (refusing for a live job), so folder
-    # deletion is a first-class "delete this job" gesture and no orphaned job
-    # rows accumulate. Removing the volview-jobs container recurses per job
-    # folder.
-    events.bind(
-        "model.folder.remove",
-        "girder_volview.backend.outputs",
-        outputs._cascadeDeleteFolderOwnedJob,
-    )
+    # Job <-> output-folder deletion cascades (model.job.remove and
+    # model.folder.remove). The Girder Worker plugin binds the same handlers in
+    # the local worker, where Girder 5 runs folder and collection deletes.
+    outputs.bindDeletionCascades()
     # REST pre-guard for the same invariant: Folder.remove cleans contents
     # BEFORE model.folder.remove fires, so refuse a live job's folder (or a
     # container holding one) before the delete handler touches anything.

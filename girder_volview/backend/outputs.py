@@ -18,6 +18,7 @@ removal and retains the job record as the discoverable owner of whatever is left
 
 import json
 
+from girder import events
 from girder.api import access
 from girder.exceptions import RestException
 from girder.models.folder import Folder
@@ -202,6 +203,37 @@ def _cascadeDeleteJobOwnedResources(event):
     # Swept even when the folder pointer is absent: the reverse cascade unsets it
     # before re-entering removal, and its jobs still own their staged inputs.
     _removeTransientItems(transientItemIds)
+
+
+def bindDeletionCascades():
+    """Bind the job <-> output-folder deletion cascades to Girder model events.
+
+    Called by the web server (``routes.addBackendRoutes``) and by the Girder
+    Worker plugin (``girder_volview.worker_plugin``): Girder 5 runs folder,
+    folder-contents and collection deletes as tasks in the local worker, which
+    does not load Girder server plugins. Both callers bind the same handler
+    names, so a process that runs both just replaces the binding.
+    """
+    # Ownership cascade: each job owns one private output folder + its staged
+    # inputs. Running before the DB delete, this refuses to remove a nonterminal
+    # owned job and cascade-deletes its owned resources, so the DELETE route,
+    # Girder's built-in job route, and any direct Job.remove caller all
+    # honor the same terminal guard and cleanup.
+    events.bind(
+        "model.job.remove",
+        "girder_volview.backend.outputs",
+        _cascadeDeleteJobOwnedResources,
+    )
+    # Reverse ownership cascade: deleting a job's output folder in the Girder
+    # hierarchy deletes the job record too (refusing for a live job), so folder
+    # deletion is a first-class "delete this job" gesture and no orphaned job
+    # rows accumulate. Removing the volview-jobs container recurses per job
+    # folder.
+    events.bind(
+        "model.folder.remove",
+        "girder_volview.backend.outputs",
+        _cascadeDeleteFolderOwnedJob,
+    )
 
 
 # Output-folder ids currently being removed by the job-side cascade above.

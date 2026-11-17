@@ -77,6 +77,25 @@ def makeUser(login, admin=False):
 
 
 @pytest.fixture
+def server(server, eagerWorkerTasks):
+    """pytest-girder's ``server``, set up for Girder 5.
+
+    Girder 5 runs folder, folder-contents and collection deletes as tasks on
+    the local Girder Worker queue and answers 503 when no worker is listening;
+    ``eagerWorkerTasks`` runs them in-process instead.
+
+    Scheduling a Girder Worker job needs the API URL. Outside a request under
+    ``/api/v1`` (a test creating a job through the model) Girder 5 cannot
+    derive it, so set ``worker.api_url``. Nothing is ever sent to it.
+    """
+    from girder.models.setting import Setting
+    from girder_plugin_worker.constants import PluginSettings
+
+    Setting().set(PluginSettings.API_URL, "http://127.0.0.1/api/v1")
+    yield server
+
+
+@pytest.fixture
 def owner(db):
     return makeUser("owner")
 

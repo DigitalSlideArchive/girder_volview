@@ -1,9 +1,9 @@
 """Processing backend -- input resolution + transient staging lifecycle."""
 
 import datetime
+import logging
 
 from bson.objectid import ObjectId
-from girder import logger
 from girder.constants import AccessType
 from girder.exceptions import AccessException, RestException
 from girder.models.file import File
@@ -17,6 +17,8 @@ from girder_jobs.models import job as girder_job
 
 from ..handles import parseFileHandle
 from ..utils import TRANSIENT_STAGED_META_KEY, isTransientStagedItem, safeNameToken
+
+logger = logging.getLogger(__name__)
 
 # Every submitted uri is a backend-minted, origin-relative
 # ``/<apiRoot>/file/<id>/proxiable/<name>`` (``utils.makeFileDownloadUrl``).

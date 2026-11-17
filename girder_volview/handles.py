@@ -21,9 +21,17 @@ rejected, so callers fail closed.
 from urllib.parse import quote, unquote
 
 from bson.objectid import ObjectId
-from girder.utility.server import getApiRoot
 
 _PROXIABLE_MARKER = "proxiable/"
+
+
+def getApiRoot():
+    """The REST API mount, without leading or trailing slashes.
+
+    Girder 5 always mounts the API at ``/api/v1`` (and dropped
+    ``girder.utility.server.getApiRoot``).
+    """
+    return "api/v1"
 
 
 def mintFileHandle(fileId, name):
