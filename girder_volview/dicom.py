@@ -26,7 +26,8 @@ def handleFileSave(event):
 
 def maybeUpgradeMimeType(file):
     mimeType = file.get("mimeType")
-    # asset store import can set mimeType to None.  Manual upload sets mimeType to "application/octet-stream"
+    # asset store import can set mimeType to None.  Manual upload sets
+    # mimeType to "application/octet-stream"
     if mimeType is None or mimeType == "application/octet-stream":
         file["mimeType"] = "application/dicom"
         # Don't trigger events to avoid recursive processing
@@ -52,8 +53,8 @@ def _coerceValue(value):
     # Handle lists (MultiValue) recursively
     if isinstance(value, pydicom.multival.MultiValue):
         if isinstance(value, pydicom.sequence.Sequence):
-            # A pydicom Sequence is a nested list of Datasets, which is too complicated to flatten
-            # now
+            # A pydicom Sequence is a nested list of Datasets, which is too
+            # complicated to flatten now
             raise ValueError("Cannot coerce a Sequence")
         return list(map(_coerceValue, value))
 
@@ -61,8 +62,8 @@ def _coerceValue(value):
     if isinstance(value, pydicom.valuerep.PersonName):
         return str(value)
 
-    # Many pydicom value types are subclasses of base types; to ensure the value can be serialized
-    # to MongoDB, cast the value back to its base type
+    # Many pydicom value types are subclasses of base types; to ensure the
+    # value can be serialized to MongoDB, cast the value back to its base type
     for knownBaseType in {
         datetime.datetime,
         datetime.date,
@@ -83,7 +84,7 @@ def _coerceValue(value):
             value.decode()
             return value
         except UnicodeDecodeError:
-            raise ValueError("Binary data that cannot be stored as utf-8")
+            raise ValueError("Binary data that cannot be stored as utf-8") from None
 
     raise ValueError("Unknown type", type(value))
 
@@ -91,8 +92,8 @@ def _coerceValue(value):
 def _coerceMetadata(dataset):
     metadata = {}
 
-    # Use simple iteration instead of "dataset.iterall", to prevent recursing into Sequences, which
-    # are too complicated to flatten now
+    # Use simple iteration instead of "dataset.iterall", to prevent recursing
+    # into Sequences, which are too complicated to flatten now
     # The dataset iterator is
     #   for tag in sorted(dataset.keys()):
     #       yield dataset[tag]
@@ -107,10 +108,11 @@ def _coerceMetadata(dataset):
             # Skip Group Length tags, which are always element 0x0000
             continue
 
-        # Use "keyword" instead of "name", as the keyword is a simpler and more uniform string
+        # Use "keyword" instead of "name", as the keyword is a simpler and
+        # more uniform string
         # See: http://dicom.nema.org/medical/dicom/current/output/html/part06.html#table_6-1
-        # For unknown / private tags, allow pydicom to create a string representation like
-        # "(0013, 1010)"
+        # For unknown / private tags, allow pydicom to create a string
+        # representation like "(0013, 1010)"
         tagKey = (
             dataElement.keyword
             if dataElement.keyword and not dataElement.tag.is_private
@@ -139,7 +141,8 @@ def _parseFile(f):
         return None
 
     # Skip DICOMDIR files - they are directory/index files.
-    # Parsing large DICOMDIR files over the BUFFER_SIZE_CUTOFF with pydicom while streaming from S3 is very slow
+    # Parsing large DICOMDIR files over the BUFFER_SIZE_CUTOFF with pydicom
+    # while streaming from S3 is very slow
     if f.get("name", "").upper() == "DICOMDIR":
         return None
 
@@ -171,7 +174,8 @@ def _parseFile(f):
         ValueError,
     ):
         # If pydicom.errors.InvalidDicomError occurs, probably not a dicom file.
-        # If GirderException, the file may have been deleted between scanning for import and handling the event
+        # If GirderException, the file may have been deleted between scanning
+        # for import and handling the event
         # OSError can occur on files that are partly written and unclosed
         # ValueError can occur with corrupted DICOM tags or deferred read issues
         return None

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<executable>
+  <category>Radiology</category>
+  <title>Threshold Segmentation</title>
+  <description>Label voxels whose intensity falls between two thresholds. Emits a .seg.nrrd labelmap whose segment name and RGB color travel inside the file. Backed by ITK.</description>
+  <version>0.1.0</version>
+  <license>Apache 2.0</license>
+  <contributor>VolView</contributor>
+  <parameters>
+    <label>IO</label>
+    <description>Input/output parameters.</description>
+    <image>
+      <name>inputVolume</name>
+      <label>Input Volume</label>
+      <channel>input</channel>
+      <description>Input volume (DICOM, NIfTI, NRRD, MHA, etc.)</description>
+      <index>0</index>
+    </image>
+    <image type="label" fileExtensions=".seg.nrrd" reference="inputVolume">
+      <name>outputLabelmap</name>
+      <label>Output Labelmap</label>
+      <channel>output</channel>
+      <description>Binary labelmap (.seg.nrrd) with the segment's embedded name and color.</description>
+      <index>1</index>
+    </image>
+  </parameters>
+  <parameters>
+    <label>Threshold parameters</label>
+    <description>Intensity window to label.</description>
+    <double>
+      <name>lowerThreshold</name>
+      <label>Lower Threshold</label>
+      <description>Lowest intensity to include (inclusive).</description>
+      <longflag>lower</longflag>
+      <default>50</default>
+    </double>
+    <double>
+      <name>upperThreshold</name>
+      <label>Upper Threshold</label>
+      <description>Highest intensity to include (inclusive).</description>
+      <longflag>upper</longflag>
+      <default>65535</default>
+    </double>
+  </parameters>
+  <parameters advanced="true">
+    <label>Girder API</label>
+    <description>Server access injected by slicer_cli_web for v1 b3 feeding; not shown to users.</description>
+    <string>
+      <name>girderApiUrl</name>
+      <longflag>girderApiUrl</longflag>
+      <label>Girder API URL</label>
+      <description>Girder API URL (injected by slicer_cli_web).</description>
+      <default></default>
+    </string>
+    <string>
+      <name>girderToken</name>
+      <longflag>girderToken</longflag>
+      <label>Girder Token</label>
+      <description>Girder token (injected by slicer_cli_web).</description>
+      <default></default>
+    </string>
+  </parameters>
+</executable>

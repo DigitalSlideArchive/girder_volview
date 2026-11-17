@@ -4,5 +4,6 @@ include setup.py
 
 graft girder_volview
 graft docs
+prune girder_volview/web_client/node_modules
 prune test
 global-exclude *.py[co] *.cmake __pycache__ node_modules

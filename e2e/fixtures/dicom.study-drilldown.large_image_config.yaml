@@ -1,0 +1,83 @@
+# Patient rows -> study rows -> whole-study VolView launch for the compat
+# suite's automatically provisioned small DICOM tier.
+
+defaultItemList: patientList
+
+namedItemLists:
+  patientList:
+    layout:
+      flatten: only
+    group:
+      keys:
+        - dicom.PatientID
+      counts:
+        _id: _count.slicescount
+        dicom.SeriesInstanceUID: _count.seriescount
+        dicom.StudyInstanceUID: _count.studiescount
+    navigate:
+      type: itemList
+      name: studyList
+    defaultSort:
+      - type: metadata
+        value: dicom.PatientID
+        dir: up
+    columns:
+      - type: metadata
+        value: dicom.PatientID
+        title: Patient ID
+        format: text
+      - type: metadata
+        value: _count.studiescount
+        title: Studies
+        format: count
+      - type: metadata
+        value: _count.seriescount
+        title: Series
+        format: count
+      - type: metadata
+        value: _count.slicescount
+        title: Slices
+        format: count
+      - type: record
+        value: controls
+
+  studyList:
+    layout:
+      flatten: only
+    group:
+      keys:
+        - dicom.StudyInstanceUID
+      counts:
+        _id: _count.slicescount
+        dicom.SeriesInstanceUID: _count.seriescount
+    navigate:
+      type: open
+      name: volview
+    defaultSort:
+      - type: metadata
+        value: dicom.StudyDate
+        dir: up
+    columns:
+      - type: metadata
+        value: dicom.PatientID
+        title: Patient ID
+        format: text
+      - type: metadata
+        value: dicom.StudyDate
+        title: Study Date
+      - type: metadata
+        value: dicom.StudyDescription
+        title: Study Description
+      - type: metadata
+        value: dicom.ModalitiesInStudy
+        title: Modalities
+      - type: metadata
+        value: _count.seriescount
+        title: Series
+        format: count
+      - type: metadata
+        value: _count.slicescount
+        title: Slices
+        format: count
+      - type: record
+        value: controls

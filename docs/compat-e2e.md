@@ -1,0 +1,206 @@
+# Browser lifecycle and backwards-compatibility e2e
+
+This is the project's single browser-test infrastructure. It proves that
+`session.volview.zip` files saved by an **older** girder_volview + VolView client
+still restore and re-save correctly, and that a job the older pair ran still
+loads its result. It then exercises fresh current-version save/load/restore and
+job behavior.
+
+```
+e2e/scripts/compat.sh
+ ├─ materialize-baseline.sh                          # git archive origin/HEAD -> e2e/.compat/
+ ├─ materialize-volview-baseline.sh                  # the client that baseline pins
+ ├─ script/deploy <baseline export> <baseline client>  # baseline pair
+ ├─ playwright --project capture                     # save sessions, run a job on the baseline
+ ├─ script/deploy <this worktree> <sibling client>   # branch backend + client
+ ├─ playwright --project verify                      # old sessions restore, the old job loads
+ └─ playwright --project current                     # fresh lifecycle + jobs
+```
+
+Neither the old sources nor the session zips are committed — both are
+reproducible from a sha, and the harness recreates them into the gitignored
+`e2e/.compat/`.
+
+## Derived pairings
+
+The harness derives both sides of the comparison rather than naming branches or
+worktrees.
+
+| | derived from | override |
+| --- | --- | --- |
+| baseline backend | the repo's integration branch (`origin/HEAD`), resolved per run | `COMPAT_BASELINE_REF` |
+| baseline client | whatever that backend pins in `web_client/package.json` | `COMPAT_BASELINE_VOLVIEW_SHA` |
+| baseline client checkout | any checkout at that sha, else one created on demand | `COMPAT_BASELINE_VOLVIEW` |
+| branch backend | this worktree — the one `compat.sh` lives in | — |
+| branch client | the VolView worktree sharing this worktree's name | `COMPAT_BRANCH_VOLVIEW` |
+
+Name the two worktrees alike and the harness finds both. The baseline client's
+sha comes from the baseline backend's dependency pin, keeping the pair aligned.
+
+Because the baseline tracks the integration branch, running the harness *from*
+an integration-branch worktree would compare a commit against itself. That is a
+hard failure, not a warning (`COMPAT_ALLOW_VACUOUS=1` to override).
+
+Girder's mongo volume survives the redeploy (script/deploy only recreates the
+girder container's code), so the folders and sessions captured in step 2 are
+still there for step 4. `e2e/.compat-state.json` (gitignored) bridges the two
+playwright invocations: session item ids, launch descriptors, the expected
+content per gesture, and the baseline job's id with the segment names it applied.
+
+## What the harness proves
+
+| Gesture           | Launch (real girder UI, on the baseline)                    | Content saved               | Verified on the branch                                                                                           |
+| ----------------- | ----------------------------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `single-item`     | item page → Open in VolView                                 | ruler                       | item manifest serves the session; measurements exact; re-save                                                    |
+| `checked-nrrd`    | check 2 NRRD rows → Open Checked                            | ruler + painted segments    | bare-folder open resumes it; checking the session row opens exactly it; segments + measurements survive; re-save |
+| `filtered-dicom`  | filter box narrows to one patient → check series row → Open | ruler                       | replaying the same filter gesture resumes the matching `session.<filter>.volview.zip`                            |
+| `study-layered`   | check CT + PET series rows of one study → Open              | PET layered over CT + ruler | replay resumes; the layer survives restore and re-save                                                           |
+| `study-drilldown` | patient → study drill-down in an isolated small-tier folder | PET layer + ruler           | replay resumes                                                                                                   |
+| `jobs-baseline`   | check the NRRD row → Open Checked; the Jobs tab runs Otsu   | Otsu labelmap job result    | `/results` answers `import-segmentation`; the result waits for Load, then applies the same segment names         |
+
+Content checks are semantic, not pixel-based: a baseline-saved session must
+restore, ruler measurement text must match exactly, every captured segment name
+must survive, and the re-saved session must keep its rulers and layers and carry
+non-empty mask data (schema migrations are fine; content loss is not). How many
+masks a session holds carries no invariant of its own, because every
+segmentation an image receives merges into that image's one segmentation.
+Screenshots are attached to the report as evidence, never asserted on.
+
+The current project also covers what an old-session restore can't prove:
+
+- fresh single-item, checked-image, and grouped-filter launches;
+- F5 before save staying fresh, and F5 after first and second saves resuming;
+- checked raw images deliberately restarting instead of resuming;
+- bare-folder newest-session selection and exact older-session selection;
+- the launch button's `urls`, `save`, and `names` contract, including config
+  delivery through the manifest;
+- saved-session rows, completed-job loading, and live job auto-apply;
+- **Generate Segment Rulers** and **Export Segment Statistics**, including
+  manual ruler preservation and CSV downloads.
+
+Each scenario owns a folder, so state can't leak between tests. Tests run on
+one worker for predictable load, but aren't Playwright `serial` — one failure
+doesn't mark the rest as unrun.
+
+The DICOM fixtures use real IDC data (ACRIN NSCLC FDG-PET/CT, CC-BY): two
+complete pinned studies, `patient-01/study-01/{CT,PET}` and
+`patient-02/study-01/{CT,PET}`, at 12 slices per series. Each grouped scenario
+gets its own uploaded copy under the run root, with `meta.dicom.*` populated by
+girder_volview, plus `e2e/fixtures/dicom.large_image_config.yaml` so the folder
+groups into filterable series rows.
+
+These fixtures are uploaded directly and live in the running user's own folders.
+The optional manual-test tier from `e2e/seed/seed.py seed` arrives the other way,
+through a MinIO/S3 import, and lives in collections whose names say so —
+`Trial (MinIO Import)` and friends. Nothing has to police the split because the
+two never share a parent.
+
+## Running it
+
+One-time setup:
+
+```bash
+cd e2e && npm ci && npm run install-browser
+uv run seed/seed.py fetch --small     # small DICOM cache (also run by compat.sh)
+```
+
+Machine-specific paths live in a gitignored `.env` at the repo root:
+
+```bash
+cp .env.example .env && $EDITOR .env      # DSA_DEVOPS, VOLVIEW_ROOT, ...
+```
+
+The stack must already be running (see `docs/development.md`); `script/deploy`
+only swaps the code it serves. `script/girder-volview.override.yml` re-points
+the `/opt/girder_volview` mount at the worktree (or compat baseline) being
+deployed. The layers this repo adds to the upstream stack are listed in
+`.env.example`'s `DSA_COMPOSE_FILES`.
+
+What the harness needs beyond `.env`:
+
+- **The baseline backend** — no checkout required. It's exported from this
+  repo's own history at whatever `origin/HEAD` resolves to. Freeze it with
+  `COMPAT_BASELINE_REF=<sha>`, or point at a real git checkout with
+  `COMPAT_OLD_CHECKOUT` + `COMPAT_OLD_SHA` (HEAD must equal that sha).
+- **The baseline client** — no checkout required either. Its sha comes from the
+  baseline backend's own `volview` dependency pin; the harness reuses any
+  checkout under `VOLVIEW_ROOT` already at that commit, and creates a detached
+  worktree under `$VOLVIEW_ROOT/.compat-baseline/` only if none is. The first
+  such creation installs `node_modules` and is slow; later runs reuse it.
+- **The branch client** — a VolView worktree under `VOLVIEW_ROOT` named after
+  this girder_volview worktree. It's unpublished and builds from source, with
+  its sha read at run start. Set `COMPAT_BRANCH_VOLVIEW_SHA` to assert the
+  checkout is at one particular commit.
+
+The baseline follows the integration branch. Set `COMPAT_BASELINE_REF=<sha>` to
+hold it fixed while bisecting a failure.
+
+Full coverage-first run (two deploys):
+
+```bash
+cd e2e && npm test
+```
+
+`npm run compat` is an alias for the same run.
+
+The harness registers both radiology and examples images after each deploy.
+See [Slicer CLI images](./development.md#slicer-cli-images) for configuration.
+Each example has a successful UI submission and result-application scenario;
+Threshold Segmentation also covers invalid input.
+
+Iterating:
+
+```bash
+npm run compat:verify-fast    # verify only, no redeploy, keep state for re-runs
+npm run compat:capture        # capture half only (deploys main first)
+bash scripts/compat.sh --phase capture --skip-deploy   # re-capture, baseline already deployed
+bash scripts/compat.sh --phase current --skip-deploy   # current scenarios using retained state
+bash scripts/compat.sh --link                          # fast client deploys (docker cp, no npm pack)
+COMPAT_BRANCH_VOLVIEW=/abs/path/to/a/VolView npm test   # client not named after this worktree
+COMPAT_BASELINE_REF=<sha> npm test                     # freeze the baseline while bisecting
+npm run compat:clean          # remove materialized baselines (handles root-owned residue)
+npm run report                # html report of the last phase
+```
+
+The capture phase refuses to start if `.compat-state.json` already exists,
+meaning a previous capture was never verified or torn down. Either finish it
+(`npm run compat:verify`) or delete the state file and the
+`girder-volview-compat-<runId>` folder it names.
+
+The harness provisions the `study-drilldown` hierarchy from the same small-tier
+DICOM cache as its other grouped fixtures. It does not require the manual MinIO
+seed; the run folder and the session items it mints are removed at teardown.
+
+## Guards
+
+- `verifyDeployedHeads` (e2e/helpers/stack.ts) requires the deployed backend
+  and client shas to equal the intended checkouts. Capture runs against the
+  baseline pair, so `compat.sh` passes `E2E_EXPECT_GIRDER_SHA` and
+  `E2E_EXPECT_VOLVIEW_SHA`; verify checks this backend's HEAD and the current
+  client HEAD. Outside compat it checks this worktree and the receipt's live
+  VolView checkout. A missing or unreadable expected sha is a hard failure.
+- The guard also hashes the served `index.html` and, when the receipt
+  worktrees are locally accessible, compares the built client and Python
+  source tree to the receipt — moving a checkout or changing code after deploy
+  forces a fresh deploy instead of a false green.
+- `script/deploy` writes the receipt only after confirming the served SPA and
+  mounted backend match what it deployed, so a receipt never certifies a
+  partial deploy.
+- The baseline export has no `.git`, so its sha is asserted via `--girder-sha`
+  and backstopped by comparing the mounted backend tree hash to the tree
+  `materialize-baseline.sh` produced.
+- A resolved baseline client is asserted against the sha the baseline backend
+  pins, whichever way it was resolved — reused, created, or named by
+  `COMPAT_BASELINE_VOLVIEW`. A checkout at the wrong commit tests the wrong
+  pairing silently, which is the failure the derivation exists to prevent.
+- Baseline equal to branch is a hard failure. With the baseline tracking the
+  integration branch, a run launched from an integration-branch worktree would
+  otherwise compare a commit against itself and pass, proving nothing.
+- One `playwright.config.ts` defines the capture, verify, and current
+  projects, and refuses to start without the phase `compat.sh` selects —
+  preventing a partial direct invocation from silently testing the wrong
+  deploy.
+- CI does not run this harness; it's a local tool by design. A future job
+  needs the full DSA Compose stack plus a separate VolView checkout via
+  `COMPAT_BRANCH_VOLVIEW` (and `COMPAT_BRANCH_VOLVIEW_SHA` for a reproducible
+  cross-repository assertion).

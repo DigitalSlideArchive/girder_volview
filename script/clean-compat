@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Remove the compat harness's materialized baseline checkouts.
+#
+# Reclaim root-owned files left by an interrupted container deployment before
+# removing e2e/.compat.
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO=$(cd "$SCRIPT_DIR/.." && pwd)
+SCRATCH="$REPO/e2e/.compat"
+
+# DSA_COMPOSE_PROJECT below names the container whose image we borrow.
+if [ -f "$REPO/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$REPO/.env"
+    set +a
+fi
+
+[ -d "$SCRATCH" ] || { echo "clean-compat: nothing to clean ($SCRATCH does not exist)"; exit 0; }
+
+# Running this as root would chown the scratch to root — the exact state it
+# exists to undo.
+[ "$(id -u)" -ne 0 ] || { echo "clean-compat: refusing to run as root" >&2; exit 1; }
+
+if rm -rf "$SCRATCH" 2>/dev/null; then
+    echo "clean-compat: removed $SCRATCH"
+    exit 0
+fi
+
+echo "clean-compat: root-owned files present; reclaiming via a container..." >&2
+IMG=$(docker inspect -f '{{.Config.Image}}' "${DSA_COMPOSE_PROJECT:-dsa-plus}-girder-1" 2>/dev/null || true)
+[ -n "$IMG" ] || IMG=alpine:3
+
+if docker run --rm -v "$SCRATCH":/scratch "$IMG" chown -R "$(id -u):$(id -g)" /scratch >/dev/null 2>&1; then
+    rm -rf "$SCRATCH"
+    echo "clean-compat: removed $SCRATCH"
+else
+    cat >&2 <<EOF
+clean-compat: could not reclaim ownership. Run this yourself when docker is up:
+    docker run --rm -v "$SCRATCH":/scratch $IMG chown -R $(id -u):$(id -g) /scratch
+    rm -rf "$SCRATCH"
+EOF
+    exit 1
+fi

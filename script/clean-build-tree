@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Remove a checkout's setuptools build intermediates.
+#
+# Provisioning runs `pip install .` inside the container against the
+# bind-mounted checkout. `build_py` copies current sources into `build/lib` but
+# never removes files that have since left the source tree, so a `build/` left
+# by an earlier branch makes `bdist_wheel` ship modules this checkout deleted.
+# The install then reports success while serving code that is not in the
+# worktree -- observed 2026-08-11 as 18 orphan modules plus a 146MB wheel
+# (web_client/node_modules baked into a stale build/lib; a clean build is
+# ~138KB).
+#
+# Relocating the build directory does NOT fix this -- it only moves where the
+# staleness accumulates. It has to be cleared.
+#
+# The tree is written by the container as root, so fall back to a container when
+# the plain removal is denied. Same borrow-the-image approach as clean-compat.
+#
+# Usage:
+#   script/clean-build-tree [checkout]     # defaults to this repo
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO=$(cd "$SCRIPT_DIR/.." && pwd)
+TARGET=${1:-$REPO}
+
+[ -f "$TARGET/setup.py" ] || { echo "not a girder_volview checkout: $TARGET" >&2; exit 1; }
+
+# Nothing to do is a success, so callers can run this unconditionally.
+STALE=()
+for path in "$TARGET/build" "$TARGET/girder_volview.egg-info"; do
+    [ -e "$path" ] && STALE+=("$path")
+done
+[ ${#STALE[@]} -gt 0 ] || exit 0
+
+if rm -rf "${STALE[@]}" 2>/dev/null; then
+    echo "    cleared stale build intermediates: ${STALE[*]}"
+    exit 0
+fi
+
+IMG=$(docker inspect -f '{{.Config.Image}}' "${DSA_COMPOSE_PROJECT:-dsa-plus}-girder-1" 2>/dev/null || true)
+[ -n "$IMG" ] || IMG=alpine:3
+if docker run --rm -v "$TARGET":/tree "$IMG" \
+        rm -rf /tree/build /tree/girder_volview.egg-info >/dev/null 2>&1; then
+    echo "    cleared root-owned build intermediates via $IMG"
+else
+    cat >&2 <<EOF
+    !! could not remove ${STALE[*]}
+       They are root-owned and docker was unavailable. A stale build/lib makes
+       the next install ship modules this checkout no longer has. Remove with:
+         sudo rm -rf ${STALE[*]}
+EOF
+    exit 1
+fi

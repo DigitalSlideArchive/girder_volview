@@ -1,0 +1,223 @@
+import { test, expect, Page } from '@playwright/test';
+import { setupFixture, requireHarnessState, Girder } from '../helpers/girder';
+import { requireFixture } from '../helpers/compat-state';
+import { gotoFolder, checkRowByItemId, openInVolView } from '../helpers/girder-ui';
+import { exampleTaskOption, expectTaskImages, submitOtsu } from '../helpers/jobs';
+import { expectJob } from '../helpers/limits';
+import {
+  waitForVolViewReady,
+  openModuleTab,
+  loadJobResults,
+  selectTask,
+  waitForInputBound,
+  submitTaskFromForm,
+  waitForJobComplete,
+  shot,
+} from '../helpers/volview';
+import {
+  paintStrokes,
+  readDatasetNames,
+  readSegmentNames,
+  segmentRows,
+} from '../helpers/annotations';
+
+// The jobs/processing plane in the browser. Setup submits an Otsu job over REST
+// (folder+user scoped to the same admin the tab runs as) and polls it to
+// success, so the launched tab meets a job that finished before it existed and
+// must reach it through the come-back path. The launch manifest carries the
+// folder config that makes the Jobs tab appear.
+
+async function launchChecked(driver: Page, g: Girder): Promise<Page> {
+  await gotoFolder(driver, g.folderId);
+  await checkRowByItemId(driver, g.itemId);
+  const launch = await openInVolView(driver);
+  await waitForVolViewReady(launch.popup);
+  return launch.popup;
+}
+
+test.describe('jobs come-back path (Load results)', () => {
+  // Submit the Otsu job once (REST) for the whole suite; the launched tab just
+  // loads its result.
+  test.beforeAll(async ({ request }) => {
+    const state0 = requireHarnessState();
+    const fixture = requireFixture(state0, 'jobs-comeback');
+    const { jobId, state } = await submitOtsu(
+      request,
+      state0.token,
+      fixture.folderId,
+      fixture.itemIds[0]
+    );
+    expect(state, `Otsu job ${jobId} did not succeed (state=${state})`).toBe('success');
+    // eslint-disable-next-line no-console
+    console.log(
+      `[e2e] Otsu job ${jobId} succeeded — folder ${fixture.folderId} ready for come-back test`
+    );
+  });
+
+  test('Load results merges the labelmap into the original image segmentation', async ({
+    page,
+    context,
+  }, info) => {
+    const g = await setupFixture(context, 'jobs-comeback');
+    const view = await launchChecked(page, g);
+
+    // The come-back job must NOT auto-apply: before the explicit load the scene
+    // holds no segment and the Load action is still available.
+    await openModuleTab(view, 'Annotations');
+    await expect(segmentRows(view), 'a history job auto-applied without "Load"').toHaveCount(0);
+
+    await loadJobResults(view);
+    await shot(view, info, 'jobs-tab-results');
+    // The button is consumed: loading = applying, exactly once.
+    await expect(
+      view.locator('.jobs-module').getByRole('button', { name: 'Load', exact: true })
+    ).toHaveCount(0);
+
+    // Intent-honoring apply: the labelmap's segments landed on the
+    // reconstructed parent image (no manual verb choice).
+    await openModuleTab(view, 'Annotations');
+    await expect(
+      segmentRows(view).first(),
+      'the Otsu labelmap produced no segment on the parent image'
+    ).toBeVisible();
+    await shot(view, info, 'come-back-apply');
+  });
+});
+
+// Drives the full visible UI path — task picker, form, provenance binding,
+// Submit, poll, result stream, live auto-apply — under the product's cookie
+// auth (the girder launcher's popup shares the session cookie; this girder
+// does not honor Authorization: Bearer). The come-back suite above covers the
+// explicit "Load" path only.
+test.describe('live submission + auto-apply (the submission gate)', () => {
+  test('submits from the UI and live-auto-applies the result', async ({
+    page,
+    context,
+  }, info) => {
+    const g = await setupFixture(context, 'jobs-live');
+    await expectTaskImages(context.request, g);
+    const task = await exampleTaskOption(context.request, g, 'Otsu');
+    const view = await launchChecked(page, g);
+
+    // Result-byte reads go through proxiable file URLs; count them to prove the
+    // result stream actually flowed.
+    const fileReads: string[] = [];
+    view.on('request', (r) => {
+      if (/\/file\/[^/]+\/proxiable\//.test(r.url())) fileReads.push(r.url());
+    });
+
+    await openModuleTab(view, 'Annotations');
+    await expect(segmentRows(view), 'the test must begin with no segment').toHaveCount(0);
+
+    // Drive the VISIBLE submission flow: task picker -> binding -> Submit.
+    await selectTask(view, task.title, task.occurrence);
+    await waitForInputBound(view);
+    await submitTaskFromForm(view);
+
+    // Poll to live completion (the store's own toast), then confirm LIVE
+    // auto-apply attached the result with NO manual "Load" click: the Otsu
+    // labelmap's segments land on the active dataset's segmentation.
+    await waitForJobComplete(view);
+    await openModuleTab(view, 'Annotations');
+    await expect(
+      segmentRows(view).first(),
+      'live auto-apply did not attach a segment'
+    ).toBeVisible();
+    await shot(view, info, 'live-auto-apply');
+
+    expect(fileReads.length, 'no proxiable result file read observed').toBeGreaterThan(0);
+  });
+
+  for (const { fixture, title, result } of [
+    { fixture: 'jobs-median', title: 'Median Filter', result: 'image' },
+    { fixture: 'jobs-threshold', title: 'Threshold Segmentation', result: 'segmentation' },
+  ] as const) {
+    test(`${title} applies its ${result} result`, async ({ page, context }, info) => {
+      const g = await setupFixture(context, fixture);
+      const task = await exampleTaskOption(context.request, g, title);
+      const view = await launchChecked(page, g);
+      const datasetsBefore = g.itemNames;
+      await expect.poll(() => readDatasetNames(view)).toEqual(datasetsBefore);
+
+      await openModuleTab(view, 'Annotations');
+      await expect(segmentRows(view)).toHaveCount(0);
+      await selectTask(view, task.title, task.occurrence);
+      await waitForInputBound(view);
+      if (result === 'segmentation') {
+        const thresholds = view.locator('.jobs-module input[type="number"]');
+        await expect(thresholds).toHaveCount(2);
+        await thresholds.nth(0).fill('1000');
+        await thresholds.nth(1).fill('2000');
+      }
+      await submitTaskFromForm(view);
+      await waitForJobComplete(view);
+
+      if (result === 'image') {
+        await expect.poll(() => readDatasetNames(view)).toHaveLength(datasetsBefore.length + 1);
+        expect(await readDatasetNames(view)).toEqual(expect.arrayContaining(datasetsBefore));
+      } else {
+        await expect.poll(() => readSegmentNames(view)).toEqual(['Threshold 1000-2000']);
+        expect(await readDatasetNames(view)).toEqual(datasetsBefore);
+      }
+      await shot(view, info, `${fixture}-applied`);
+    });
+  }
+
+  test('stages a painted mask and auto-applies the filtered image result', async ({
+    page,
+    context,
+  }, info) => {
+    const g = await setupFixture(context, 'jobs-staged');
+    const task = await exampleTaskOption(context.request, g, 'Masked Median Filter');
+    const view = await launchChecked(page, g);
+    const datasetsBefore = await readDatasetNames(view);
+
+    await paintStrokes(view);
+    expect(await readSegmentNames(view)).not.toEqual([]);
+
+    await selectTask(view, task.title, task.occurrence);
+    await expect(
+      view.locator('.jobs-module').getByText('Segmentation on active dataset').first(),
+      'the painted segmentation was not bound as the filter mask'
+    ).toBeVisible();
+    await submitTaskFromForm(view);
+    await waitForJobComplete(view);
+
+    const datasetsAfter = await readDatasetNames(view);
+    expect(
+      datasetsAfter.filter((name) => !datasetsBefore.includes(name)),
+      'the filtered image result was not added to the scene'
+    ).not.toEqual([]);
+    await shot(view, info, 'staged-mask-image-result');
+  });
+
+  test('shows a failed job error and deletes the terminal job', async ({ page, context }) => {
+    const g = await setupFixture(context, 'jobs-failure');
+    const task = await exampleTaskOption(context.request, g, 'Threshold Segmentation');
+    const view = await launchChecked(page, g);
+
+    await selectTask(view, task.title, task.occurrence);
+    await waitForInputBound(view);
+    const thresholds = view.locator('.jobs-module input[type="number"]');
+    await expect(thresholds).toHaveCount(2);
+    await thresholds.nth(0).fill('200');
+    await thresholds.nth(1).fill('100');
+    await submitTaskFromForm(view);
+
+    const row = view.locator('.job-row').filter({ hasText: 'Threshold Segmentation' }).first();
+    await row.getByRole('button', { name: 'Details', exact: true }).click();
+    await expectJob(row.locator('.job-subtitle'), 'the threshold job did not reach Failed').toContainText(
+      /^Failed\b/
+    );
+    await expect(row.getByRole('button', { name: 'Load', exact: true })).toHaveCount(0);
+    await expect(row.locator('.error-log'), 'the failed job exposes no error details').toContainText(
+      /Lower threshold/
+    );
+
+    await row.getByLabel('Delete job').click();
+    const dialog = view.getByText('Delete job?').locator('..');
+    await expect(dialog).toContainText('This cannot be undone');
+    await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
+    await expect(row, 'the deleted job remained in history').toHaveCount(0);
+  });
+});

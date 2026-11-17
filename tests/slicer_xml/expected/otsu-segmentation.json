@@ -1,0 +1,41 @@
+{
+  "specVersion": 1,
+  "id": "OtsuSegmentation",
+  "title": "Otsu Multi-level Segmentation",
+  "description": "Segment a volume into N intensity bins via Otsu's multi-thresholding. Emits a .seg.nrrd labelmap whose per-label names and RGB colors travel inside the file. Backed by ITK.",
+  "parameters": [
+    {
+      "kind": "sourceRef",
+      "id": "inputVolume",
+      "title": "Input Volume",
+      "help": "Input volume (DICOM, NIfTI, NRRD, MHA, etc.)",
+      "section": "IO",
+      "order": 0,
+      "required": true,
+      "accepts": [
+        "image"
+      ]
+    },
+    {
+      "kind": "int",
+      "id": "numberOfLevels",
+      "title": "Number of levels",
+      "help": "How many foreground labels to produce. Otsu picks N thresholds; you get N+1 bins (including background).",
+      "section": "Segmentation parameters",
+      "order": 1,
+      "min": 2,
+      "max": 8,
+      "step": 1,
+      "default": 4
+    }
+  ],
+  "outputs": [
+    {
+      "id": "outputLabelmap",
+      "title": "Output Labelmap",
+      "help": "Multi-label segmentation (.seg.nrrd) with embedded per-label names and colors.",
+      "type": "labelmap",
+      "format": ".seg.nrrd"
+    }
+  ]
+}

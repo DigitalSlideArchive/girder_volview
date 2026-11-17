@@ -1,0 +1,183 @@
+import { Page, expect } from '@playwright/test';
+import { CONFIG } from './config';
+import { isManifestGet, requireManifestJson } from './manifest';
+
+// Drivers for the real Girder web UI: the large_image item list's filter box
+// and checkboxes, and the plugin's Open-in-VolView affordances. All browser
+// scenarios launch through these product paths, so open.js always builds the
+// URL under test.
+
+// A VolView popup plus the valid manifest its boot fetched.
+export type VolViewLaunch = { popup: Page; manifest: Promise<any> };
+
+async function watchManifest(popup: Page): Promise<any> {
+  const response = await popup.waitForResponse(isManifestGet);
+  return requireManifestJson(response);
+}
+
+async function toLaunch(popupPromise: Promise<Page>): Promise<VolViewLaunch> {
+  const popup = await popupPromise;
+  // Attach BEFORE the app boots far enough to fetch the manifest — the popup
+  // event fires at window creation, megabytes of app JS before any fetch.
+  const manifest = watchManifest(popup);
+  await popup.waitForLoadState('domcontentloaded');
+  return { popup, manifest };
+}
+
+// Log the girder WEB CLIENT in through its UI. The planted girderToken cookie
+// authenticates VolView's cookie-accepting routes but not the web client, which
+// sends the Girder-Token header only after a UI login sets its currentToken.
+//
+// The client keeps that token in localStorage, so a page opened in a context
+// that already logged in comes up logged in. Once the client knows which, its
+// header shows either the Log In link or the user menu. Waiting for network idle
+// instead never returns for a logged-in client, which holds its
+// /notification/stream EventSource open.
+export async function loginViaUI(page: Page): Promise<void> {
+  await page.goto(`${CONFIG.baseURL}/#`, { waitUntil: 'domcontentloaded' });
+  const loginLink = page.locator('a.g-login');
+  const userMenu = page.locator('a.g-user-dropdown-link');
+  await expect(loginLink.or(userMenu)).toBeVisible();
+  if (await userMenu.isVisible()) {
+    return;
+  }
+  await loginLink.click();
+  await page.locator('#g-login').fill(CONFIG.user);
+  await page.locator('#g-password').fill(CONFIG.pass);
+  await page.locator('#g-login-button').click();
+  await expect(userMenu, 'girder UI login did not complete (no user menu)').toBeVisible();
+}
+
+// Entering the girder app from any other page logs in first. With Girder's
+// anonymous access disabled an anonymous client lists no folders or items, and
+// the planted girderToken cookie alone does not log it in.
+async function enterSpa(page: Page): Promise<void> {
+  if (!page.url().startsWith(`${CONFIG.baseURL}/#`)) {
+    await loginViaUI(page);
+  }
+}
+
+// Navigate to a folder IN-APP by setting the hash. Client state such as checked
+// rows survives the navigation (uncheckAllRows clears it), and setting the hash
+// the page is already on does not re-render the listing.
+export async function gotoFolder(page: Page, folderId: string): Promise<void> {
+  await enterSpa(page);
+  await page.evaluate((id) => {
+    window.location.hash = `#folder/${id}`;
+  }, folderId);
+  await expect(
+    page.locator(`a.g-download-folder[href$="/folder/${folderId}/download"]`)
+  ).toBeAttached();
+  await expect(
+    page.locator(
+      'li.g-folder-list-entry:visible, li.g-item-list-entry:visible, .g-empty-parent-message:visible'
+    ).first()
+  ).toBeVisible();
+}
+
+export async function checkRowByItemId(page: Page, itemId: string): Promise<void> {
+  const row = page.locator(`li.g-item-list-entry:has(a[href="#item/${itemId}"])`);
+  await expect(row, `no item-list row for item ${itemId}`).toBeVisible();
+  await row.locator('input.g-list-checkbox').check();
+}
+
+// Clear every checked row. gotoFolder changes the hash IN-APP, so checkbox
+// state survives navigation — a "bare folder-open" right after a checked
+// gesture would otherwise still carry the earlier selection.
+export async function uncheckAllRows(page: Page): Promise<void> {
+  const checked = () => page.locator('input.g-list-checkbox:checked');
+  // Bounded: each uncheck removes one from the set.
+  for (let guard = 0; guard < 50 && (await checked().count()) > 0; guard += 1) {
+    await checked().first().uncheck();
+  }
+  await expect(checked(), 'rows remained checked').toHaveCount(0);
+}
+
+// Grouped item lists render metadata columns as cell text; match a row by the
+// conjunction of distinctive cell values (e.g. PatientID + SeriesDescription).
+export function rowByTexts(page: Page, texts: string[]) {
+  return texts.reduce(
+    (rows, text) => rows.filter({ hasText: text }),
+    page.locator('li.g-item-list-entry')
+  );
+}
+
+export async function checkRowByTexts(page: Page, texts: string[]): Promise<void> {
+  const row = rowByTexts(page, texts).first();
+  await expect(row, `no item-list row containing ${JSON.stringify(texts)}`).toBeVisible();
+  await row.locator('input.g-list-checkbox').check();
+}
+
+// large_image's item-list filter box narrows the listing server-side.
+export async function fillFilterBox(page: Page, text: string): Promise<void> {
+  const box = page.locator('input.li-item-list-filter-input').first();
+  await expect(box, 'no large_image filter box — is .large_image_config.yaml applied?').toBeVisible();
+  await box.fill(text);
+  await box.press('Enter');
+}
+
+// Presence/absence of rows by cell-text conjunction. Count assertions are
+// deliberately avoided: the .large_image_config.yaml item renders as its own
+// (ungrouped) row, so absolute row counts are layout-dependent.
+export async function expectRow(page: Page, texts: string[]): Promise<void> {
+  await expect(rowByTexts(page, texts).first(), `expected a row containing ${JSON.stringify(texts)}`)
+    .toBeVisible();
+}
+
+export async function expectNoRow(page: Page, texts: string[]): Promise<void> {
+  await expect
+    .poll(async () => rowByTexts(page, texts).count(), {
+      message: `expected NO row containing ${JSON.stringify(texts)}`,
+    })
+    .toBe(0);
+}
+
+// Click the hierarchy header's Open-in-VolView button and hand back the popup.
+// With a session among several checked rows, or a checked folder, the app asks
+// to confirm resuming the newest session and opens VolView only after that;
+// otherwise it opens VolView right away. It does one or the other, so the first
+// of the two to happen decides.
+export async function openInVolView(page: Page): Promise<VolViewLaunch> {
+  const button = page.locator('.open-in-volview');
+  await expect(button, 'Open-in-VolView button not visible').toBeVisible();
+  const popupPromise = page.waitForEvent('popup');
+  await button.click();
+  const prompt = page.locator('.modal-content:has-text("Will open newest VolView session")');
+  const first = await Promise.race([
+    popupPromise.then(() => 'popup' as const),
+    prompt.waitFor({ state: 'visible' }).then(() => 'prompt' as const),
+  ]);
+  if (first === 'prompt') {
+    await page.locator('#g-confirm-button').click();
+  }
+  return toLaunch(popupPromise);
+}
+
+// Open from the item page (the single-item gesture).
+export async function openFromItemPage(page: Page, itemId: string): Promise<VolViewLaunch> {
+  await enterSpa(page);
+  await page.goto(`${CONFIG.baseURL}/#item/${itemId}`, { waitUntil: 'domcontentloaded' });
+  const button = page.locator('.open-in-volview');
+  await expect(button, 'no Open-in-VolView on the item page').toBeVisible();
+  const popupPromise = page.waitForEvent('popup');
+  await button.click();
+  return toLaunch(popupPromise);
+}
+
+// Drill through rows whose navigate is another item list (patient → study);
+// the LAST row's navigate opens VolView, so the final click yields the
+// popup.
+export async function drillRowNav(page: Page, rowTexts: string[]): Promise<VolViewLaunch> {
+  for (const text of rowTexts.slice(0, -1)) {
+    const row = rowByTexts(page, [text]).first();
+    await expect(row, `no drill-down row containing "${text}"`).toBeVisible();
+    await row.locator('a.g-item-list-link').first().click();
+    await expect(page.locator('li.g-item-list-entry').first()).toBeVisible();
+  }
+  const lastText = rowTexts[rowTexts.length - 1];
+  const last = rowByTexts(page, [lastText]).first();
+  await expect(last, `no final row containing "${lastText}"`).toBeVisible();
+  const popupPromise = page.waitForEvent('popup');
+  await last.locator('a.g-item-list-link').first().click();
+  return toLaunch(popupPromise);
+}

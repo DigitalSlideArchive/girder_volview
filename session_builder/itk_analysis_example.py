@@ -15,7 +15,8 @@ This example:
 4. Creates a polygon annotation tracing the body outline
 5. Uploads session back to Girder
 
-Supported formats: DICOM series, NIfTI (.nii, .nii.gz), NRRD, MHA/MHD, PNG, JPEG, TIFF, etc.
+Supported formats: DICOM series, NIfTI (.nii, .nii.gz), NRRD, MHA/MHD, PNG,
+JPEG, TIFF, etc.
 
 Usage:
     # For a single file item (NIfTI, PNG, etc.)
@@ -48,7 +49,6 @@ def read_image_as_3d(image_path: Path):
     """
 
     if image_path.is_dir():
-        # DICOM series
         names_generator = itk.GDCMSeriesFileNames.New()
         names_generator.SetDirectory(str(image_path))
         file_names = names_generator.GetInputFileNames()
@@ -66,13 +66,11 @@ def read_image_as_3d(image_path: Path):
     if dimension == 3:
         return image
 
-    # Convert 2D to 3D with single slice
     array_2d = itk.array_from_image(image)
     array_3d = array_2d[np.newaxis, :, :]
 
     image_3d = itk.image_from_array(array_3d.astype(np.int16))
 
-    # Preserve spacing and origin
     spacing_2d = list(image.GetSpacing())
     origin_2d = list(image.GetOrigin())
     image_3d.SetSpacing([spacing_2d[0], spacing_2d[1], 1.0])
@@ -94,14 +92,12 @@ def extract_body_contour(image) -> list[dict]:
 
     size = list(image.GetLargestPossibleRegion().GetSize())
 
-    # Otsu threshold to separate foreground from background
     otsu = itk.OtsuThresholdImageFilter.New(image)
     otsu.SetInsideValue(1)
     otsu.SetOutsideValue(0)
     otsu.Update()
     binary = otsu.GetOutput()
 
-    # Find connected components and keep the largest (the body)
     connected = itk.ConnectedComponentImageFilter.New(binary)
     connected.Update()
     labeled = connected.GetOutput()
@@ -126,7 +122,6 @@ def extract_body_contour(image) -> list[dict]:
 
     slice_2d = itk.image_from_array(slice_array)
 
-    # Find contour using contour extractor
     contour_filter = itk.ContourExtractor2DImageFilter.New(slice_2d)
     contour_filter.SetContourValue(0.5)
     contour_filter.Update()

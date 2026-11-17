@@ -27,13 +27,13 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "vite build && cp -r node_modules/volview-girder-client/VolView/ dist/VolView",
+    "build": "vite build && mkdir -p dist/VolView && cp -r node_modules/volview/dist dist/VolView/dist",
     "dev": "vite build --watch"
   },
   "author": "",
   "dependencies": {
     "@girder/core": "^5.0.0-a10",
-    "volview-girder-client": "^1.13.0"
+    "volview": "4.5.4-dev.4124e05449d49415a0aa502e1223de6274bebca0.0"
   },
   "devDependencies": {
     "pug": "^3.0.2",

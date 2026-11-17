@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<executable>
+  <category>Radiology</category>
+  <title>Annotations Measure</title>
+  <description>Read the vector annotations placed on a volume and emit derived annotations back onto it. The Slicer Execution Model has no vector element, so both sides are &lt;file&gt; params declaring the annotations extension.</description>
+  <version>0.1.0</version>
+  <license>Apache 2.0</license>
+  <contributor>VolView</contributor>
+  <parameters>
+    <label>IO</label>
+    <description>Input/output parameters.</description>
+    <image>
+      <name>inputVolume</name>
+      <label>Input Volume</label>
+      <channel>input</channel>
+      <description>Volume the annotations were placed on (DICOM, NIfTI, NRRD, MHA, etc.)</description>
+      <index>0</index>
+    </image>
+    <file fileExtensions=".annotations.json" reference="_girder_id_">
+      <name>inputAnnotations</name>
+      <label>Input Annotations</label>
+      <channel>input</channel>
+      <description>Rulers, rectangles and polygons placed on the input volume.</description>
+      <index>1</index>
+    </file>
+    <file fileExtensions=".annotations.json" reference="inputVolume">
+      <name>outputAnnotations</name>
+      <label>Output Annotations</label>
+      <channel>output</channel>
+      <description>Derived annotations to apply to the input volume.</description>
+      <index>2</index>
+    </file>
+  </parameters>
+  <parameters>
+    <label>Measurement parameters</label>
+    <description>Tuning.</description>
+    <double>
+      <name>margin</name>
+      <label>Margin</label>
+      <description>Margin in millimeters added around each derived annotation.</description>
+      <longflag>margin</longflag>
+      <default>0</default>
+      <constraints>
+        <minimum>0</minimum>
+        <maximum>50</maximum>
+        <step>0.5</step>
+      </constraints>
+    </double>
+  </parameters>
+  <parameters advanced="true">
+    <label>Girder API</label>
+    <description>Server access injected by slicer_cli_web; not shown to users.</description>
+    <string>
+      <name>girderApiUrl</name>
+      <longflag>girderApiUrl</longflag>
+      <label>Girder API URL</label>
+      <description>Girder API URL (injected by slicer_cli_web).</description>
+      <default></default>
+    </string>
+    <string>
+      <name>girderToken</name>
+      <longflag>girderToken</longflag>
+      <label>Girder Token</label>
+      <description>Girder token (injected by slicer_cli_web).</description>
+      <default></default>
+    </string>
+  </parameters>
+</executable>

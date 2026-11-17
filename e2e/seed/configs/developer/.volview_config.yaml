@@ -1,0 +1,33 @@
+# VolView app config for the ad hoc developer examples. The `.seg.nrrd`
+# naming convention associates each labelmap with the image checked beside it.
+
+disabledViewTypes:
+  - Oblique
+
+layouts:
+  Axial Coronal Sagittal:
+    direction: row
+    items:
+      - axial
+      - direction: column
+        items:
+          - coronal
+          - sagittal
+  Quad View:
+    direction: column
+    items:
+      - direction: row
+        items:
+          - axial
+          - coronal
+      - direction: row
+        items:
+          - sagittal
+          - volume
+
+# Deliberately written with VolView's earlier io key names, so the e2e proves a
+# site config that has not been rewritten still overrides the plugin defaults.
+io:
+  segmentGroupExtension: seg
+  segmentGroupSaveFormat: nrrd
+  layerExtension: layer

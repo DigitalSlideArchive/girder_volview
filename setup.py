@@ -5,6 +5,9 @@ with open("README.md") as readme_file:
 
 requirements = [
     "girder>=3",
+    # Job model + REST routes; imported unconditionally at plugin load
+    # (backend/routes.py), not merely transitively via girder-large-image.
+    "girder-jobs>=3",
     "girder-large-image>=1.30.1",
     "pyyaml",
     "pydicom>=2",
@@ -18,12 +21,13 @@ setup(
         "License :: OSI Approved :: Apache Software License",
         "Natural Language :: English",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.6",
-        "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
     ],
     description="Open items in VolView.",
     install_requires=requirements,
+    python_requires=">=3.10",
     license="Apache Software License 2.0",
     long_description=readme,
     long_description_content_type="text/markdown",

@@ -30,8 +30,6 @@ def make_session(api_url: str, api_key: str, folder_id: str):
     folder = gc.getFolder(folder_id)
     print(f"Found folder: {folder['name']}")
 
-    # Coordinates for CT_Electrodes sample CT scan:
-    # https://raw.githubusercontent.com/neurolabusc/niivue-images/main/CT_Electrodes.nii.gz
     annotations = [
         {
             "type": "rectangle",

@@ -9,11 +9,14 @@ VolView Session Builder - Generate session.volview.json files from Girder resour
 
 Usage:
     # Standalone with uv
-    uv run session_builder.py --api-url URL --api-key KEY --item-id ID [--annotations file.json] [--upload]
+    uv run session_builder.py --api-url URL --api-key KEY --item-id ID \
+        [--annotations file.json] [--upload]
 
     # As library (high-level)
     from session_builder import generate_session
-    manifest, json_bytes = generate_session(gc, parent_id, "folder", annotations, segment_groups)
+    manifest, json_bytes = generate_session(
+        gc, parent_id, "folder", annotations, segment_groups
+    )
 
     # As library (composable)
     from session_builder import (
@@ -23,7 +26,9 @@ Usage:
     manifest = create_manifest()
     manifest = add_dataset(manifest, get_folder_files(gc, folder_id), "volume")
     manifest = add_annotation(manifest, annotation)
-    manifest = add_segment_group(manifest, url, dataset_id="volume", label_names=label_names)
+    manifest = add_segment_group(
+        manifest, url, dataset_id="volume", label_names=label_names
+    )
     json_bytes = serialize_manifest(manifest)
     upload_session(gc, folder_id, "folder", json_bytes)
 
@@ -39,9 +44,10 @@ import json
 import uuid
 from pathlib import Path
 from typing import TypedDict
+from urllib.parse import quote
 from girder_client import GirderClient
 
-# Must match a version VolView can migrate to current. See migrations.ts link above.
+# Must match a version VolView can migrate to current.
 MANIFEST_VERSION = "6.2.0"
 
 SESSION_FILE_EXTENSIONS = (".volview.zip", ".volview.json")
@@ -246,7 +252,8 @@ def add_annotation(
         annotation: Annotation dict with format:
             {
                 "type": "rectangle" | "ruler" | "polygon",
-                "imageID": "volume",           # dataset ID (fallback if dataset_id not provided)
+                "imageID": "volume",           # dataset ID (fallback if
+                                                # dataset_id not provided)
                 "firstPoint": [x, y, z],       # rectangle/ruler
                 "secondPoint": [x, y, z],      # rectangle/ruler
                 "points": [[x,y,z], ...],      # polygon
@@ -257,7 +264,8 @@ def add_annotation(
                 "color": "#ff0000",
                 "metadata": {"key": "value"}
             }
-        dataset_id: Target dataset ID. Falls back to annotation["imageID"], then "volume".
+        dataset_id: Target dataset ID. Falls back to annotation["imageID"],
+            then "volume".
 
     Returns:
         New manifest dict with the annotation added.
@@ -370,9 +378,14 @@ def serialize_manifest(manifest: dict) -> bytes:
 
 
 def make_file_download_url(api_url: str, file_id: str, file_name: str) -> str:
-    """Build proxiable file download URL."""
+    """Build proxiable file download URL.
+
+    The name is percent-encoded (as the plugin's ``handles.mintFileHandle``
+    does) so reserved URL delimiters in legal Girder file names ('#', '?', '%')
+    cannot truncate or misparse the URI when VolView fetches it.
+    """
     api_url = api_url.rstrip("/")
-    return f"{api_url}/file/{file_id}/proxiable/{file_name}"
+    return f"{api_url}/file/{file_id}/proxiable/{quote(file_name, safe='')}"
 
 
 def get_item_files(gc: GirderClient, item_id: str) -> list[dict]:
@@ -589,7 +602,9 @@ def generate_session(
     # Filter out segment group URLs from main image sources to avoid loading them twice
     if segment_groups:
         segment_group_urls = {sg["url"] for sg in segment_groups}
-        data_sources = [ds for ds in data_sources if ds["url"] not in segment_group_urls]
+        data_sources = [
+            ds for ds in data_sources if ds["url"] not in segment_group_urls
+        ]
 
     dataset_id = "volume"
     manifest = create_manifest()

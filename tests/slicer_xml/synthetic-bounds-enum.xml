@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Synthetic Slicer Execution Model XML — NOT a real radiology CLI. Checked in
+  beside the golden fixtures so the translator conformance test can run
+  it like the real CLI XMLs: no current radiology CLI carries a <region>, so
+  this is the source that exercises `bounds` (from <region>), `enum` (from
+  <string-enumeration>), and the XML-derivable UI hints (section from the panel
+  <label>, order from document position, help from <description>). Its expected
+  translation is fixtures/task-spec/synthetic-bounds-enum.json (with task id
+  "SyntheticRegionEnum", supplied by the CLI identity, not the XML).
+-->
+<executable>
+  <category>Radiology</category>
+  <title>Synthetic Region and Enum</title>
+  <description>Synthetic CLI (not a real radiology tool) exercising a region-derived bounds field, an enum, and UI hints for the translator conformance test.</description>
+  <version>0.1.0</version>
+  <license>Apache 2.0</license>
+  <contributor>VolView</contributor>
+  <parameters>
+    <label>IO</label>
+    <description>Input/output parameters.</description>
+    <image>
+      <name>inputVolume</name>
+      <label>Input Volume</label>
+      <channel>input</channel>
+      <description>Input volume (DICOM, NIfTI, NRRD, MHA, etc.)</description>
+      <index>0</index>
+    </image>
+    <image type="label" fileExtensions=".nii.gz" reference="inputVolume">
+      <name>outputLabelmap</name>
+      <label>Output Labelmap</label>
+      <channel>output</channel>
+      <description>Segmentation output.</description>
+      <index>1</index>
+    </image>
+  </parameters>
+  <parameters>
+    <label>Region and options</label>
+    <description>Region of interest and algorithm options.</description>
+    <region>
+      <name>roi</name>
+      <label>Region of Interest</label>
+      <channel>input</channel>
+      <description>World-space box (LPS) to restrict processing.</description>
+      <longflag>roi</longflag>
+    </region>
+    <string-enumeration>
+      <name>method</name>
+      <label>Method</label>
+      <channel>input</channel>
+      <description>Which algorithm variant to run.</description>
+      <longflag>method</longflag>
+      <default>otsu</default>
+      <element>otsu</element>
+      <element>kmeans</element>
+      <element>manual</element>
+    </string-enumeration>
+    <integer-enumeration>
+      <name>iterations</name>
+      <label>Iterations</label>
+      <channel>input</channel>
+      <description>Number of refinement iterations.</description>
+      <longflag>iterations</longflag>
+      <default>2</default>
+      <element>1</element>
+      <element>2</element>
+      <element>4</element>
+    </integer-enumeration>
+  </parameters>
+</executable>

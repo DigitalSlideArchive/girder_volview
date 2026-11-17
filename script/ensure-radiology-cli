@@ -1,0 +1,315 @@
+#!/usr/bin/env bash
+# Build and register the radiology image, or the opt-in development examples.
+#
+# Usage:
+#   script/ensure-radiology-cli [--examples]
+#
+# Env overrides:
+#   GIRDER_URL       default http://localhost:8080
+#   DSA_ADMIN_USER   default admin
+#   DSA_ADMIN_PASS   default password
+#   CLI_IMAGE        default volview-radiology-cli:latest
+#   CLI_EXAMPLES_IMAGE  default volview-cli-examples:latest (--examples only)
+#   CLI_REPO         required; the volview-radiology-cli checkout (set in .env)
+#   DEMO_FOLDER      optional folder id used to verify the facade task list;
+#                    defaults to the authenticated user's Public folder
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO=$(cd "$SCRIPT_DIR/.." && pwd)
+
+# Load machine configuration for standalone invocation.
+if [ -f "$REPO/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$REPO/.env"
+    set +a
+fi
+
+GIRDER_URL=${GIRDER_URL:-http://localhost:8080}
+DSA_ADMIN_USER=${DSA_ADMIN_USER:-admin}
+DSA_ADMIN_PASS=${DSA_ADMIN_PASS:-password}
+CLI_IMAGE=${CLI_IMAGE:-volview-radiology-cli:latest}
+: "${CLI_REPO:?not set — copy .env.example to .env and point CLI_REPO at your volview-radiology-cli checkout}"
+DEMO_FOLDER=${DEMO_FOLDER:-}
+CLI_MANIFEST="$CLI_REPO/cli_list.json"
+BUILD_TARGET=()
+case "${1:-}" in
+    '') [ "$#" -eq 0 ] || exit 2 ;;
+    --examples)
+        [ "$#" -eq 1 ] || exit 2
+        if [ "${CLI_EXAMPLES_IMAGE:-volview-cli-examples:latest}" = "$CLI_IMAGE" ]; then
+            echo "CLI_IMAGE and CLI_EXAMPLES_IMAGE must be different" >&2
+            exit 1
+        fi
+        CLI_IMAGE=${CLI_EXAMPLES_IMAGE:-volview-cli-examples:latest}
+        CLI_MANIFEST="$CLI_REPO/examples/cli_list.json"
+        BUILD_TARGET=(--target examples)
+        ;;
+    *) echo "Usage: $0 [--examples]" >&2; exit 2 ;;
+esac
+
+# The image manifest is the sole task inventory.
+REQUIRED_TASK_TEXT=$(python3 - "$CLI_MANIFEST" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf8") as stream:
+    manifest = json.load(stream)
+if not isinstance(manifest, dict) or not manifest:
+    raise SystemExit("cli_list.json must contain at least one task")
+for name in sorted(manifest):
+    print(name)
+PY
+)
+mapfile -t REQUIRED_TASKS <<< "$REQUIRED_TASK_TEXT"
+
+if docker image inspect "$CLI_IMAGE" >/dev/null 2>&1; then
+    echo "==> [1/4] image $CLI_IMAGE present"
+else
+    echo "==> [1/4] image $CLI_IMAGE missing — building from $CLI_REPO"
+    if [ ! -f "$CLI_REPO/Dockerfile" ]; then
+        echo "    !! no Dockerfile at $CLI_REPO — cannot build $CLI_IMAGE" >&2
+        exit 1
+    fi
+    (cd "$CLI_REPO" && docker build "${BUILD_TARGET[@]}" -t "$CLI_IMAGE" .)
+fi
+
+docker run --rm "$CLI_IMAGE" --list_cli | REQUIRED="${REQUIRED_TASKS[*]}" \
+    python3 -c 'import json,os,sys
+listed = set(json.load(sys.stdin))
+required = set(os.environ["REQUIRED"].split())
+if listed != required:
+    raise SystemExit(f"Image tasks {sorted(listed)} differ from manifest {sorted(required)}. Rebuild the image.")'
+
+echo "==> [2/4] waiting for Girder at $GIRDER_URL"
+girder_up=
+for _ in $(seq 1 150); do
+    if curl -sf -o /dev/null "$GIRDER_URL/api/v1/system/version"; then
+        girder_up=1
+        break
+    fi
+    sleep 2
+done
+if [ -z "$girder_up" ]; then
+    echo "    !! Girder never came up at $GIRDER_URL" >&2
+    exit 1
+fi
+
+echo "==> [3/4] registering $CLI_IMAGE with slicer_cli_web"
+# Keep both secrets off the command line (argv is visible via `ps`/`/proc` to
+# any local user). Pass a ready-made `Authorization: Basic` header through a
+# 0600 header file. curl's config `user` directive re-parses the value
+# (a quote, backslash, or surrounding whitespace in the password is stripped or
+# truncates it), while the explicit header preserves the password bytes.
+AUTH_HEADER=$(mktemp)
+trap 'rm -f "$AUTH_HEADER" "${TOKEN_HEADER:-}"' EXIT
+printf 'Authorization: Basic %s\n' \
+    "$(printf '%s:%s' "$DSA_ADMIN_USER" "$DSA_ADMIN_PASS" | base64 | tr -d '\n')" \
+    > "$AUTH_HEADER"
+
+# Tolerant parse: print the token, or nothing (exit 0) on any auth/JSON error,
+# so the `-z "$TOKEN"` guard below fires with a friendly message instead of a
+# raw Python traceback aborting under `set -euo pipefail`.
+TOKEN=$(curl -s -H @"$AUTH_HEADER" "$GIRDER_URL/api/v1/user/authentication" \
+    | python3 -c "import json,sys
+try:
+    print(json.load(sys.stdin)['authToken']['token'])
+except Exception:
+    pass")
+if [ -z "$TOKEN" ]; then
+    echo "    !! failed to authenticate as $DSA_ADMIN_USER at $GIRDER_URL" >&2
+    exit 1
+fi
+
+# Hold the session token in its own 0600 header file and pass it via `-H @file`,
+# so the token never reaches argv either. Both header files cleaned up on exit.
+TOKEN_HEADER=$(mktemp)
+printf 'Girder-Token: %s\n' "$TOKEN" > "$TOKEN_HEADER"
+
+# A database wipe changes every Mongo object id, so the verification scope
+# cannot be a checked-in folder id. Use an explicit override when supplied;
+# otherwise resolve the freshly provisioned administrator's Public folder.
+if [ -z "$DEMO_FOLDER" ]; then
+    USER_ID=$(curl -sf -H @"$TOKEN_HEADER" "$GIRDER_URL/api/v1/user/me" \
+        | python3 -c "import json,sys; print(json.load(sys.stdin)['_id'])") || USER_ID=
+    if [ -n "$USER_ID" ]; then
+        DEMO_FOLDER=$(curl -sf -G -H @"$TOKEN_HEADER" \
+            --data-urlencode "parentType=user" \
+            --data-urlencode "parentId=$USER_ID" \
+            --data-urlencode "name=Public" \
+            --data-urlencode "limit=1" \
+            "$GIRDER_URL/api/v1/folder" \
+            | python3 -c "import json,sys; rows=json.load(sys.stdin); print(rows[0]['_id'] if rows else '')") \
+            || DEMO_FOLDER=
+    fi
+    if [ -z "$DEMO_FOLDER" ]; then
+        echo "    !! could not resolve a folder for task-list verification" >&2
+        exit 1
+    fi
+fi
+
+# -f so an HTTP error body (e.g. access denied) becomes a non-zero exit instead
+# of garbage flowing into the PUT URL below.
+TASK_FOLDER=$(curl -sf -H @"$TOKEN_HEADER" \
+    "$GIRDER_URL/api/v1/system/setting?key=slicer_cli_web.task_folder" | tr -d '"') || TASK_FOLDER=
+if [ -z "$TASK_FOLDER" ] || [ "$TASK_FOLDER" = "null" ]; then
+    echo "    !! slicer_cli_web.task_folder is unset — slicer_cli_web not provisioned?" >&2
+    exit 1
+fi
+
+# slicer_cli_web stores the image's first RepoDigest on each task item as
+# meta.digest and runs jobs by it. Any of the local image's RepoDigests names the
+# same image, and their order changes when the image gains another name, so a
+# task is current when its digest is one of them. An image without a RepoDigest,
+# such as a local build on Docker's classic image store, is registered without
+# meta.digest and runs by tag, so only its stored task XML can go stale. When
+# every required task is current there is nothing to import.
+LOCAL_DIGESTS=$(docker image inspect "$CLI_IMAGE" --format '{{join .RepoDigests " "}}')
+
+# Print how the registered tasks match and succeed when every required task is
+# current.
+registered_from_local_image() {
+    API="$GIRDER_URL/api/v1" TOKEN_FILE="$TOKEN_HEADER" TASK_FOLDER="$TASK_FOLDER" \
+        CLI_IMAGE="$CLI_IMAGE" LOCAL_DIGESTS="$LOCAL_DIGESTS" REQUIRED="${REQUIRED_TASKS[*]}" \
+        python3 - <<'PY'
+import json
+import os
+import subprocess
+import sys
+import urllib.parse
+import urllib.request
+
+with open(os.environ["TOKEN_FILE"], encoding="utf8") as stream:
+    header, token = stream.read().split(":", 1)
+
+
+def get(path, **params):
+    query = "?" + urllib.parse.urlencode(params) if params else ""
+    request = urllib.request.Request(
+        os.environ["API"] + path + query, headers={header.strip(): token.strip()}
+    )
+    with urllib.request.urlopen(request) as response:
+        return json.load(response)
+
+
+def image_xml(task):
+    # The same `docker run <image> <task> --xml` that slicer_cli_web's import
+    # runs, trimmed the same way, so an unchanged spec compares equal.
+    result = subprocess.run(
+        ["docker", "run", "--rm", os.environ["CLI_IMAGE"], task, "--xml"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    text = result.stdout.decode("utf8", "replace")
+    if result.returncode or "<" not in text:
+        return None
+    return "<" + text.split("<", 1)[1].rsplit(">", 1)[0] + ">"
+
+
+try:
+    metas = {
+        cli["name"]: get(f"/item/{cli['_id']}").get("meta", {})
+        for cli in get("/slicer_cli_web/cli", folder=os.environ["TASK_FOLDER"])
+        if cli.get("image") == os.environ["CLI_IMAGE"]
+    }
+except Exception as exc:
+    print(f"    could not read the registered tasks ({exc})", file=sys.stderr)
+    sys.exit(1)
+required = os.environ["REQUIRED"].split()
+if set(metas) != set(required):
+    sys.exit(1)
+local_digests = set(os.environ["LOCAL_DIGESTS"].split())
+if local_digests:
+    stored = {metas[task].get("digest") for task in required}
+    if not stored <= local_digests:
+        sys.exit(1)
+    print("from " + ", ".join(sorted(digest.split("@")[-1] for digest in stored)))
+    sys.exit(0)
+if any("digest" in metas[task] or metas[task].get("xml") != image_xml(task) for task in required):
+    sys.exit(1)
+print("with the task specs this image prints")
+PY
+}
+
+# Print a field of the job JSON on stdin, or nothing if it is unreadable.
+job_field() {
+    python3 -c "import json,sys
+try:
+    value = json.load(sys.stdin)[sys.argv[1]]
+    print(''.join(value) if isinstance(value, list) else value)
+except Exception:
+    pass" "$1"
+}
+
+if MATCH=$(registered_from_local_image); then
+    echo "    every task is already registered $MATCH; nothing to import"
+else
+    JOB_ID=$(curl -sf -X PUT -H @"$TOKEN_HEADER" -H "Content-Length: 0" \
+        "$GIRDER_URL/api/v1/slicer_cli_web/docker_image?name=$CLI_IMAGE&pull=false&folder=$TASK_FOLDER" \
+        | job_field _id) || JOB_ID=
+    if ! [[ $JOB_ID =~ ^[0-9a-f]{24}$ ]]; then
+        echo "    !! slicer_cli_web did not queue an import job for $CLI_IMAGE" >&2
+        exit 1
+    fi
+    # The PUT only queues the import job. Tasks with the right names can already
+    # exist from an earlier import, so the job's own status is the only proof
+    # this image was registered. girder_jobs: 3 success, 4 error, 5 canceled.
+    # A failed poll keeps the last job state that was read.
+    job_json=
+    status=
+    for _ in $(seq 1 150); do
+        if polled=$(curl -sf -H @"$TOKEN_HEADER" "$GIRDER_URL/api/v1/job/$JOB_ID"); then
+            job_json=$polled
+            status=$(printf '%s' "$job_json" | job_field status)
+            case $status in 3|4|5) break ;; esac
+        fi
+        sleep 2
+    done
+    if [ "$status" != 3 ]; then
+        job_log=$(printf '%s' "$job_json" | job_field log)
+        case $status in
+            4|5) echo "    !! slicer_cli_web's import job $JOB_ID for $CLI_IMAGE did not" \
+                      "succeed (status $status). Its log:" >&2 ;;
+            *) echo "    !! slicer_cli_web's import job $JOB_ID for $CLI_IMAGE had not" \
+                    "finished after 300 s (status ${status:-unknown}). Its log so far:" >&2 ;;
+        esac
+        printf '%s\n' "$job_log" | sed 's/^/       /' >&2
+        if [[ $job_log == *'(user None)'* ]]; then
+            echo "    !! Upgrade slicer_cli_web to include" \
+                 "https://github.com/girder/slicer_cli_web/pull/261" \
+                 "for authenticated image imports." >&2
+        fi
+        exit 1
+    fi
+    echo "    import job $JOB_ID succeeded"
+fi
+
+echo "==> [4/4] verifying $CLI_IMAGE tasks are registered"
+TASKS_URL="$GIRDER_URL/api/v1/folder/$DEMO_FOLDER/volview_processing/tasks"
+TASKS_JSON=$(curl -sf -H @"$TOKEN_HEADER" "$TASKS_URL") || {
+    echo "    !! could not read $TASKS_URL" \
+         "(check DEMO_FOLDER=$DEMO_FOLDER exists and is accessible)" >&2
+    exit 1
+}
+# Display titles can differ from executable names; match the registered item IDs.
+CLI_TASKS_JSON=$(curl -sf -G -H @"$TOKEN_HEADER" \
+    --data-urlencode "folder=$TASK_FOLDER" "$GIRDER_URL/api/v1/slicer_cli_web/cli") || {
+    echo "    !! could not read the registered CLI items" >&2
+    exit 1
+}
+REQUIRED="${REQUIRED_TASKS[*]}" CLI_IMAGE="$CLI_IMAGE" CLI_TASKS="$CLI_TASKS_JSON" \
+    python3 -c "import json,os,sys
+registered = {
+    cli['name']: cli['_id'] for cli in json.loads(os.environ['CLI_TASKS'])
+    if cli.get('image') == os.environ['CLI_IMAGE']
+}
+listed = {task['id'] for task in json.load(sys.stdin)}
+required = set(os.environ['REQUIRED'].split())
+if set(registered) != required or not set(registered.values()) <= listed:
+    raise SystemExit('Registered tasks do not match the image manifest or are missing from VolView')" \
+    <<< "$TASKS_JSON"
+
+echo "==> Done: $CLI_IMAGE tasks registered and verified"

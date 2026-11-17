@@ -1,0 +1,42 @@
+{
+  "specVersion": 1,
+  "id": "LabelmapMajorityVote",
+  "title": "Labelmap Majority Vote",
+  "description": "Combine several labelmap segmentations of the same volume into one via majority voting. Backed by ITK.",
+  "parameters": [
+    {
+      "kind": "sourceRef",
+      "id": "inputLabelmaps",
+      "title": "Input Labelmaps",
+      "help": "Labelmaps to combine (any nonzero label).",
+      "section": "IO",
+      "order": 0,
+      "required": true,
+      "accepts": [
+        "labelmap"
+      ],
+      "multiple": true
+    },
+    {
+      "kind": "int",
+      "id": "minimumVotes",
+      "title": "Minimum votes",
+      "help": "Minimum number of agreeing inputs for a label to survive.",
+      "section": "Vote parameters",
+      "order": 1,
+      "min": 1,
+      "max": 10,
+      "step": 1,
+      "default": 2
+    }
+  ],
+  "outputs": [
+    {
+      "id": "outputLabelmap",
+      "title": "Output Labelmap",
+      "help": "Majority-vote combined labelmap (.seg.nrrd).",
+      "type": "labelmap",
+      "format": ".seg.nrrd"
+    }
+  ]
+}

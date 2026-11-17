@@ -153,7 +153,8 @@ def segment_and_upload(
         print("\nExtracting segment names from NIfTI header...")
         label_names = extract_label_names(seg_path)
         print(
-            f"Found {len(label_names)} segments: {', '.join(list(label_names.values())[:5])}..."
+            f"Found {len(label_names)} segments: "
+            f"{', '.join(list(label_names.values())[:5])}..."
         )
 
         seg_bytes = seg_path.read_bytes()

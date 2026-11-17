@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<executable>
+  <category>Radiology</category>
+  <title>Labelmap Majority Vote</title>
+  <description>Combine several labelmap segmentations of the same volume into one via majority voting. Backed by ITK.</description>
+  <version>0.1.0</version>
+  <license>Apache 2.0</license>
+  <contributor>VolView</contributor>
+  <parameters>
+    <label>IO</label>
+    <description>Input/output parameters.</description>
+    <image type="label" reference="_girder_id_" multiple="true">
+      <name>inputLabelmaps</name>
+      <label>Input Labelmaps</label>
+      <channel>input</channel>
+      <description>Labelmaps to combine (any nonzero label).</description>
+      <index>0</index>
+    </image>
+    <image type="label" fileExtensions=".seg.nrrd" reference="inputLabelmaps">
+      <name>outputLabelmap</name>
+      <label>Output Labelmap</label>
+      <channel>output</channel>
+      <description>Majority-vote combined labelmap (.seg.nrrd).</description>
+      <index>1</index>
+    </image>
+  </parameters>
+  <parameters>
+    <label>Vote parameters</label>
+    <description>Tuning.</description>
+    <integer>
+      <name>minimumVotes</name>
+      <label>Minimum votes</label>
+      <description>Minimum number of agreeing inputs for a label to survive.</description>
+      <longflag>minVotes</longflag>
+      <default>2</default>
+      <constraints>
+        <minimum>1</minimum>
+        <maximum>10</maximum>
+        <step>1</step>
+      </constraints>
+    </integer>
+  </parameters>
+  <parameters advanced="true">
+    <label>Girder API</label>
+    <description>Server access injected by slicer_cli_web for v1 b3 feeding; not shown to users.</description>
+    <string>
+      <name>girderApiUrl</name>
+      <longflag>girderApiUrl</longflag>
+      <label>Girder API URL</label>
+      <description>Girder API URL (injected by slicer_cli_web).</description>
+      <default></default>
+    </string>
+    <string>
+      <name>girderToken</name>
+      <longflag>girderToken</longflag>
+      <label>Girder Token</label>
+      <description>Girder token (injected by slicer_cli_web).</description>
+      <default></default>
+    </string>
+  </parameters>
+</executable>

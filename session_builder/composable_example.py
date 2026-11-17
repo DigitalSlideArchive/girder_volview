@@ -39,16 +39,14 @@ def make_session(api_url: str, api_key: str, item_id: str):
     item = gc.getItem(item_id)
     print(f"Found item: {item['name']}")
 
-    # Get data sources from item
     data_sources = get_item_files(gc, item_id)
     print(f"Found {len(data_sources)} files")
 
-    # Build manifest step by step
     dataset_id = "volume"
     manifest = create_manifest()
     manifest = add_dataset(manifest, data_sources, dataset_id)
 
-    # Add annotation (coordinates for CT_Electrodes sample CT scan)
+    # Coordinates are for the CT_Electrodes sample CT scan.
     manifest = add_annotation(
         manifest,
         {
@@ -64,7 +62,6 @@ def make_session(api_url: str, api_key: str, item_id: str):
         dataset_id=dataset_id,
     )
 
-    # Serialize and upload
     json_bytes = serialize_manifest(manifest)
     upload_session(gc, item_id, "item", json_bytes)
 
