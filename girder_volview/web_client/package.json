@@ -28,7 +28,8 @@
   },
   "scripts": {
     "build": "vite build && mkdir -p dist/VolView && cp -r node_modules/volview/dist dist/VolView/dist",
-    "dev": "vite build --watch"
+    "dev": "vite build --watch",
+    "lint": "eslint . && pug-lint . && stylint"
   },
   "author": "",
   "dependencies": {
@@ -36,9 +37,163 @@
     "volview": "4.5.4-dev.4124e05449d49415a0aa502e1223de6274bebca0.0"
   },
   "devDependencies": {
+    "@girder/eslint-config": "3.2.15",
+    "@girder/pug-lint-config": "3.2.15",
+    "eslint": "8.57.1",
+    "eslint-config-semistandard": "17.0.0",
+    "eslint-config-standard": "17.1.0",
+    "eslint-plugin-backbone": "2.1.1",
+    "eslint-plugin-import": "2.29.1",
+    "eslint-plugin-n": "15.7.0",
+    "eslint-plugin-promise": "6.1.1",
     "pug": "^3.0.2",
+    "pug-lint": "2.7.0",
+    "stylint": "2.0.0",
     "stylus": "^0.59.0",
     "vite": "^4.3.9",
     "vite-plugin-istanbul": "^4.1.0"
+  },
+  "eslintConfig": {
+    "extends": "@girder",
+    "root": true,
+    "globals": {
+      "$": "readonly",
+      "girder": "readonly"
+    },
+    "rules": {
+      "comma-dangle": [
+        "error",
+        "always-multiline"
+      ],
+      "import/exports-last": "off",
+      "quotes": [
+        "error",
+        "double",
+        {
+          "allowTemplateLiterals": true,
+          "avoidEscape": true
+        }
+      ]
+    },
+    "ignorePatterns": [
+      "dist/"
+    ]
+  },
+  "pugLintConfig": {
+    "extends": "@girder/pug-lint-config"
+  },
+  "stylintrc": {
+    "blocks": false,
+    "brackets": {
+      "expect": "never",
+      "error": true
+    },
+    "colons": {
+      "expect": "never",
+      "error": true
+    },
+    "colors": false,
+    "commaSpace": {
+      "expect": "always",
+      "error": true
+    },
+    "commentSpace": {
+      "expect": "always",
+      "error": true
+    },
+    "cssLiteral": {
+      "expect": "never",
+      "error": true
+    },
+    "depthLimit": false,
+    "duplicates": {
+      "expect": true,
+      "error": true
+    },
+    "efficient": {
+      "expect": "always",
+      "error": true
+    },
+    "exclude": [
+      "node_modules/**"
+    ],
+    "extendPref": "@extend",
+    "globalDupe": false,
+    "groupOutputByFile": {
+      "expect": true,
+      "error": true
+    },
+    "indentPref": {
+      "expect": 2,
+      "error": true
+    },
+    "leadingZero": {
+      "expect": "always",
+      "error": true
+    },
+    "maxErrors": false,
+    "maxWarnings": false,
+    "mixed": false,
+    "mixins": [],
+    "namingConvention": false,
+    "namingConventionStrict": false,
+    "none": {
+      "expect": "always",
+      "error": true
+    },
+    "noImportant": false,
+    "parenSpace": {
+      "expect": "never",
+      "error": true
+    },
+    "placeholders": false,
+    "prefixVarsWithDollar": {
+      "expect": "always",
+      "error": true
+    },
+    "quotePref": {
+      "expect": "double",
+      "error": true
+    },
+    "reporterOptions": {
+      "columns": [
+        "lineData",
+        "severity",
+        "description",
+        "rule"
+      ],
+      "columnSplitter": "  ",
+      "showHeaders": false,
+      "truncate": true
+    },
+    "semicolons": {
+      "expect": "never",
+      "error": true
+    },
+    "sortOrder": false,
+    "stackedProperties": {
+      "expect": "never",
+      "error": true
+    },
+    "trailingWhitespace": {
+      "expect": "never",
+      "error": true
+    },
+    "universal": {
+      "expect": "never",
+      "error": true
+    },
+    "valid": {
+      "expect": true,
+      "error": true
+    },
+    "zeroUnits": {
+      "expect": "never",
+      "error": true
+    },
+    "zIndexNormalize": {
+      "expect": 5,
+      "error": true
+    }
   }
 }

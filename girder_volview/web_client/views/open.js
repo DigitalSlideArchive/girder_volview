@@ -16,7 +16,7 @@ export function addButton($el, parentSelector) {
     return button;
 }
 
-const volViewPath = '/volview';
+const volViewPath = "/volview";
 
 // Launch URL legs: `urls=` loads exactly what was picked, except a bare
 // folder-open, which resumes the folder's newest session.volview.zip. `save=`
