@@ -67,6 +67,19 @@ case "$PHASE" in all|capture|verify|current) ;; *) echo "--phase must be all|cap
 
 die() { echo "compat: $*" >&2; exit 1; }
 
+# Playwright failures are recorded and the next phase still runs, so one
+# failing phase does not hide the others. Deploy and setup failures still abort.
+PHASE_RESULTS=()
+FAILED_PHASES=()
+record_phase() {  # $1=phase  $2=playwright exit status
+    if [[ $2 -eq 0 ]]; then
+        PHASE_RESULTS+=("$1: passed")
+    else
+        PHASE_RESULTS+=("$1: FAILED (playwright exit $2)")
+        FAILED_PHASES+=("$1")
+    fi
+}
+
 # Sourced before any path resolution, because VOLVIEW_ROOT lives here.
 if [[ -f $REPO/.env ]]; then
     set -a
@@ -121,6 +134,7 @@ BRANCH_VOLVIEW_ARG=${COMPAT_BRANCH_VOLVIEW:-$(basename "$REPO")}
 BRANCH_VOLVIEW=$(resolve_volview "$BRANCH_VOLVIEW_ARG")
 BRANCH_SHA=$(git -C "$REPO" rev-parse HEAD)
 
+BRANCH_VOLVIEW_SHA=
 if [[ $PHASE == all || $PHASE == verify || $PHASE == current ]]; then
     [[ -f $BRANCH_VOLVIEW/package.json ]] || die \
 "no VolView checkout at $BRANCH_VOLVIEW.
@@ -132,6 +146,10 @@ if [[ $PHASE == all || $PHASE == verify || $PHASE == current ]]; then
     BRANCH_VOLVIEW_SHA=${COMPAT_BRANCH_VOLVIEW_SHA:-$BRANCH_VOLVIEW_HEAD}
     [[ $BRANCH_VOLVIEW_SHA =~ ^[0-9a-f]{40}$ ]] || die "invalid branch VolView sha: $BRANCH_VOLVIEW_SHA"
     require_volview_sha "$BRANCH_VOLVIEW" "$BRANCH_VOLVIEW_SHA" branch
+elif [[ -n ${COMPAT_BRANCH_VOLVIEW_SHA:-} ]]; then
+    BRANCH_VOLVIEW_SHA=$COMPAT_BRANCH_VOLVIEW_SHA
+elif [[ -f $BRANCH_VOLVIEW/package.json ]]; then
+    BRANCH_VOLVIEW_SHA=$(git -C "$BRANCH_VOLVIEW" rev-parse HEAD 2>/dev/null || true)
 fi
 
 # -------------------------------------------------------------- baseline side
@@ -155,11 +173,17 @@ if [[ $SKIP_DEPLOY -eq 0 && ($PHASE == all || $PHASE == capture) ]]; then
     require_volview_sha "$BASELINE_VOLVIEW" "$BASELINE_VOLVIEW_SHA" baseline
 fi
 
-# Reject comparisons where the integration baseline and branch are identical.
-if [[ $BASELINE_SHA == "$BRANCH_SHA" && ${COMPAT_ALLOW_VACUOUS:-0} != 1 ]]; then
-    die "the baseline and this worktree are both ${BRANCH_SHA:0:9} — the run would compare a commit
-   against itself and pass without proving anything. Run this from the worktree
-   whose changes you want checked, or set COMPAT_ALLOW_VACUOUS=1 to override."
+# Reject comparisons where the baseline and branch pairs are identical. The same
+# backend with a different client is a real comparison: it checks a client
+# change against the integration backend. An unknown branch client (a
+# capture-only run without its checkout) counts as matching.
+if [[ $BASELINE_SHA == "$BRANCH_SHA" \
+      && ( -z $BRANCH_VOLVIEW_SHA || $BASELINE_VOLVIEW_SHA == "$BRANCH_VOLVIEW_SHA" ) \
+      && ${COMPAT_ALLOW_VACUOUS:-0} != 1 ]]; then
+    die "the baseline and this worktree are both girder_volview ${BRANCH_SHA:0:9} with VolView ${BASELINE_VOLVIEW_SHA:0:9}.
+   The run would compare a pair against itself and pass without proving anything.
+   Run this from the worktree whose changes you want checked, pair it with a
+   different VolView client, or set COMPAT_ALLOW_VACUOUS=1 to override."
 fi
 
 echo "compat: baseline ${BASELINE_SHA:0:9} at $BASELINE_DIR (VolView: ${BASELINE_VOLVIEW_SHA:0:9}${BASELINE_VOLVIEW:+ at $BASELINE_VOLVIEW})"
@@ -185,12 +209,14 @@ run_capture() {
     fi
     "$REPO/script/ensure-radiology-cli" --examples
     echo "compat: running capture specs against the baseline (${BASELINE_SHA:0:9})..."
+    local status=0
     (
         cd "$E2E"
         COMPAT_PHASE=capture E2E_EXPECT_GIRDER_SHA=$BASELINE_SHA \
             E2E_EXPECT_VOLVIEW_SHA=$BASELINE_VOLVIEW_SHA \
             npx playwright test --config playwright.config.ts --project capture
-    )
+    ) || status=$?
+    record_phase capture "$status"
 }
 
 run_verify() {
@@ -200,6 +226,7 @@ run_verify() {
     fi
     "$REPO/script/ensure-radiology-cli" --examples
     echo "compat: running verify specs against this worktree (${BRANCH_SHA:0:9})..."
+    local status=0
     (
         cd "$E2E"
         if [[ $KEEP -eq 1 ]]; then export COMPAT_KEEP=1; fi
@@ -207,7 +234,8 @@ run_verify() {
         COMPAT_PHASE=verify E2E_EXPECT_GIRDER_SHA=$BRANCH_SHA \
             E2E_EXPECT_VOLVIEW_SHA=$BRANCH_VOLVIEW_SHA \
             npx playwright test --config playwright.config.ts --project verify
-    )
+    ) || status=$?
+    record_phase verify "$status"
 }
 
 run_current() {
@@ -215,18 +243,25 @@ run_current() {
         "$REPO/script/ensure-radiology-cli" --examples
     fi
     echo "compat: running current-version lifecycle and job scenarios (${BRANCH_SHA:0:9})..."
+    local status=0
     (
         cd "$E2E"
         if [[ $KEEP -eq 1 ]]; then export COMPAT_KEEP=1; fi
         COMPAT_PHASE=current COMPAT_CLEANUP=1 E2E_EXPECT_GIRDER_SHA=$BRANCH_SHA \
             E2E_EXPECT_VOLVIEW_SHA=$BRANCH_VOLVIEW_SHA \
             npx playwright test --config playwright.config.ts --project current
-    )
+    ) || status=$?
+    record_phase current "$status"
 }
 
 if [[ $PHASE == all || $PHASE == capture ]]; then run_capture; fi
 if [[ $PHASE == all || $PHASE == verify ]]; then run_verify; fi
 if [[ $PHASE == all || $PHASE == current ]]; then run_current; fi
 
-echo "compat: done — source sessions verified and current lifecycles exercised on ${BRANCH_SHA:0:9}."
-echo "compat: report: cd e2e && npm run report"
+echo "compat: summary"
+printf 'compat:   %s\n' "${PHASE_RESULTS[@]}"
+echo "compat: report of the last phase: cd e2e && npm run report"
+if [[ ${#FAILED_PHASES[@]} -gt 0 ]]; then
+    die "failed phases: ${FAILED_PHASES[*]}"
+fi
+echo "compat: done; every selected phase passed on ${BRANCH_SHA:0:9}."
