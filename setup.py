@@ -37,7 +37,14 @@ setup(
     packages=find_packages(exclude=["test", "test.*"]),
     url="https://github.com/PaulHax/girder_volview",
     zip_safe=False,
-    entry_points={"girder.plugin": ["volview = girder_volview:GirderPlugin"]},
+    entry_points={
+        "girder.plugin": ["volview = girder_volview:GirderPlugin"],
+        # Girder 5 runs folder and collection deletes in the local Girder
+        # Worker, which loads these instead of Girder server plugins.
+        "girder_worker_plugins": [
+            "volview = girder_volview.worker_plugin:VolViewWorkerPlugin"
+        ],
+    },
     setup_requires=["setuptools_scm"],
     use_scm_version={"fallback_version": "0.1.1"},
 )

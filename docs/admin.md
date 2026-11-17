@@ -18,35 +18,36 @@ queue instead of in the web server:
 A Girder Worker process must be consuming the `local` queue. Without one, these
 requests fail with `503 No local worker is available to process this request`.
 
-That worker process does not load Girder server plugins, so the VolView
+That worker process does not load Girder server plugins, so the VolView server
 plugin's event handlers are not registered there. One of them matters for
 deletion: the `model.folder.remove` handler that deletes a job's record when its
-private output folder is removed. When one of the deletions above removes a job
-output folder, the `volview-jobs` container, or a folder or collection holding
-either, the folders are deleted but the job records are left behind. Those jobs
-stay in VolView's job history with their results missing.
+private output folder is removed (along with the `model.job.remove` handler it
+triggers, which cleans up the job's staged inputs).
 
-This is not handled yet. Fixing it needs the VolView handlers registered in the
-worker process too. large_image's Girder 5 plugin shows how: it declares a
+To cover this, the package also registers a Girder Worker plugin, through the
 `girder_worker_plugins` entry point
-(`girder_large_image.girder_worker_plugin:LargeImageWorkerPlugin`). Girder Worker
-instantiates every such entry point at startup, and that class's constructor
-calls `events.bind` for the model events large_image needs in the worker. VolView
-needs the same, binding `outputs._cascadeDeleteFolderOwnedJob` to
-`model.folder.remove` and `outputs._cascadeDeleteJobOwnedResources` to
-`model.job.remove`.
+`volview = girder_volview.worker_plugin:VolViewWorkerPlugin`. Girder Worker
+instantiates every such entry point at startup, and VolView's binds those two
+deletion handlers. large_image's Girder 5 plugin does the same for its own
+handlers.
 
-What still works, because it runs in the web server:
+**Install `girder_volview` in the worker's Python environment.** If it is
+missing there, the worker never finds the entry point. Deleting a job output
+folder, the `volview-jobs` container, or a folder or collection holding either
+then removes the folders but leaves the job records behind, and those jobs stay
+in VolView's job history with their results missing.
+
+What runs in the web server either way:
 
 - The check that refuses to delete a folder, collection, user or resource
   containing a running job. It runs before the task is queued.
-- Deleting a job (from VolView or through Girder's job routes). It still deletes
-  the job's output folder and results.
+- Deleting a job (from VolView or through Girder's job routes), which also
+  deletes the job's output folder and results.
 - `DELETE /user/{id}` and `DELETE /resource`, which Girder 5 still runs
   synchronously.
 
-The plugin's tests run these tasks eagerly, inside the test process where the
-plugin is loaded, so they do not catch this gap.
+`tests/test_worker_plugin.py` runs Girder's folder-delete task without the
+VolView server plugin loaded, with and without the worker plugin.
 
 ## Speedup S3 file downloading by disabling proxying
 

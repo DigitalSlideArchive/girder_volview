@@ -47,7 +47,7 @@ Details, including the launch URL parameters and per-gesture flows, are in
   install their images in DSA.
 - [Customize file browsing](./docs/customize_file_browsing.md) — group images
   and add metadata columns via `.large_image_config.yaml`.
-- [Server administration](./docs/admin.md) — S3 download proxying; Girder 5 local worker requirements for deletion.
+- [Server administration](./docs/admin.md) — S3 download proxying; Girder 5 local worker setup for deletion.
 
 ## Development
 
