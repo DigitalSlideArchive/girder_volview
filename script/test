@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Run the backend test suite against a throwaway MongoDB.
+#
+# pytest-girder needs a MongoDB, and the dsa stack's MongoDB is not published on
+# the host. Without one, the database tests skip instead of failing. This starts
+# a private MongoDB container on a free loopback port, runs `tox -e test` with
+# --mongo-uri pointing at it, and removes the container on exit.
+#
+# Usage:
+#   script/test [pytest args...]
+#     e.g. script/test -n auto
+#          script/test tests/test_save_load_restore.py -k restore
+#
+# Env overrides:
+#   TEST_MONGO_URI      use this MongoDB instead of starting a container
+#   TEST_MONGO_IMAGE    default mongo:4.4
+#   GIRDER_VOLVIEW_CONTRACT_DIR  read the backend contract from this directory
+#                       (e.g. <VolView checkout>/backend-contract)
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO=$(cd "$SCRIPT_DIR/.." && pwd)
+
+MONGO_URI=${TEST_MONGO_URI:-}
+if [ -z "$MONGO_URI" ]; then
+    command -v docker >/dev/null || { echo "docker is required (or set TEST_MONGO_URI)" >&2; exit 1; }
+    CONTAINER=$(docker run -d --rm -p 127.0.0.1::27017 "${TEST_MONGO_IMAGE:-mongo:4.4}")
+    trap 'docker rm -f "$CONTAINER" >/dev/null 2>&1 || true' EXIT
+    PORT=$(docker port "$CONTAINER" 27017/tcp | head -n 1 | sed 's/.*://')
+    MONGO_URI="mongodb://127.0.0.1:$PORT"
+    # mongod accepts connections a moment after the container starts.
+    # mongo:4.4 ships the `mongo` shell; newer images ship only `mongosh`.
+    until docker exec "$CONTAINER" sh -c \
+        'mongosh --quiet --eval "db.runCommand({ping: 1})" || mongo --quiet --eval "db.runCommand({ping: 1})"' \
+        >/dev/null 2>&1; do
+        docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -qx true || {
+            echo "the MongoDB container exited:" >&2
+            docker logs "$CONTAINER" >&2 || true
+            exit 1
+        }
+    done
+fi
+
+cd "$REPO"
+tox -e test -- --mongo-uri "$MONGO_URI" "$@"
