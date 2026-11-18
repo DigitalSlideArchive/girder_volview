@@ -38,8 +38,16 @@ Name the two worktrees alike and the harness finds both. The baseline client's
 sha comes from the baseline backend's dependency pin, keeping the pair aligned.
 
 Because the baseline tracks the integration branch, running the harness *from*
-an integration-branch worktree would compare a commit against itself. That is a
-hard failure, not a warning (`COMPAT_ALLOW_VACUOUS=1` to override).
+an integration-branch worktree with the pinned client would compare a pair
+against itself. That is a hard failure, not a warning
+(`COMPAT_ALLOW_VACUOUS=1` to override). The same backend with a different
+client is a real comparison: to check a VolView change against the integration
+backend, create a girder_volview worktree from `origin/main` named after the
+VolView worktree, or set `COMPAT_BRANCH_VOLVIEW`.
+
+Every selected phase runs even when an earlier phase's specs fail, and the run
+ends with a per-phase summary. It exits nonzero if any phase failed. A failed
+deploy or setup still stops the run.
 
 Girder's mongo volume survives the redeploy (script/deploy only recreates the
 girder container's code), so the folders and sessions captured in step 2 are
