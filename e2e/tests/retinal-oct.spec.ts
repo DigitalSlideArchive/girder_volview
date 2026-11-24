@@ -175,33 +175,32 @@ test('highlights occupied retinal layer depth from the En face sidebar', async (
     await expectImportedLayers(view);
     await openModuleTab(view, 'Rendering');
     const sidebar = view.locator('[data-testid="enface-sidebar-controls"]');
-    const section = sidebar.locator('[data-testid="enface-thickness-toggle"]');
-    await expect(section).toHaveText('Thickness highlighting');
+    const section = sidebar.locator('[data-testid="enface-segments-toggle"]');
+    await expect(section).toHaveText('Segments');
     await expect(section).toBeVisible();
     if ((await section.getAttribute('aria-expanded')) === 'false') await section.click();
 
-    const picker = sidebar.locator('[data-testid="enface-segmentation-segment"]');
-    await expect(picker.locator('input')).toBeEnabled();
-    await picker.click();
-    await expect.poll(async () => (await view.getByRole('option').allTextContents())
-      .map((name) => name.trim()).sort()).toEqual([...LAYERS].sort());
-    await view.getByRole('option', { name: LAYERS[7], exact: true }).click();
-    await expect(picker).toContainText(LAYERS[7]);
-
-    const highlight = sidebar.getByRole('checkbox', { name: 'Highlight thin regions', exact: true });
-    const threshold = sidebar.locator('[data-testid="enface-thickness-threshold-input"] input');
-    const slider = sidebar.locator('[data-testid="enface-thickness-threshold"] [role="slider"]');
-    await expect(highlight).toBeEnabled();
-    await expect(highlight).not.toBeChecked();
-    await expect(threshold).toBeDisabled();
-    await highlight.check();
-    await expect(highlight).toBeChecked();
+    const rows = sidebar.locator('[data-testid="enface-segment-row"]');
+    await expect.poll(async () => (await rows.evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute('data-segment-name'))))
+      .sort()).toEqual([...LAYERS].sort());
+    const row = rows.filter({ has: view.getByText(LAYERS[7], { exact: true }) });
+    const shown = row.locator('[data-testid="enface-segment-visible"]');
+    const threshold = row.locator('[data-testid="enface-segment-threshold-input"] input');
+    const slider = row.locator('[data-testid="enface-segment-threshold"] [role="slider"]');
     const enface = view.locator('[data-testid="enface-viewer"]');
+    const canvas = enface.locator('[data-testid="enface-canvas"]');
+
+    await expect(shown).toHaveAttribute('aria-pressed', 'false');
+    await expect(threshold).toBeHidden();
+    await expect.poll(async () => (await canvasPixels(canvas)).colored).toBe(0);
+    await shown.click();
+    await expect(shown).toHaveAttribute('aria-pressed', 'true');
     await expect(enface).not.toHaveAttribute('aria-busy', 'true');
-    await expect(threshold).toBeEnabled();
+    await expect(threshold).toHaveValue('');
+    await expect.poll(async () => (await canvasPixels(canvas)).colored).toBeGreaterThan(100);
     await expect(slider).toBeEnabled();
 
-    const canvas = enface.locator('[data-testid="enface-canvas"]');
     await threshold.fill('0');
     await expect(threshold).toHaveValue('0');
     await expect.poll(async () => (await canvasPixels(canvas)).colored).toBe(0);
@@ -213,14 +212,16 @@ test('highlights occupied retinal layer depth from the En face sidebar', async (
     await slider.press('Home');
     await expect(threshold).toHaveValue('0');
     await expect.poll(async () => (await canvasPixels(canvas)).colored).toBe(0);
+    // The slider's right end keeps every region, clearing the threshold.
     await slider.press('End');
-    await expect.poll(async () => Number(await threshold.inputValue())).toBeCloseTo(maximum, 1);
+    await expect(threshold).toHaveValue('');
     await expect.poll(async () => (await canvasPixels(canvas)).colored).toBeGreaterThan(100);
     await expectStackedViews(view);
     await shot(view, info, 'retinal-enface-thickness-highlighting');
-    await highlight.uncheck();
+    await shown.click();
+    await expect(shown).toHaveAttribute('aria-pressed', 'false');
     await expect.poll(async () => (await canvasPixels(canvas)).colored).toBe(0);
-    await expect(threshold).toBeDisabled();
+    await expect(threshold).toBeHidden();
   } finally {
     await launch.popup.close();
   }
