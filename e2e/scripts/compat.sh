@@ -79,6 +79,11 @@ record_phase() {  # $1=phase  $2=playwright exit status
         FAILED_PHASES+=("$1")
     fi
 }
+phase_failed() { [[ " ${FAILED_PHASES[*]} " == *" $1 "* ]]; }
+
+# Set when the final phase skips teardown, so a failed verify can be re-run
+# against the captured state.
+STATE_KEPT=0
 
 # Sourced before any path resolution, because VOLVIEW_ROOT lives here.
 if [[ -f $REPO/.env ]]; then
@@ -244,13 +249,17 @@ run_current() {
         "$REPO/script/ensure-radiology-cli" --examples
     fi
     echo "compat: running current-version lifecycle and job scenarios (${BRANCH_SHA:0:9})..."
+    # Keep the captured state only for a failed verify of a good capture: that
+    # is what compat:verify-fast can re-run. Any other failure tears down as
+    # usual, since leftover state makes the next capture refuse to start.
+    if [[ $PHASE == all && $KEEP -eq 0 ]] && phase_failed verify && ! phase_failed capture; then
+        STATE_KEPT=1
+    fi
     local status=0
     (
         cd "$E2E" || exit
         if [[ $KEEP -eq 1 ]]; then export COMPAT_KEEP=1; fi
-        # Tearing down after a failed phase would delete the captured run folder
-        # and state, so a failed verify could no longer be re-run on its own.
-        if [[ ${#FAILED_PHASES[@]} -eq 0 ]]; then export COMPAT_CLEANUP=1; fi
+        if [[ $STATE_KEPT -eq 0 ]]; then export COMPAT_CLEANUP=1; fi
         COMPAT_PHASE=current E2E_EXPECT_GIRDER_SHA=$BRANCH_SHA \
             E2E_EXPECT_VOLVIEW_SHA=$BRANCH_VOLVIEW_SHA \
             npx playwright test --config playwright.config.ts --project current
@@ -264,9 +273,9 @@ if [[ $PHASE == all || $PHASE == current ]]; then run_current; fi
 
 echo "compat: summary"
 printf 'compat:   %s\n' "${PHASE_RESULTS[@]}"
-echo "compat: reports: cd e2e && npm run report -- playwright-report/<phase>"
+echo "compat: reports: cd e2e && npm run report -- <phase>"
 if [[ ${#FAILED_PHASES[@]} -gt 0 ]]; then
-    if [[ $PHASE == all && $KEEP -eq 0 ]]; then
+    if [[ $STATE_KEPT -eq 1 ]]; then
         echo "compat: kept the captured run folder and .compat-state.json. Re-run verify" >&2
         echo "compat: with npm run compat:verify-fast; npm run compat:verify removes them." >&2
     fi
