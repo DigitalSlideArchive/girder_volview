@@ -210,8 +210,9 @@ run_capture() {
     "$REPO/script/ensure-radiology-cli" --examples
     echo "compat: running capture specs against the baseline (${BASELINE_SHA:0:9})..."
     local status=0
+    # errexit is off inside a subshell tested with ||, so each step checks itself.
     (
-        cd "$E2E"
+        cd "$E2E" || exit
         COMPAT_PHASE=capture E2E_EXPECT_GIRDER_SHA=$BASELINE_SHA \
             E2E_EXPECT_VOLVIEW_SHA=$BASELINE_VOLVIEW_SHA \
             npx playwright test --config playwright.config.ts --project capture
@@ -228,7 +229,7 @@ run_verify() {
     echo "compat: running verify specs against this worktree (${BRANCH_SHA:0:9})..."
     local status=0
     (
-        cd "$E2E"
+        cd "$E2E" || exit
         if [[ $KEEP -eq 1 ]]; then export COMPAT_KEEP=1; fi
         if [[ $PHASE == verify ]]; then export COMPAT_CLEANUP=1; fi
         COMPAT_PHASE=verify E2E_EXPECT_GIRDER_SHA=$BRANCH_SHA \
@@ -245,9 +246,12 @@ run_current() {
     echo "compat: running current-version lifecycle and job scenarios (${BRANCH_SHA:0:9})..."
     local status=0
     (
-        cd "$E2E"
+        cd "$E2E" || exit
         if [[ $KEEP -eq 1 ]]; then export COMPAT_KEEP=1; fi
-        COMPAT_PHASE=current COMPAT_CLEANUP=1 E2E_EXPECT_GIRDER_SHA=$BRANCH_SHA \
+        # Tearing down after a failed phase would delete the captured run folder
+        # and state, so a failed verify could no longer be re-run on its own.
+        if [[ ${#FAILED_PHASES[@]} -eq 0 ]]; then export COMPAT_CLEANUP=1; fi
+        COMPAT_PHASE=current E2E_EXPECT_GIRDER_SHA=$BRANCH_SHA \
             E2E_EXPECT_VOLVIEW_SHA=$BRANCH_VOLVIEW_SHA \
             npx playwright test --config playwright.config.ts --project current
     ) || status=$?
@@ -260,8 +264,12 @@ if [[ $PHASE == all || $PHASE == current ]]; then run_current; fi
 
 echo "compat: summary"
 printf 'compat:   %s\n' "${PHASE_RESULTS[@]}"
-echo "compat: report of the last phase: cd e2e && npm run report"
+echo "compat: reports: cd e2e && npm run report -- playwright-report/<phase>"
 if [[ ${#FAILED_PHASES[@]} -gt 0 ]]; then
+    if [[ $PHASE == all && $KEEP -eq 0 ]]; then
+        echo "compat: kept the captured run folder and .compat-state.json. Re-run verify" >&2
+        echo "compat: with npm run compat:verify-fast; npm run compat:verify removes them." >&2
+    fi
     die "failed phases: ${FAILED_PHASES[*]}"
 fi
 echo "compat: done; every selected phase passed on ${BRANCH_SHA:0:9}."
