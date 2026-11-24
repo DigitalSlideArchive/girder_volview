@@ -47,7 +47,10 @@ VolView worktree, or set `COMPAT_BRANCH_VOLVIEW`.
 
 Every selected phase runs even when an earlier phase's specs fail, and the run
 ends with a per-phase summary. It exits nonzero if any phase failed. A failed
-deploy or setup still stops the run.
+deploy or setup still stops the run. After a failed phase the final teardown is
+skipped, so the captured run folder and `.compat-state.json` remain for
+`npm run compat:verify-fast`. Each phase writes its own report and traces under
+`e2e/playwright-report/<phase>` and `e2e/test-results/<phase>`.
 
 Girder's mongo volume survives the redeploy (script/deploy only recreates the
 girder container's code), so the folders and sessions captured in step 2 are
@@ -167,7 +170,7 @@ bash scripts/compat.sh --link                          # fast client deploys (do
 COMPAT_BRANCH_VOLVIEW=/abs/path/to/a/VolView npm test   # client not named after this worktree
 COMPAT_BASELINE_REF=<sha> npm test                     # freeze the baseline while bisecting
 npm run compat:clean          # remove materialized baselines (handles root-owned residue)
-npm run report                # html report of the last phase
+npm run report -- playwright-report/verify   # html report of one phase
 ```
 
 The capture phase refuses to start if `.compat-state.json` already exists,
@@ -201,9 +204,11 @@ seed; the run folder and the session items it mints are removed at teardown.
   pins, whichever way it was resolved — reused, created, or named by
   `COMPAT_BASELINE_VOLVIEW`. A checkout at the wrong commit tests the wrong
   pairing silently, which is the failure the derivation exists to prevent.
-- Baseline equal to branch is a hard failure. With the baseline tracking the
-  integration branch, a run launched from an integration-branch worktree would
-  otherwise compare a commit against itself and pass, proving nothing.
+- A baseline pair equal to the branch pair is a hard failure. With the baseline
+  tracking the integration branch, a run launched from an integration-branch
+  worktree with the pinned client would otherwise compare a pair against itself
+  and pass, proving nothing. The same backend with a different client passes
+  this guard.
 - One `playwright.config.ts` defines the capture, verify, and current
   projects, and refuses to start without the phase `compat.sh` selects —
   preventing a partial direct invocation from silently testing the wrong

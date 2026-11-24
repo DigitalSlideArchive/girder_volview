@@ -1,6 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
 import { CONFIG } from './helpers/config';
 
+// Each phase reports into its own folders: Playwright empties its output and
+// report folders at the start of a run, and compat.sh runs later phases after
+// an earlier one fails, which would otherwise erase the failure's traces.
+const PHASE_DIR = process.env.COMPAT_PHASE ?? 'unphased';
+
 // One browser harness, invoked in phases by scripts/compat.sh:
 // baseline capture -> current verification -> current-only behavior.
 export default defineConfig({
@@ -17,8 +22,8 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  reporter: [['list'], ['html', { open: 'never', outputFolder: 'playwright-report' }]],
-  outputDir: 'test-results',
+  reporter: [['list'], ['html', { open: 'never', outputFolder: `playwright-report/${PHASE_DIR}` }]],
+  outputDir: `test-results/${PHASE_DIR}`,
   use: {
     baseURL: CONFIG.baseURL,
     headless: true,

@@ -25,21 +25,25 @@ REPO=$(cd "$SCRIPT_DIR/.." && pwd)
 MONGO_URI=${TEST_MONGO_URI:-}
 if [ -z "$MONGO_URI" ]; then
     command -v docker >/dev/null || { echo "docker is required (or set TEST_MONGO_URI)" >&2; exit 1; }
-    CONTAINER=$(docker run -d --rm -p 127.0.0.1::27017 "${TEST_MONGO_IMAGE:-mongo:4.4}")
+    # No --rm: the EXIT trap removes the container, and until then its logs stay
+    # readable if mongod dies during startup.
+    CONTAINER=$(docker run -d -p 127.0.0.1::27017 "${TEST_MONGO_IMAGE:-mongo:4.4}")
     trap 'docker rm -f "$CONTAINER" >/dev/null 2>&1 || true' EXIT
-    PORT=$(docker port "$CONTAINER" 27017/tcp | head -n 1 | sed 's/.*://')
-    MONGO_URI="mongodb://127.0.0.1:$PORT"
     # mongod accepts connections a moment after the container starts.
     # mongo:4.4 ships the `mongo` shell; newer images ship only `mongosh`.
     until docker exec "$CONTAINER" sh -c \
         'mongosh --quiet --eval "db.runCommand({ping: 1})" || mongo --quiet --eval "db.runCommand({ping: 1})"' \
         >/dev/null 2>&1; do
-        docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -qx true || {
+        [[ $(docker inspect -f '{{.State.Running}}' "$CONTAINER") == true ]] || {
             echo "the MongoDB container exited:" >&2
             docker logs "$CONTAINER" >&2 || true
             exit 1
         }
+        sleep 0.2
     done
+    # Read after startup: a stopped container has no published port to report.
+    PORT=$(docker port "$CONTAINER" 27017/tcp | head -n 1 | sed 's/.*://')
+    MONGO_URI="mongodb://127.0.0.1:$PORT"
 fi
 
 cd "$REPO"
