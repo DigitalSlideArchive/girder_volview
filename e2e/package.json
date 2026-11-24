@@ -8,7 +8,7 @@
     "typecheck": "tsc --noEmit",
     "list": "playwright test --list",
     "install-browser": "playwright install chromium",
-    "report": "playwright show-report",
+    "report": "sh -c 'playwright show-report \"playwright-report/${1:?usage: npm run report -- capture|verify|current}\"' report",
     "compat": "bash scripts/compat.sh",
     "compat:capture": "bash scripts/compat.sh --phase capture",
     "compat:verify": "bash scripts/compat.sh --phase verify",

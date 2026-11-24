@@ -25,10 +25,12 @@ REPO=$(cd "$SCRIPT_DIR/.." && pwd)
 MONGO_URI=${TEST_MONGO_URI:-}
 if [ -z "$MONGO_URI" ]; then
     command -v docker >/dev/null || { echo "docker is required (or set TEST_MONGO_URI)" >&2; exit 1; }
-    # No --rm: the EXIT trap removes the container, and until then its logs stay
-    # readable if mongod dies during startup.
-    CONTAINER=$(docker run -d -p 127.0.0.1::27017 "${TEST_MONGO_IMAGE:-mongo:4.4}")
+    # Named before it exists and no --rm: the EXIT trap removes it even when
+    # `docker run` creates it but fails to start it, and until then its logs
+    # stay readable if mongod dies during startup.
+    CONTAINER=girder-volview-test-mongo-$$
     trap 'docker rm -f "$CONTAINER" >/dev/null 2>&1 || true' EXIT
+    docker run -d --name "$CONTAINER" -p 127.0.0.1::27017 "${TEST_MONGO_IMAGE:-mongo:4.4}" >/dev/null
     # mongod accepts connections a moment after the container starts.
     # mongo:4.4 ships the `mongo` shell; newer images ship only `mongosh`.
     until docker exec "$CONTAINER" sh -c \

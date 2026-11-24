@@ -47,9 +47,10 @@ VolView worktree, or set `COMPAT_BRANCH_VOLVIEW`.
 
 Every selected phase runs even when an earlier phase's specs fail, and the run
 ends with a per-phase summary. It exits nonzero if any phase failed. A failed
-deploy or setup still stops the run. After a failed phase the final teardown is
-skipped, so the captured run folder and `.compat-state.json` remain for
-`npm run compat:verify-fast`. Each phase writes its own report and traces under
+deploy or setup still stops the run. When verify fails after a successful
+capture, the final teardown is skipped, so the captured run folder and
+`.compat-state.json` remain for `npm run compat:verify-fast`; any other failure
+tears down as usual. Each phase writes its own report and traces under
 `e2e/playwright-report/<phase>` and `e2e/test-results/<phase>`.
 
 Girder's mongo volume survives the redeploy (script/deploy only recreates the
@@ -170,7 +171,7 @@ bash scripts/compat.sh --link                          # fast client deploys (do
 COMPAT_BRANCH_VOLVIEW=/abs/path/to/a/VolView npm test   # client not named after this worktree
 COMPAT_BASELINE_REF=<sha> npm test                     # freeze the baseline while bisecting
 npm run compat:clean          # remove materialized baselines (handles root-owned residue)
-npm run report -- playwright-report/verify   # html report of one phase
+npm run report -- verify      # html report of one phase (capture, verify, or current)
 ```
 
 The capture phase refuses to start if `.compat-state.json` already exists,
